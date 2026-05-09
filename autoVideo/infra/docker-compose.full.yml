@@ -1,0 +1,408 @@
+version: "3.9"
+
+# ============================================================
+# docker-compose.full.yml — autoVideo 全量部署
+# 包含：基础设施 + 所有微服务 + 前端 + API Gateway
+#
+# 用法：
+#   docker compose -f infra/docker-compose.full.yml \
+#                  --env-file infra/.env up -d
+#
+# 镜像标签通过环境变量控制：AUTOVIDEO_TAG=latest（默认）
+# ============================================================
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-go-service: &go-service
+  restart: unless-stopped
+  networks:
+    - autoVideo-net
+  environment:
+    - POSTGRES_HOST=postgres
+    - POSTGRES_PORT=5432
+    - POSTGRES_USER=${POSTGRES_USER:-postgres}
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    - REDIS_ADDR=redis:6379
+    - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    - KAFKA_BROKERS=kafka:9092
+    - MINIO_ENDPOINT=minio:9000
+    - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+    - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+    - CDN_BASE_URL=${CDN_BASE_URL:-http://localhost:9000}
+    - GIN_MODE=release
+
+networks:
+  autoVideo-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  minio_data:
+
+services:
+
+  # ════════════════════════════════════════════════════════════
+  # 基础设施
+  # ════════════════════════════════════════════════════════════
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: autovideo-postgres
+    <<: *restart
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: autovideo-redis
+    <<: *restart
+    command: >
+      redis-server
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: bitnami/zookeeper:3.8
+    container_name: autovideo-zookeeper
+    <<: *restart
+    ports:
+      - "2181:2181"
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    volumes:
+      - zookeeper_data:/bitnami/zookeeper
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.6
+    container_name: autovideo-kafka
+    <<: *restart
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: autovideo-minio
+    <<: *restart
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: autovideo-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - autoVideo-net
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+        mc mb --ignore-existing local/videos;
+        mc mb --ignore-existing local/images;
+        mc mb --ignore-existing local/scripts;
+        mc mb --ignore-existing local/characters;
+        mc mb --ignore-existing local/uploads;
+        mc mb --ignore-existing local/exports;
+        mc policy set public local/images;
+        mc policy set public local/videos;
+        echo 'MinIO buckets ready';
+      "
+
+  # ════════════════════════════════════════════════════════════
+  # 微服务
+  # ════════════════════════════════════════════════════════════
+
+  auth:
+    image: autovideo/auth:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-auth
+    <<: *go-service
+    ports:
+      - "8001:8001"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  project:
+    image: autovideo/project:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-project
+    <<: *go-service
+    ports:
+      - "8002:8002"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - PROJECT_AUTH_SERVICE_BASE_URL=http://auth:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8002/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  script:
+    image: autovideo/script:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-script
+    <<: *go-service
+    ports:
+      - "8003:8003"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - AUTH_SERVICE_BASE_URL=http://auth:8001
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  character:
+    image: autovideo/character:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-character
+    <<: *go-service
+    ports:
+      - "8004:8004"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - CHARACTER_AUTH_SERVICE_BASE_URL=http://auth:8001
+      - STORAGE_BASE_URL=http://storage:8009
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  image:
+    image: autovideo/image:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-image
+    <<: *go-service
+    ports:
+      - "8005:8005"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - AUTH_SERVICE_BASE_URL=http://auth:8001
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - TONGYI_API_KEY=${TONGYI_API_KEY:-}
+      - COMFYUI_URL=${COMFYUI_URL:-}
+      - STORAGE_BASE_URL=http://storage:8009
+      - CHARACTER_BASE_URL=http://character:8004
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  video:
+    image: autovideo/video:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-video
+    <<: *go-service
+    ports:
+      - "8006:8006"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - VIDEO_SERVICE_AUTH_SERVICE_BASE_URL=http://auth:8001
+      - KLING_API_KEY=${KLING_API_KEY:-}
+      - KLING_BASE_URL=${KLING_BASE_URL:-https://api.klingai.com}
+      - WAN_API_KEY=${WAN_API_KEY:-}
+      - WAN_BASE_URL=${WAN_BASE_URL:-https://visual.volcengineapi.com}
+      - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
+      - STORAGE_BASE_URL=http://storage:8009
+      - KAFKA_BROKERS=kafka:9092
+      - FFMPEG_TEMP_DIR=/tmp/autovideo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  task:
+    image: autovideo/task:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-task
+    <<: *go-service
+    ports:
+      - "8007:8007"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - REDIS_ADDR=redis:6379
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  model:
+    image: autovideo/model:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-model
+    <<: *go-service
+    ports:
+      - "8008:8008"
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  storage:
+    image: autovideo/storage:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-storage
+    <<: *go-service
+    ports:
+      - "8009:8009"
+    environment:
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - CDN_BASE_URL=${CDN_BASE_URL:-http://localhost:9000}
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # ════════════════════════════════════════════════════════════
+  # 前端（生产构建）
+  # ════════════════════════════════════════════════════════════
+
+  frontend:
+    image: autovideo/frontend:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-frontend
+    <<: *restart
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-/}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-}
+      - API_PROXY_TARGET=${API_PROXY_TARGET:-http://gateway:8000}
+      - NODE_ENV=production
+    networks:
+      - autoVideo-net
+    depends_on:
+      - gateway
+
+  # ════════════════════════════════════════════════════════════
+  # API Gateway（Go gateway — 替代 nginx）
+  # ════════════════════════════════════════════════════════════
+
+  gateway:
+    image: autovideo/gateway:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-gateway
+    <<: *restart
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../services/gateway-service/config.local.yaml:/app/config.local.yaml:ro
+    networks:
+      - autoVideo-net
+    depends_on:
+      - auth
+      - project
+      - script
+      - character
+      - image
+      - video
+      - task
+      - model
+      - storage
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

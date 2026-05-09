@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+.next/
+*.tsbuildinfo
+
+# Local environment files
+.env.local
+.env.*.local
+
+# Local runtime artifacts
+.run/
+*.log
+*.pid
+
+# Test and tool caches
+.pytest_cache/
+__pycache__/
+.venv/
+coverage/
+
+# Local private configs
+config.local.yaml
+services/gateway-service/config.local.yaml
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package project.v1;
+
+option go_package = "github.com/autovideo/project-service/proto";
+
+service ProjectService {
+  rpc GetProject(GetProjectRequest) returns (ProjectInfo);
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+}
+
+message GetProjectRequest {
+  uint64 project_id = 1;
+  uint64 user_id    = 2;
+}
+
+message ProjectInfo {
+  uint64 id      = 1;
+  uint64 user_id = 2;
+  string title   = 3;
+  string status  = 4;
+}
+
+message ListProjectsRequest {
+  uint64 user_id   = 1;
+  int32  page      = 2;
+  int32  page_size = 3;
+}
+
+message ListProjectsResponse {
+  repeated ProjectInfo projects = 1;
+  int64                total    = 2;
+}

@@ -1,0 +1,24 @@
+# Procfile — goreman 本地多服务启动
+# 安装: go install github.com/mattn/goreman@latest
+# 可选: go install github.com/cosmtrek/air@latest
+# 启动: goreman start  (在 autoVideo/ 目录下)
+# 说明: Go 服务优先使用 air 热更新；未安装 air 时回退到 go run
+#
+# 注意: 启动前请先执行 make infra-up 启动基础设施
+# gateway-service 监听 :8000，通过 AUTOVIDEO_GATEWAY_CONFIG_FILE 或默认 config.local.yaml 配置路由
+
+gateway:   cd services/gateway-service   && go run ./cmd/main.go -config "${AUTOVIDEO_GATEWAY_CONFIG_FILE:-config.local.yaml}"
+auth:      cd services/auth-service      && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+project:   cd services/project-service   && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+script:    cd services/script-service    && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+character: cd services/character-service && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+image:     cd services/image-service     && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+video:     cd services/video-service     && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+task:      cd services/task-service      && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+model:     cd services/model-service     && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+storage:   cd services/storage-service   && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+frame-extractor: cd services/frame-extractor-service && (command -v air >/dev/null 2>&1 && air -c ../../.air.toml || go run ./cmd/main.go)
+clip:           cd services/clip-service && .venv/bin/python app.py
+frontend:  bash scripts/frontend-dev.sh 3000
+
+

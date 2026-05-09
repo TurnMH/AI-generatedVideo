@@ -1,0 +1,147 @@
+port: 8000
+
+# 提交到仓库的是模板文件。
+# 实际运行请复制为 config.local.yaml，并由上层启动链指向该文件。
+
+jwt:
+  secret: "replace-with-shared-jwt-secret"
+
+cors:
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+
+# Upstream addresses — these are FALLBACK values used only if a service has
+# not registered via /_internal/register. When running locally, services
+# auto-register on startup, making these addresses optional.
+upstreams:
+  auth:      "http://localhost:8001"
+  project:   "http://localhost:8002"
+  script:    "http://localhost:8003"
+  character: "http://localhost:8004"
+  image:     "http://localhost:8005"
+  video:     "http://localhost:8006"
+  task:      "http://localhost:8007"
+  model:     "http://localhost:8008"
+  storage:   "http://localhost:8009"
+  clip:      "http://localhost:8092"
+  minio:     "http://localhost:9000"
+
+# Routes are evaluated top-to-bottom; first match wins.
+# pattern: regex match on path; prefix: simple prefix match.
+routes:
+  - prefix: "/api/v1/auth/"
+    upstream: auth
+    public: true
+
+  - pattern: "^/api/v1/projects/[^/]+/assets/extract$"
+    upstream: character
+    timeout: "180s"
+
+  - pattern: "^/api/v1/projects/[^/]+/assets"
+    upstream: character
+
+  - pattern: "^/api/v1/projects/[^/]+/consistency-config"
+    upstream: character
+
+  - pattern: "^/api/v1/projects/[^/]+/(videos|dubbing|subtitle)"
+    upstream: video
+    timeout: "600s"
+
+  - pattern: "^/api/v1/projects/[^/]+/episodes/[^/]+/videos"
+    upstream: video
+    timeout: "30s"
+
+  - pattern: "^/api/v1/projects/[^/]+/storage"
+    upstream: storage
+
+  - pattern: "^/api/v1/projects/[^/]+/production-skills"
+    upstream: character
+
+  - pattern: "^/api/v1/projects/[^/]+/character-groups"
+    upstream: character
+
+  - pattern: "^/api/v1/scripts/[^/]+/analyze$"
+    upstream: script
+    timeout: "120s"
+
+  - pattern: "^/api/v1/images/generate$"
+    upstream: image
+    timeout: "180s"
+
+  - pattern: "^/api/v1/projects/[^/]+/episodes/extract-storyboards$"
+    upstream: project
+    timeout: "600s"
+
+  - pattern: "^/api/v1/projects/[^/]+/episodes/[^/]+/extract-storyboards$"
+    upstream: project
+    timeout: "600s"
+
+  - pattern: "^/api/v1/projects/[^/]+/episodes/[^/]+/(optimize|review|auto-optimize-review)$"
+    upstream: project
+    timeout: "300s"
+
+  - prefix: "/api/v1/projects"
+    upstream: project
+
+  - prefix: "/api/v1/scripts"
+    upstream: script
+
+  - pattern: "^/api/v1/script-library/generate$"
+    upstream: script
+    timeout: "120s"
+
+  - prefix: "/api/v1/script-library"
+    upstream: script
+
+  - prefix: "/api/v1/skills"
+    upstream: character
+
+  - prefix: "/api/v1/prompt-templates"
+    upstream: script
+
+  - prefix: "/api/v1/characters"
+    upstream: character
+
+  - prefix: "/api/v1/images"
+    upstream: image
+    timeout: "180s"
+
+  - prefix: "/api/v1/voices"
+    upstream: video
+    public: true
+
+  - prefix: "/api/v1/videos"
+    upstream: video
+    timeout: "300s"
+
+  - prefix: "/api/v1/tasks"
+    upstream: task
+
+  - prefix: "/api/v1/chat/gemini"
+    upstream: character
+    timeout: "100s"
+
+  - prefix: "/api/v1/chat"
+    upstream: character
+    timeout: "120s"
+
+  - prefix: "/api/v1/models"
+    upstream: model
+
+  - prefix: "/api/v1/storage"
+    upstream: storage
+
+  - prefix: "/api/v1/clips"
+    upstream: clip
+
+  - prefix: "/media/"
+    upstream: minio
+    public: true
+    strip_prefix: "/media"
+
+  - prefix: "/ws/"
+    upstream: task
+    websocket: true
+    public: true
+    timeout: "3600s"

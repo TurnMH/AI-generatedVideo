@@ -1,0 +1,30 @@
+# .air.toml — 热重载配置（单服务开发）
+# 用法：在某个服务目录下执行 air
+# 安装：go install github.com/cosmtrek/air@latest
+
+root = "."
+tmp_dir = ".air_tmp"
+
+[build]
+  cmd = "go build -o .air_tmp/app ./cmd/main.go"
+  bin = ".air_tmp/app"
+  full_bin = ".air_tmp/app"
+  include_ext = ["go", "yaml", "yml"]
+  exclude_dir = [".air_tmp", "migrations", "vendor"]
+  delay = 500                # 文件变更后等待 500ms 再重建（ms）
+  kill_delay = "1s"
+  rerun = false
+  rerun_delay = 500
+  log = ".air_tmp/build.log"
+
+[log]
+  time = true
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

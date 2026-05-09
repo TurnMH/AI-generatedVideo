@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package shared.v1;
+
+option go_package = "github.com/autovideo/proto/shared/v1";
+
+message Empty {}
+
+message Pagination {
+  int32 page      = 1;
+  int32 page_size = 2;
+}
+
+message PageInfo {
+  int64 total     = 1;
+  int32 page      = 2;
+  int32 page_size = 3;
+}
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos   = 2;
+}
+
+message ErrorDetail {
+  string code    = 1;
+  string message = 2;
+  string field   = 3;
+}

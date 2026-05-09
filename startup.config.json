@@ -1,0 +1,133 @@
+{
+  "projectDir": "autoVideo",
+  "runDir": ".run",
+  "pm2Config": "ecosystem.config.js",
+  "sharedConfig": "autoVideo/config.local.yaml",
+  "gatewayConfig": "autoVideo/services/gateway-service/config.local.yaml",
+  "ports": [3000, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009, 9001, 9002, 9004, 9007, 9008, 9009],
+  "apps": [
+    {
+      "name": "gateway-service",
+      "script": "go",
+      "args": "run ./cmd/main.go -config config.local.yaml",
+      "cwd": "autoVideo/services/gateway-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "auth-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/auth-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "project-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/project-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "script-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/script-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "character-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/character-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "image-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/image-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "video-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/video-service",
+      "watch": false,
+      "autorestart": true,
+      "kill_timeout": 360000,
+      "env": {
+        "GOFLAGS": "-mod=mod",
+        "CLIP_SERVICE_URL": "http://localhost:8092"
+      }
+    },
+    {
+      "name": "task-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/task-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "model-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/model-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "storage-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/storage-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "frame-extractor-service",
+      "script": "go",
+      "args": "run ./cmd/main.go",
+      "cwd": "autoVideo/services/frame-extractor-service",
+      "watch": false,
+      "autorestart": true,
+      "env": { "GOFLAGS": "-mod=mod" }
+    },
+    {
+      "name": "clip-service",
+      "script": "autoVideo/services/clip-service/.venv/bin/python",
+      "args": "app.py",
+      "cwd": "autoVideo/services/clip-service",
+      "watch": false,
+      "autorestart": true,
+      "env": {
+        "CLIP_SERVICE_PORT": "8092",
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "frontend",
+      "script": "npm",
+      "args": "run dev",
+      "cwd": "autoVideo/frontend",
+      "watch": false,
+      "autorestart": true
+    }
+  ]
+}

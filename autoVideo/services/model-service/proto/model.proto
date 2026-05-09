@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package model.v1;
+
+option go_package = "github.com/autovideo/model-service/proto";
+
+service ModelService {
+  // RouteModel selects the best model for a given task type and quality mode.
+  rpc RouteModel(RouteRequest) returns (RouteResponse);
+  // RecordUsage persists a usage record for billing/analytics.
+  rpc RecordUsage(RecordUsageRequest) returns (RecordUsageResponse);
+  // GetModelInfo returns metadata for a single model.
+  rpc GetModelInfo(GetModelRequest) returns (ModelInfo);
+}
+
+message RouteRequest {
+  string task_type    = 1;
+  string quality_mode = 2;
+  uint64 user_id      = 3;
+  string byok_provider = 4;
+}
+
+message RouteResponse {
+  uint64 model_id     = 1;
+  string model_name   = 2;
+  string provider     = 3;
+  string api_endpoint = 4;
+  string api_key      = 5;
+  bytes  config_json  = 6;
+}
+
+message RecordUsageRequest {
+  uint64 user_id    = 1;
+  uint64 model_id   = 2;
+  string task_id    = 3;
+  double units_used = 4;
+  double cost       = 5;
+}
+
+message RecordUsageResponse {
+  bool success = 1;
+}
+
+message GetModelRequest {
+  uint64 model_id = 1;
+}
+
+message ModelInfo {
+  uint64 id           = 1;
+  string name         = 2;
+  string provider     = 3;
+  string type         = 4;
+  string api_endpoint = 5;
+}

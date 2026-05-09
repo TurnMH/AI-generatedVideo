@@ -1,0 +1,44 @@
+syntax = "proto3";
+package task.v1;
+option go_package = "github.com/autovideo/task-service/proto";
+
+service TaskService {
+  rpc CreateTask(CreateTaskRequest) returns (TaskResponse);
+  rpc UpdateStatus(UpdateStatusRequest) returns (UpdateStatusResponse);
+  rpc UpdateProgress(UpdateProgressRequest) returns (UpdateProgressResponse);
+  rpc GetTask(GetTaskRequest) returns (TaskResponse);
+}
+
+message CreateTaskRequest {
+  string task_type = 1;
+  bytes  payload   = 2;
+  int32  priority  = 3;
+  uint64 user_id   = 4;
+  int32  max_retries = 5;
+}
+
+message TaskResponse {
+  uint64 id         = 1;
+  string task_type  = 2;
+  string status     = 3;
+  int32  priority   = 4;
+  string created_at = 5;
+}
+
+message UpdateStatusRequest {
+  uint64 task_id   = 1;
+  string status    = 2;
+  string error_msg = 3;
+}
+
+message UpdateStatusResponse { bool success = 1; }
+
+message UpdateProgressRequest {
+  uint64 task_id  = 1;
+  int32  progress = 2;
+  string message  = 3;
+}
+
+message UpdateProgressResponse { bool success = 1; }
+
+message GetTaskRequest { uint64 task_id = 1; }

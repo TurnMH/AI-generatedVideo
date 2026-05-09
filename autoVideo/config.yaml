@@ -1,0 +1,296 @@
+# =============================================================
+# autoVideo 统一配置模板
+# 提交到仓库的是模板；实际运行请复制为 config.local.yaml
+# 并由 video/startup.config.json 的 sharedConfig 指向本地文件。
+# =============================================================
+
+http:
+  mode: debug
+
+db:
+  max_open_conns: 20
+  max_idle_conns: 5
+  conn_max_lifetime: 3600
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+
+kafka:
+  brokers:
+    - "localhost:9092"
+
+jwt:
+  access_secret: "replace-with-shared-access-secret"
+  secret: "replace-with-shared-access-secret"
+
+storage:
+  base_url: "http://localhost:8009"
+
+log:
+  level: "info"
+  format: "json"
+
+auth-service:
+  server:
+    port: "8001"
+  database:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=auth_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 0
+  jwt:
+    refresh_secret: "replace-with-refresh-secret"
+    access_ttl: 120
+    refresh_ttl: 7
+  crypto:
+    encryption_key: "replace-with-64-char-hex"
+
+project-service:
+  server:
+    port: "8002"
+  database:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=project_db sslmode=disable TimeZone=Asia/Shanghai"
+  kafka:
+    consumer_group: "project-service-v2"
+    consumer_topic: "storyboard.generate.request"
+    producer_topic: "storyboard.generate.result"
+  image:
+    base_url: "http://localhost:8005"
+  llm:
+    base_url: "https://api.example.com/v1"
+    api_key: "replace-with-project-llm-key"
+    model: "gpt-4.1-mini"
+    timeout: 120
+    fallback_base_url: "https://fallback.example.com/v2"
+    fallback_api_key: "replace-with-project-fallback-key"
+    fallback_model: "glm-5"
+
+script-service:
+  http:
+    port: 8003
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=script_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 1
+  kafka:
+    consumer_group: "script-service"
+    consumer_topic: "script.analyze.request"
+    producer_topic: "script.analyze.result"
+  llm:
+    provider: "openai"
+    openai:
+      base_url: "https://api.example.com/v1"
+      api_key: "replace-with-openai-key"
+      model: "gpt-5.4"
+      timeout: 120
+      channel_bases:
+        - "https://channel-1.example.com/v1"
+      channel_keys:
+        - "replace-with-openai-channel-key"
+      channel_model: "gpt-5.4"
+    claude:
+      base_url: "https://api.example.com/v1"
+      api_key: "replace-with-claude-key"
+      model: "claude-sonnet-4-6"
+      timeout: 120
+    qwen:
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      api_key: "replace-with-qwen-key"
+      model: "qwen3-max"
+      timeout: 120
+    zhipu:
+      base_url: "https://open.bigmodel.cn/api/paas/v4"
+      api_key: "replace-with-zhipu-key"
+      model: "glm-5"
+      timeout: 120
+
+character-service:
+  http:
+    port: 8004
+  grpc_port: 9004
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=character_db sslmode=disable TimeZone=Asia/Shanghai"
+  kafka:
+    consumer_group: "character-service"
+    consumer_topic: "asset.generate.request"
+    producer_topic: "asset.generate.result"
+  image:
+    base_url: "http://localhost:8005"
+  llm:
+    base_url: "https://api.example.com/v1"
+    api_key: "replace-with-character-llm-key"
+    model: "gpt-4.1"
+    vision_model: "gpt-4.1"
+    timeout: 180
+  gemini:
+    bases: "https://gemini-channel.example.com"
+    keys: "replace-with-gemini-key"
+    model: "gemini-2.5-flash"
+  claude:
+    base_url: "https://api.example.com/v1"
+    api_key: "replace-with-claude-key"
+  qwen:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: "replace-with-qwen-key"
+  zhipu:
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    api_key: "replace-with-zhipu-key"
+  project_service:
+    base_url: "http://localhost:8002"
+  concurrency:
+    max_generations: 20
+
+image-service:
+  http:
+    port: 8005
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=image_db sslmode=disable TimeZone=Asia/Shanghai"
+  kafka:
+    consumer_group: "image-service"
+    consumer_topic: "image.generate.request"
+    producer_topic: "image.generate.result"
+  character:
+    base_url: "http://localhost:8004"
+  models:
+    comfyui_url: "http://127.0.0.1:8188"
+    comfyui_workflow: "sdxl_anime.json"
+    replicate_key: ""
+    openai_key: ""
+    openai_base: "https://api.example.com/v1"
+    openai_keys:
+      - "replace-with-openai-image-key"
+    openai_models: "gpt-image-1,gpt-image-1.5"
+    tongyi_key: "replace-with-tongyi-key"
+    dashscope_base: "https://dashscope.aliyuncs.com/api/v1"
+    tongyi_models: "wanx-v1,wanx2.1-t2i-turbo,wanx2.1-t2i-plus,wan2.5-i2i-preview"
+    zhipu_key: "replace-with-zhipu-key"
+    zhipu_base: "https://open.bigmodel.cn/api/paas/v4"
+    zhipu_models: "cogview-3-plus,cogview-4"
+    gemini_bases: "https://gemini-image.example.com"
+    gemini_keys: "replace-with-gemini-image-key"
+    gemini_flash_model: "gemini-3.1-flash-image-preview"
+    baidu_image_key: "replace-with-baidu-image-key"
+    baidu_image_base: "https://vod.bj.baidubce.com/v3/aigc/image"
+    baidu_image_model: "NB"
+    qianfan_image_key: "replace-with-qianfan-image-key"
+    qianfan_image_base: "https://qianfan.baidubce.com/v2/images/generations"
+    qianfan_image_models: "flux.1-schnell,stable-diffusion-xl"
+    doubao_image_key: "replace-with-doubao-image-key"
+    doubao_image_base: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+    doubao_image_model: "doubao-seedream-4-0-250828"
+    doubao_image_model_v3: "doubao-seedream-3-0-t2i-250415"
+  concurrency:
+    max_workers: 12
+  storage:
+    base_url: "http://localhost:8009"
+
+video-service:
+  http:
+    port: 8006
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=video_db sslmode=disable TimeZone=Asia/Shanghai"
+  kafka:
+    consumer_group: "video-service-v2"
+    consumer_topic: "video.generate.request"
+    producer_topic: "video.generate.result"
+  models:
+    kling_key: ""
+    kling_base: "https://api.klingai.com"
+    kling_model: "kling-v3"
+    kling_omni_model: "kling-v3-omni"
+    aiping_key: "replace-with-aiping-key"
+    aiping_base: "https://aiping.cn"
+    vclm_secret_id: "replace-with-vclm-secret-id"
+    vclm_secret_key: "replace-with-vclm-secret-key"
+    vclm_region: "ap-guangzhou"
+    wan_key: "replace-with-wan-key"
+    wan_base: "https://dashscope.aliyuncs.com"
+    comfyui_url: "http://127.0.0.1:8188"
+    comfyui_workflow: "comfyui-video-starter.json"
+    sora2_key: "replace-with-sora2-key"
+    sora2_base: "https://api.example.com/v1"
+    hubagi_key: "replace-with-hubagi-key"
+    hubagi_base: "https://hubagi.cn/api/v1"
+    hubagi_model: "TC-GV"
+    veo_key: "replace-with-veo-key"
+    veo_base: "https://hubagi.cn/api/v1"
+    veo_model: "voe3.1"
+    doubao_key: "replace-with-doubao-key"
+    doubao_base: "https://ark.cn-beijing.volces.com"
+    doubao_model: "replace-with-doubao-endpoint-id"
+    doubao_seedance_key: "replace-with-doubao-seedance-key"
+    doubao_seedance_base: "https://ark.cn-beijing.volces.com"
+    doubao_seedance_model: "doubao-seedance-1-5-pro-251215"
+    vidu_key: "replace-with-vidu-key"
+    vidu_offpeak_key: "replace-with-vidu-offpeak-key"
+    vidu_base: "https://api.vidu.cn/ent/v2"
+    vidu_model: "viduq3-pro"
+    vidu_mix_model: "viduq3-mix"
+    suanneng_key: "replace-with-suanneng-key"
+    suanneng_base: "https://www.sophnet.com/api/open-apis/projects/easyllms/videogenerator/volces/tasks"
+    suanneng_model: "doubao-seedance-1-5-pro-251215"
+    baidu_bce_key: "replace-with-baidu-bce-key"
+    baidu_bce_secret: "replace-with-baidu-bce-secret"
+    baidu_bce_model: "V20"
+    gaga_key: "replace-with-gaga-key"
+    gaga_base: "https://api.gaga.art"
+    replicate_key: ""
+    llm_key: "replace-with-video-llm-key"
+    llm_base: "https://api.example.com/v1"
+    llm_model: "gpt-4.1-mini"
+  ffmpeg:
+    bin: "ffmpeg"
+    temp_dir: "/tmp/autovideo"
+    cleanup: true
+  concurrency:
+    max_clips: 3
+    local_max_clips: 1
+    max_kafka_tasks: 5
+  storage:
+    base_url: "http://localhost:8009"
+  frame_extractor:
+    base_url: "http://localhost:8010"
+
+task-service:
+  http:
+    port: 8007
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=task_db sslmode=disable TimeZone=Asia/Shanghai"
+
+model-service:
+  http:
+    port: 8008
+  db:
+    dsn: "host=localhost port=5432 user=postgres password=replace-me dbname=model_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 3
+
+storage-service:
+  http:
+    port: 8009
+  storage:
+    driver: minio
+    minio:
+      endpoint: "replace-with-storage-endpoint"
+      access_key: "replace-with-storage-access-key"
+      secret_key: "replace-with-storage-secret-key"
+      use_ssl: true
+      path_style: true
+    cdn_base_url: "https://cdn.example.com"
+    cdn_include_bucket: false
+    buckets:
+      images: "replace-with-images-bucket"
+      videos: "replace-with-videos-bucket"
+      scripts: "replace-with-scripts-bucket"
+      characters: "replace-with-characters-bucket"
+      uploads: "replace-with-uploads-bucket"
+      exports: "replace-with-exports-bucket"
+      dubbing: "replace-with-dubbing-bucket"
+      audios: "replace-with-audios-bucket"
+
+frame-extractor-service:
+  http:
+    port: 8010
+  storage:
+    base_url: "http://localhost:8009"
+    bucket: "images"

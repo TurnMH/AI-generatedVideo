@@ -1,0 +1,2 @@
+-- task service: 001_init.up.sql
+-- TODO: add migrations

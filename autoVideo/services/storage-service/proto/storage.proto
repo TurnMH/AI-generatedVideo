@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package storage.v1;
+
+option go_package = "github.com/autovideo/storage-service/proto";
+
+service StorageService {
+  rpc Upload(UploadRequest) returns (UploadResponse);
+  rpc GetURL(GetURLRequest) returns (GetURLResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+message UploadRequest {
+  bytes  data         = 1;
+  string bucket       = 2;
+  string filename     = 3;
+  string content_type = 4;
+  uint64 user_id      = 5;
+}
+
+message UploadResponse {
+  string object_key = 1;
+  string cdn_url    = 2;
+  uint64 file_id    = 3;
+}
+
+message GetURLRequest {
+  string object_key     = 1;
+  int64  expiry_seconds = 2;
+}
+
+message GetURLResponse {
+  string url = 1;
+}
+
+message DeleteRequest {
+  string object_key = 1;
+  uint64 user_id    = 2;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
