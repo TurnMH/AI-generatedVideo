@@ -185,6 +185,8 @@ services:
     <<: *go-service
     ports:
       - "8001:8001"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -192,6 +194,7 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - REDIS_ADDR=redis:6379
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
     depends_on:
       postgres:
         condition: service_healthy

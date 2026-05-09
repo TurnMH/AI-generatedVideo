@@ -6,6 +6,10 @@
 > 每个服务通过 `config.local.yaml` 或环境变量配置。  
 > 环境变量优先级高于配置文件，格式为 `{SERVICE_NAME_UPPER}_{KEY_PATH_UPPER}`。
 
+> 当前运行期密钥约定：本地 `config.local.yaml` 是初始化 / 更新来源；`auth-service` 会把其中的系统运行 key 同步到 `system_api_keys`；业务服务运行时统一从 `auth-service` / 数据库读取活跃 key。
+
+> 如果走 `infra/docker-compose.full.yml`，需要确保 `autoVideo/config.local.yaml` 已存在；compose 会把它挂载到 `auth-service` 容器，并通过 `AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml` 让首启同步生效。
+
 ---
 
 ## 基础设施（所有服务共用）

@@ -46,6 +46,12 @@
 4. 启动：`./start.sh`
 5. 停止：`./stop.sh`
 
+补充说明：
+
+1. 这条路径下，运行期密钥的源头仍是 `autoVideo/config.local.yaml`。
+2. `auth-service` 启动时会把这里面的系统运行 key 同步进数据库。
+3. 业务服务运行时统一从 `auth-service` / 数据库取活跃 key，不再直接把配置文件当成运行期取钥源。
+
 示例上传命令：
 
 ```bash
@@ -58,11 +64,19 @@ rsync -av video/ user@server:/opt/video/
 
 仅在你准备走完整镜像和 `docker compose.full.yml` 时使用。
 
-1. 复制 `autoVideo/infra/.env.example` 为 `autoVideo/infra/.env`。
-2. 构建镜像：`cd autoVideo && bash scripts/build.sh --env=prod --tag=latest`
-3. 部署：`cd autoVideo && bash scripts/deploy.sh --env=prod --tag=latest --skip-pull`
+1. 复制 `autoVideo/config.yaml` 为 `autoVideo/config.local.yaml`，填入真实数据库、JWT 和运行期 key。
+2. 复制 `autoVideo/services/gateway-service/config.yaml` 为 `autoVideo/services/gateway-service/config.local.yaml`。
+3. 复制 `autoVideo/infra/.env.example` 为 `autoVideo/infra/.env`，填入容器环境变量。
+4. 构建镜像：`cd autoVideo && bash scripts/build.sh --env=prod --tag=latest`
+5. 部署：`cd autoVideo && bash scripts/deploy.sh --env=prod --tag=latest --skip-pull`
 
 这条路径下，frontend 构建参数和运行参数优先读取 `infra/.env.prod` 或 `infra/.env`。
+
+补充说明：
+
+1. `docker-compose.full.yml` 现在会把 `autoVideo/config.local.yaml` 挂载到 `auth-service` 容器内。
+2. 容器首启时，`auth-service` 会先用这个文件把运行期 key 同步到数据库。
+3. 如果你后续修改了 `config.local.yaml` 并希望业务立即使用新 key，建议重启 `auth`、`project`、`script`、`character`、`image`、`video` 这几个服务。
 
 ## 本地启动与访问
 
