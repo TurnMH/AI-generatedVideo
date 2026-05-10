@@ -65,8 +65,11 @@ type ModelsConfig struct {
 	GeminiModels     []string // extra model aliases registered via Gemini generator
 	// Baidu BCE image generation (vod.bj.baidubce.com/v3/aigc/image) — async task-based
 	// Available models: NB, NBP, NB2, I4YG1, I4FG1, I4G1
-	// ⚠️  GET polling requires BCE-AUTH-V1 HMAC; bce-v3 Bearer token is NOT accepted for GET
-	BaiduImageKey   string // full bce-v3/ALTAK-... bearer token for task creation
+	// ⚠️  GET polling requires BCE-AUTH-V1 HMAC; bce-v3 Bearer token is NOT accepted for GET.
+	// Set baidu_image_ak / baidu_image_sk to standard IAM AK/SK for HMAC signing.
+	BaiduImageKey   string // full bce-v3/ALTAK-... bearer token for task creation (POST)
+	BaiduImageAK    string // standard IAM AK for BCE-AUTH-V1 HMAC signing (task polling GET)
+	BaiduImageSK    string // standard IAM SK for BCE-AUTH-V1 HMAC signing (task polling GET)
 	BaiduImageBase  string // e.g. https://vod.bj.baidubce.com/v3/aigc/image
 	BaiduImageModel string // one of NB/NBP/NB2/I4YG1/I4FG1/I4G1, default NB
 	// Qianfan image generation (qianfan.baidubce.com/v2/images/generations) — synchronous ✅
@@ -325,6 +328,8 @@ func Load() *Config {
 	)
 	// Baidu BCE image channel
 	cfg.Models.BaiduImageKey = viper.GetString("models.baidu_image_key")
+	cfg.Models.BaiduImageAK = viper.GetString("models.baidu_image_ak")
+	cfg.Models.BaiduImageSK = viper.GetString("models.baidu_image_sk")
 	cfg.Models.BaiduImageBase = viper.GetString("models.baidu_image_base")
 	cfg.Models.BaiduImageModel = viper.GetString("models.baidu_image_model")
 	// Qianfan image channel (synchronous, OpenAI-compatible)

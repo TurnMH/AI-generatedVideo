@@ -25,6 +25,7 @@ type dalleGenerator struct {
 	modelName    string // configurable model name, e.g. "gpt-image-1.5", "dall-e-3"
 	generatorKey string // key used to identify this generator
 	maxPromptLen int    // 0 = unlimited; >0 = hard rune cap on prompt before sending
+	translateFn  func(ctx context.Context, text string) string // optional CJK→EN translator
 	client       *http.Client
 	logger       *zap.Logger
 }
@@ -74,6 +75,12 @@ func NewDalleGeneratorWithEndpoint(apiKeys []string, fullEndpoint, modelName, ge
 
 // NewDalleGeneratorWithEndpointAndCap —— 同 NewDalleGeneratorWithEndpoint，额外支持 prompt 长度上限。
 func NewDalleGeneratorWithEndpointAndCap(apiKeys []string, fullEndpoint, modelName, generatorKey string, maxPromptLen int, logger *zap.Logger) ImageGenerator {
+	return NewDalleGeneratorWithTranslator(apiKeys, fullEndpoint, modelName, generatorKey, maxPromptLen, nil, logger)
+}
+
+// NewDalleGeneratorWithTranslator —— 同 NewDalleGeneratorWithEndpointAndCap，额外接受一个可选的
+// translateFn，当 endpoint 为千帆等只接受英文 prompt 的服务时，用于自动翻译 CJK prompt 为英文。
+func NewDalleGeneratorWithTranslator(apiKeys []string, fullEndpoint, modelName, generatorKey string, maxPromptLen int, translateFn func(context.Context, string) string, logger *zap.Logger) ImageGenerator {
 	return &dalleGenerator{
 		keys:         newSmartKeyPool(apiKeys),
 		baseURL:      fullEndpoint,
@@ -81,6 +88,7 @@ func NewDalleGeneratorWithEndpointAndCap(apiKeys []string, fullEndpoint, modelNa
 		modelName:    modelName,
 		generatorKey: generatorKey,
 		maxPromptLen: maxPromptLen,
+		translateFn:  translateFn,
 		client:       &http.Client{Timeout: 120 * time.Second},
 		logger:       logger,
 	}
@@ -116,11 +124,17 @@ func (g *dalleGenerator) Generate(ctx context.Context, req GenerateReq) (*Genera
 			g.logger.Debug("dalle: prompt truncated", zap.String("generator", g.generatorKey), zap.Int("cap", g.maxPromptLen))
 		}
 	}
-	// Qianfan API only accepts English prompts; strip CJK characters to avoid 400 errors.
+	// Qianfan and similar APIs only accept English prompts.
+	// If a translator is configured, use it to convert CJK prompts to English (preferred).
+	// Otherwise fall back to stripping CJK characters so the API at least receives something valid.
 	if isQianfanEndpoint(g.imagesURL) {
-		prompt = stripCJKCharacters(prompt)
-		if prompt == "" {
-			prompt = "a beautiful illustration, high quality"
+		if g.translateFn != nil {
+			prompt = g.translateFn(ctx, prompt)
+		} else {
+			prompt = stripCJKCharacters(prompt)
+			if prompt == "" {
+				prompt = "a beautiful illustration, high quality"
+			}
 		}
 	}
 

@@ -54,6 +54,15 @@ INSERT INTO system_api_keys (provider, key_alias, plain_key, base_url, model_sco
  'sk-OwEKOA7XwtvJ71wHqakGFUXCc977qa4o8xVXYhQg65NtfKMF',
  'http://64.32.27.150:3000',
  'gemini-3.1-flash-image-preview',
+ 'active'),
+
+-- ppai.pro 图像渠道 (nano-banana / Gemini IMAGE_REFERENCE)
+-- 来源：fengxi/0428all/192.168.5.108_ai_video_33061_limited.sql，越光1渠道
+-- 对接方式：OpenAI chat/completions + generationConfig:{responseModalities:["TEXT","IMAGE"]}
+('runtime.image.ppai', 'ppai.pro 图像渠道 (nano-banana)',
+ 'sk-QeXuGasPbBN7yjHa19E7A892Af2546A2BfB7D2B6B134A091',
+ 'https://api.ppai.pro',
+ 'nano-banana',
  'active')
 
 ON CONFLICT DO NOTHING;

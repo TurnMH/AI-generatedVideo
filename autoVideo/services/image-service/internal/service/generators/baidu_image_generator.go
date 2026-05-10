@@ -285,10 +285,11 @@ func (g *baiduImageGenerator) queryTask(ctx context.Context, taskURL, taskPath s
 		return nil, false, err
 	}
 
-	// Try Bearer token first for GET (same as POST creation).
-	// BCE-AUTH-V1 HMAC signing is only used as fallback when explicit non-ALTAK AK/SK are provided
-	// (bce-v3/ALTAK-... tokens cannot be split into valid AK/SK for HMAC).
-	useHMAC := g.accessKey != "" && g.secretKey != "" && !strings.HasPrefix(g.accessKey, "ALTAK-")
+	// Always prefer BCE-AUTH-V1 HMAC-SHA256 signing for task polling when AK/SK are present.
+	// ALTAK- prefixed access keys are standard Baidu Cloud long-term AK credentials and are
+	// fully valid for HMAC signing. Bearer token (bce-v3/ALTAK-...) is only accepted by the
+	// task-creation POST, not by the GET polling endpoint — which requires signed headers.
+	useHMAC := g.accessKey != "" && g.secretKey != ""
 	if useHMAC {
 		ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 		auth := g.bceSign("GET", taskPath, ts)

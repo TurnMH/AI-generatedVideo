@@ -119,12 +119,15 @@ func main() {
 		}
 		gens["banana2.1"] = gemini3Flash   // 香蕉2.1 alias
 		gens["xingrong2.5"] = gemini3Flash // 星融2.5beta alias
+		gens["nano-banana"] = gemini3Flash  // nano-banana → gemini-2.5-flash-image (ppai img_new has no channel for images/generations)
 
 		gemini3Pro := generators.NewGeminiImageGenerator(
 			bases, cfg.Models.GeminiKeys,
 			"gemini-3-pro-image-preview", "gemini-3-pro-image", true, logger, geminiPerChan)
 		gens["gemini-3-pro-image"] = gemini3Pro
-		gens["banana2.0"] = gemini3Pro // 香蕉2.0 alias
+		gens["gemini-3-pro-image-preview"] = gemini3Pro // DB model_key alias
+		gens["banana2.0"] = gemini3Pro                  // 香蕉2.0 alias
+		gens["gemini-2.5-flash-image"] = gemini3Flash   // DB model_key alias → 复用 flash 渠道
 
 		// Extra model aliases from config
 		for _, modelName := range cfg.Models.GeminiModels {
@@ -141,25 +144,31 @@ func main() {
 
 	// Register Baidu BCE image channel (百度渠道融图) — async task-based.
 	// ⚠️ GET task polling requires BCE-AUTH-V1 HMAC; bce-v3 Bearer token is NOT accepted.
-	// Will fail-fast on 4xx (no 120s hang) with the current implementation.
+	// baidu_image_ak / baidu_image_sk = standard IAM AK/SK for HMAC signing.
 	if cfg.Models.BaiduImageKey != "" {
 		baiduModel := cfg.Models.BaiduImageModel
 		if baiduModel == "" {
 			baiduModel = "NB"
 		}
-		baiduGen := generators.NewBaiduImageGenerator(
+		baiduGen := generators.NewBaiduImageGeneratorWithCredentials(
 			cfg.Models.BaiduImageKey,
+			cfg.Models.BaiduImageAK,
+			cfg.Models.BaiduImageSK,
 			cfg.Models.BaiduImageBase, baiduModel, "baidu-img", logger)
 		gens["baidu-img"] = baiduGen
 	}
 
 	// Register Qianfan image channel (百度千帆) — synchronous OpenAI-compatible API.
 	// Verified models: flux.1-schnell ✅  stable-diffusion-xl ✅
+	// Qianfan only accepts English prompts; a translator using the ppai OpenAI pool
+	// is injected so Chinese prompts are automatically converted before submission.
 	if cfg.Models.QianfanImageKey != "" {
 		qianfanEndpoint := cfg.Models.QianfanImageBase
 		if qianfanEndpoint == "" {
 			qianfanEndpoint = "https://qianfan.baidubce.com/v2/images/generations"
 		}
+		// Build a prompt translator backed by the main OpenAI key pool (ppai).
+		qianfanTranslator := generators.NewPromptTranslator(cfg.Models.OpenAIKeys, cfg.Models.OpenAIBase, logger)
 		for _, modelName := range cfg.Models.QianfanImageModels {
 			if modelName == "" {
 				continue
@@ -167,8 +176,8 @@ func main() {
 			genKey := "qianfan-" + modelName
 			if _, exists := gens[genKey]; !exists {
 				// 千帆 API prompt 上限约 2000 字符，超出会报 invalid_image_generation_prompt。
-				gens[genKey] = generators.NewDalleGeneratorWithEndpointAndCap(
-					[]string{cfg.Models.QianfanImageKey}, qianfanEndpoint, modelName, genKey, 2000, logger)
+				gens[genKey] = generators.NewDalleGeneratorWithTranslator(
+					[]string{cfg.Models.QianfanImageKey}, qianfanEndpoint, modelName, genKey, 2000, qianfanTranslator, logger)
 			}
 			// Also register under exact model name for direct selection
 			if _, exists := gens[modelName]; !exists {

@@ -1523,26 +1523,21 @@ func resolveVideoGeneratorRoute(modelName string) (string, string) {
 		return "hubagi-voe3.1", "voe3.1"
 	case "tc-gv", "hubagi-tc-gv", "xingwei-3.1", "hubagi-xingwei-3.1":
 		return "hubagi-TC-GV", "TC-GV"
-	case "kling":
-		return "kling", ""
-	case "kling-v3", "kling-3.0", "xinghe-3.0":
-		return "kling", "kling-v3"
-	case "kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni":
-		return "kling", "kling-v3-omni"
-	case "kling-v1.5":
-		return "kling", "kling-v1-5"
-	case "kling-v1.6":
-		return "kling", "kling-v1-6"
-	case "kling-v2":
-		return "kling", "kling-v2"
-	case "kling-v2.1":
-		return "kling", "kling-v2-1"
+	// kling 系列路由到 tencent-vclm（腾讯云 VCLM API, TC3-HMAC-SHA256, vclm.tencentcloudapi.com）
+	// 当直连 kling_key 不可用时，使用已配置的腾讯云 SecretId/SecretKey 通过 VCLM 接口生成。
+	// 若将来配置了直连 kling_key，可将这些 case 改回返回 "kling"。
+	case "kling", "kling-v3", "kling-3.0", "xinghe-3.0",
+		"kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni",
+		"kling-v1.5", "kling-v1.6", "kling-v2", "kling-v2.1":
+		return "tencent-vclm", ""
 	case "doubao", "v4.0", "xingguang-3.0", "doubao-v4", "doubao-v4.0":
 		return "doubao", "V4.0"
 	case "doubao-seedance", "doubao-seedream", "seedream", "xingtu":
 		return "doubao-seedance", ""
 	case "doubao-seedream-4-0-250828":
 		return "doubao-seedance", "doubao-seedream-4-0-250828"
+	case "doubao-seedream-4-5-251128", "seedream-4-5", "doubao-seedream-4.5":
+		return "doubao-seedance", "doubao-seedream-4-5-251128"
 	case "vidu", "viduq3-pro", "vidu-q3-pro", "xingcheng-2.6", "vidu-3pro", "vidu官方-3pro":
 		return "vidu", "viduq3-pro"
 	case "vidu-mix", "viduq3-mix", "vidu-q3-mix", "xingchen-3.1", "vidu官方-mix":
