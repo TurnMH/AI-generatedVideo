@@ -43,6 +43,16 @@ type Config struct {
 			APIKey  string `mapstructure:"api_key"`
 			Model   string `mapstructure:"model"`
 		} `mapstructure:"claude"`
+		Qwen struct {
+			BaseURL string `mapstructure:"base_url"`
+			APIKey  string `mapstructure:"api_key"`
+			Model   string `mapstructure:"model"`
+		} `mapstructure:"qwen"`
+		Zhipu struct {
+			BaseURL string `mapstructure:"base_url"`
+			APIKey  string `mapstructure:"api_key"`
+			Model   string `mapstructure:"model"`
+		} `mapstructure:"zhipu"`
 	} `mapstructure:"llm"`
 	JWT struct {
 		Secret string `mapstructure:"secret"`

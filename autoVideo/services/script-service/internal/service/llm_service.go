@@ -759,3 +759,126 @@ func sanitizeJSONContent(content string) string {
 	content = strings.TrimSuffix(content, "```")
 	return strings.TrimSpace(content)
 }
+
+// newSimpleOpenAIClient creates a lightweight openAIClient for a single provider
+// (Claude / Qwen / Zhipu etc.) that share the OpenAI-compatible chat/completions API.
+func newSimpleOpenAIClient(baseURL, apiKey, model string) LLMClient {
+	if !strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
+		baseURL = strings.TrimRight(baseURL, "/") + "/v1"
+	}
+	return &openAIClient{
+		baseURL: baseURL,
+		apiKey:  apiKey,
+		model:   model,
+		client:  &http.Client{Timeout: 180 * time.Second},
+	}
+}
+
+// fallbackLLMClient wraps multiple LLMClient instances and tries them in order.
+// If the primary client fails (after its own internal retries), the next provider
+// is tried automatically based on configured weight/priority.
+type fallbackLLMClient struct {
+	clients []LLMClient
+	labels  []string // human-readable label for each provider, for logging
+}
+
+// NewFallbackLLMClient builds a prioritised fallback chain from config.
+// Order: OpenAI (gpt-5.4) → Claude → Qwen → Zhipu.
+// Providers with empty API key are skipped.
+// Returns the single client directly when only one provider is configured.
+func NewFallbackLLMClient(cfg *config.Config) LLMClient {
+	var clients []LLMClient
+	var labels []string
+
+	// Primary: OpenAI / GPT
+	if cfg.LLM.OpenAI.APIKey != "" {
+		clients = append(clients, NewOpenAIClient(cfg))
+		labels = append(labels, "openai:"+cfg.LLM.OpenAI.Model)
+	}
+	// Fallback 1: Claude (Anthropic messages API is OpenAI-compatible via proxy)
+	if cfg.LLM.Claude.APIKey != "" {
+		clients = append(clients, newSimpleOpenAIClient(cfg.LLM.Claude.BaseURL, cfg.LLM.Claude.APIKey, cfg.LLM.Claude.Model))
+		labels = append(labels, "claude:"+cfg.LLM.Claude.Model)
+	}
+	// Fallback 2: Qwen (DashScope OpenAI-compatible endpoint)
+	if cfg.LLM.Qwen.APIKey != "" {
+		clients = append(clients, newSimpleOpenAIClient(cfg.LLM.Qwen.BaseURL, cfg.LLM.Qwen.APIKey, cfg.LLM.Qwen.Model))
+		labels = append(labels, "qwen:"+cfg.LLM.Qwen.Model)
+	}
+	// Fallback 3: Zhipu GLM
+	if cfg.LLM.Zhipu.APIKey != "" {
+		clients = append(clients, newSimpleOpenAIClient(cfg.LLM.Zhipu.BaseURL, cfg.LLM.Zhipu.APIKey, cfg.LLM.Zhipu.Model))
+		labels = append(labels, "zhipu:"+cfg.LLM.Zhipu.Model)
+	}
+
+	if len(clients) == 0 {
+		// Fallback to bare OpenAI client even if key is empty (preserves old behaviour)
+		return NewOpenAIClient(cfg)
+	}
+	if len(clients) == 1 {
+		return clients[0]
+	}
+	return &fallbackLLMClient{clients: clients, labels: labels}
+}
+
+func (f *fallbackLLMClient) Analyze(ctx context.Context, scriptText string) (*AnalysisResult, error) {
+	var lastErr error
+	for i, c := range f.clients {
+		result, err := c.Analyze(ctx, scriptText)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if i < len(f.clients)-1 {
+			fmt.Printf("[llm-fallback] provider %s failed (%v), trying %s\n", f.labels[i], err, f.labels[i+1])
+		}
+		// Do not fall through on context cancellation
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("all llm providers failed, last error: %w", lastErr)
+}
+
+func (f *fallbackLLMClient) GenerateScript(ctx context.Context, req *ScriptGenerateReq) (*ScriptGenerateResult, error) {
+	var lastErr error
+	for i, c := range f.clients {
+		result, err := c.GenerateScript(ctx, req)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if i < len(f.clients)-1 {
+			fmt.Printf("[llm-fallback] provider %s failed (%v), trying %s\n", f.labels[i], err, f.labels[i+1])
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("all llm providers failed, last error: %w", lastErr)
+}
+
+func (f *fallbackLLMClient) ExtractCharacters(ctx context.Context, scriptText string) ([]CharacterExtractInfo, error) {
+	var lastErr error
+	for i, c := range f.clients {
+		result, err := c.ExtractCharacters(ctx, scriptText)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if i < len(f.clients)-1 {
+			fmt.Printf("[llm-fallback] provider %s failed (%v), trying %s\n", f.labels[i], err, f.labels[i+1])
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("all llm providers failed, last error: %w", lastErr)
+}
+
+// UpdateConfig updates the primary (first) provider's credentials only.
+func (f *fallbackLLMClient) UpdateConfig(apiKey, baseURL string) {
+	if len(f.clients) > 0 {
+		f.clients[0].UpdateConfig(apiKey, baseURL)
+	}
+}

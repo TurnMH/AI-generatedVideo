@@ -81,8 +81,8 @@ func main() {
 	libraryRepo := repository.NewScriptLibraryRepository(db)
 	promptTemplateRepo := repository.NewPromptTemplateRepository(db)
 
-	// LLM Client
-	llmClient := service.NewOpenAIClient(cfg)
+	// LLM Client — 使用权重自动切换 fallback 链：OpenAI → Claude → Qwen → Zhipu
+	llmClient := service.NewFallbackLLMClient(cfg)
 
 	// Kafka Service
 	kafkaSvc := service.NewKafkaService(cfg, logger)

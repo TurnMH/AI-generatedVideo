@@ -336,7 +336,7 @@ function ModelCard({
 export default function ImagesPage() {
   const { toast } = useToast()
 
-  const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [selectedProjectId, setSelectedProjectId] = useState('0')
   const [prompt, setPrompt] = useState('')
   const [stylePreset, setStylePreset] = useState<StylePresetKey>('')
   const [optimizing, setOptimizing] = useState(false)
@@ -364,9 +364,7 @@ export default function ImagesPage() {
   const projectsData = (projectsRaw as any)?.data
   const projects = useMemo<Project[]>(() => Array.isArray(projectsData) ? projectsData : (projectsData?.items ?? []), [projectsData])
 
-  useEffect(() => {
-    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(String(projects[0].id))
-  }, [projects, selectedProjectId])
+  // 不再自动选第一个项目，保持「不选项目」状态，允许直接生成
 
   const numericProjectId = Number(selectedProjectId)
 
@@ -444,7 +442,6 @@ export default function ImagesPage() {
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return toast({ title: '请输入图片描述', variant: 'destructive' })
-    if (!numericProjectId) return toast({ title: '请先选择项目', variant: 'destructive' })
     if (activeImageModels.length === 0) return toast({ title: '当前没有可用的图片模型', variant: 'destructive' })
 
     // Build style-enhanced prompt suffix for the backend pipeline
@@ -458,8 +455,19 @@ export default function ImagesPage() {
     const assetIds: Record<string, number> = {}
 
     try {
+      // 若未选项目，自动创建一个「快速图片」图片项目
+      let targetProjectId = numericProjectId
+      if (!targetProjectId) {
+        const now = new Date()
+        const label = `快速图片 ${now.getMonth() + 1}-${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+        const created = await projectAPI.create({ title: label, project_type: 'image' }) as unknown as { data?: Project }
+        targetProjectId = created?.data?.id ?? 0
+        if (!targetProjectId) throw new Error('自动创建项目失败，请手动选择或新建项目')
+        setSelectedProjectId(String(targetProjectId))
+      }
+
       for (const model of activeImageModels) {
-        const res = await assetAPI.create(numericProjectId, {
+        const res = await assetAPI.create(targetProjectId, {
           type: 'image' as AssetType,
           name: `${descriptionText.slice(0, 28)} [${model.name}]`,
           description: descriptionText,
@@ -474,7 +482,7 @@ export default function ImagesPage() {
 
       await Promise.allSettled(
         Object.entries(assetIds).map(([modelKey, assetId]) => {
-          return assetAPI.generate(numericProjectId, assetId, modelKey, promptSuffix, stylePresetBackend)
+          return assetAPI.generate(targetProjectId, assetId, modelKey, promptSuffix, stylePresetBackend)
         })
       )
 
@@ -482,7 +490,7 @@ export default function ImagesPage() {
         id: sessionId,
         prompt: prompt.trim(),
         createdAt: new Date().toISOString(),
-        projectId: numericProjectId,
+        projectId: targetProjectId,
         assetIds,
       }
       const next = [newSession, ...sessions]
@@ -621,9 +629,10 @@ export default function ImagesPage() {
           <div className="flex flex-col gap-2">
             <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
               <SelectTrigger className="w-44">
-                <SelectValue placeholder="选择项目" />
+                <SelectValue placeholder="不选项目（快速生成）" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="0">不选项目（快速生成）</SelectItem>
                 {projects.map(p => (
                   <SelectItem key={p.id} value={String(p.id)}>{p.title}</SelectItem>
                 ))}
