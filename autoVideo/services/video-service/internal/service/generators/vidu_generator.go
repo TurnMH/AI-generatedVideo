@@ -44,6 +44,18 @@ func NewViduGenerator(apiKey, baseURL, model, genName string) *ViduGenerator {
 // Name —— 返回生成器名称
 func (g *ViduGenerator) Name() string { return g.genName }
 
+// CloneWithModel returns a copy bound to the requested model/name.
+func (g *ViduGenerator) CloneWithModel(model, genName string) *ViduGenerator {
+	clone := *g
+	if model != "" {
+		clone.Model = model
+	}
+	if genName != "" {
+		clone.genName = genName
+	}
+	return &clone
+}
+
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *ViduGenerator) IsAvailable(_ context.Context) bool { return g.APIKey != "" }
 
@@ -261,7 +273,7 @@ func (g *ViduGenerator) queryTask(ctx context.Context, creationID string) (*Vide
 		return &VideoClip{
 			ClipURL:     videoURL,
 			DurationSec: 5,
-			ModelUsed:   g.genName,
+			ModelUsed:   resolvedModelUsed(g.Model, g.genName),
 		}, true, nil
 	case "failed":
 		msg := "task failed"

@@ -39,7 +39,7 @@ INSERT INTO system_api_keys (provider, key_alias, plain_key, base_url, model_sco
 ('zhipu', '智谱 GLM 官方',
  '6d3398265b814c3eb266c3e4be146ffd.FNhS76riXtaduy0R',
  'https://open.bigmodel.cn/api/paas/v4',
- 'glm-4-flash,glm-4-flashx,glm-4.7,glm-z1-flash',
+ 'glm-4-flash,glm-4-flashx,glm-4-plus,glm-4-air,glm-4-airx,glm-4.7,glm-z1-flash',
  'active'),
 
 -- 阿里云 DashScope 官方

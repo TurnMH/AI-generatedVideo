@@ -1204,20 +1204,65 @@ export function ScriptTab({
           </div>
 
           {isProcessing && episodes.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 rounded-lg border border-blue-100 bg-primary-50 px-4 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-primary-500" />
-              <p className="text-sm font-medium text-primary-800">
-                {project.progress?.message || '正在拆分剧本，请稍候...'}
-              </p>
-              <p className="text-xs text-primary-500">
-                {project.progress?.stage === 'episode_splitting'
-                  ? `正在提取关键词并拆分集数${project.progress?.episode_split?.total ? `（已识别 ${project.progress.episode_split.completed}/${project.progress.episode_split.total}）` : ''}`
-                  : '系统正在分析剧本内容并自动拆分集数'}
-              </p>
+            <div className="rounded-xl border border-primary-100 bg-gradient-to-b from-primary-50/80 to-white px-6 py-8">
+              {/* AI 自动处理中 badge */}
+              <div className="mb-6 flex items-center justify-center">
+                <div className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-4 py-1.5 shadow-sm">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-500" />
+                  <span className="text-sm font-medium text-primary-700">AI 自动处理中</span>
+                </div>
+              </div>
+
+              {/* Pipeline steps */}
+              <div className="mx-auto max-w-md space-y-2.5">
+                {/* Step 1: active */}
+                <div className="flex items-start gap-3 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-500 shadow-sm">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-primary-900">剧本解析与自动分集</p>
+                      <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-medium text-primary-600">进行中</span>
+                    </div>
+                    <p className="mt-0.5 text-xs leading-5 text-primary-600">
+                      {project.progress?.message ||
+                        (project.progress?.stage === 'episode_splitting'
+                          ? `AI 正在识别集数边界与情节节点${project.progress?.episode_split?.total ? `（${project.progress.episode_split.completed}/${project.progress.episode_split.total} 集）` : '…'}`
+                          : 'AI 正在分析剧本结构，自动识别分集边界与情节节点…')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step 2: pending */}
+                <div className="flex items-start gap-3 rounded-xl border border-surface-200 bg-surface-50/60 px-4 py-3 opacity-60">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface-300 bg-white">
+                    <span className="text-xs font-bold text-surface-400">2</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-surface-600">资源提取</p>
+                    <p className="mt-0.5 text-xs text-surface-400">分集完成后自动识别全部角色、场景、道具资源</p>
+                  </div>
+                </div>
+
+                {/* Step 3: pending */}
+                <div className="flex items-start gap-3 rounded-xl border border-surface-200 bg-surface-50/60 px-4 py-3 opacity-60">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface-300 bg-white">
+                    <span className="text-xs font-bold text-surface-400">3</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-surface-600">分镜序列格式化</p>
+                    <p className="mt-0.5 text-xs text-surface-400">资源就绪后自动拆分每集为分镜条目，格式化完成即可进入各集工作台</p>
+                  </div>
+                </div>
+              </div>
+
+              <p className="mt-5 text-center text-xs text-surface-400">无需手动操作，完成后页面自动刷新 · 整体约需 1–3 分钟</p>
+
               {scriptProgressStalled && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                <div className="mx-auto mt-4 max-w-md rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>剧本进度已超过 2 分钟没有更新，可能卡住了。</span>
+                    <span>剧本解析超过 2 分钟无进展，可能已卡住。</span>
                     <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
                       <RefreshCw className="mr-1 h-3 w-3" />
                       重新拉起
@@ -1228,64 +1273,71 @@ export function ScriptTab({
             </div>
           ) : isProcessing && episodes.length > 0 ? (
             <div className="space-y-4">
-              {/* Processing overlay banner */}
-              <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                <Loader2 className="h-5 w-5 animate-spin text-amber-600" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-amber-800">
-                    {project.progress?.message || `分集完成（${episodes.length} 集），正在生成分镜...`}
-                  </p>
-                  <p className="text-xs text-amber-600">
-                    {(() => {
-                      const preppingCount = episodes.filter(e => e.status === 'script_prepping').length
-                      const splittingCount = episodes.filter(e => e.status === 'scene_splitting').length
-                      const readyCount = episodes.filter(e => e.status === 'scene_ready' || e.status === 'done').length
-                      if (preppingCount > 0 || splittingCount > 0) {
-                        const parts: string[] = []
-                        if (preppingCount > 0) parts.push(`${preppingCount} 集剧本优化中`)
-                        if (splittingCount > 0) parts.push(`${splittingCount} 集分镜拆分中`)
-                        if (readyCount > 0) parts.push(`${readyCount} 集已就绪`)
-                        return parts.join('，')
-                      }
-                      if (project.progress?.scene_split) {
-                        const done = project.progress.scene_split.completed ?? 0
-                        const total = project.progress.scene_split.total ?? episodes.length
-                        if (done >= total && scriptTabStoryboards.length < total) {
-                          return `分镜拆分完成，正在优化提示词并审查内容（${scriptTabStoryboards.length}/${total * 4} 个分镜已写入）`
-                        }
-                        return `分镜拆分进度: ${done}/${total} 集`
-                      }
-                      return `已生成 ${scriptTabStoryboards.length} 个分镜，正在继续拆分中`
-                    })()}
-                  </p>
-                  {storyboardSplitTiming && (
-                    <p className="mt-1 text-[11px] text-amber-700">
-                      {storyboardSplitTiming}
-                    </p>
-                  )}
-                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-amber-200">
-                    <div
-                      className="h-full rounded-full bg-amber-500 transition-all duration-700"
-                      style={{
-                        width: project.progress?.scene_split?.total
-                          ? `${Math.min(100, ((project.progress.scene_split.completed ?? 0) / project.progress.scene_split.total) * 100)}%`
-                          : episodes.length > 0
-                            ? `${Math.min(100, (scriptTabStoryboards.length / Math.max(episodes.length * 4, 1)) * 100)}%`
-                            : '0%',
-                      }}
-                    />
+              {/* AI 自动处理中 · 分镜序列格式化 banner */}
+              <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-purple-50 px-4 py-3.5">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <Loader2 className="h-4 w-4 animate-spin text-violet-600" />
                   </div>
-                  {scriptProgressStalled && (
-                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-100/60 px-3 py-2 text-xs text-amber-800">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span>分镜拆分进度长时间未更新，可能卡住了。</span>
-                        <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
-                          <RefreshCw className="mr-1 h-3 w-3" />
-                          重新拉起
-                        </Button>
-                      </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-violet-900">AI 自动处理中 · 分镜序列格式化</p>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">步骤 3/3</span>
                     </div>
-                  )}
+                    <p className="mt-0.5 text-xs text-violet-600">
+                      {project.progress?.message || `分集已完成（${episodes.length} 集），AI 正在逐集拆分分镜序列…`}
+                    </p>
+                    <p className="mt-1 text-xs text-violet-500">
+                      {(() => {
+                        const preppingCount = episodes.filter(e => e.status === 'script_prepping').length
+                        const splittingCount = episodes.filter(e => e.status === 'scene_splitting').length
+                        const readyCount = episodes.filter(e => e.status === 'scene_ready' || e.status === 'done').length
+                        if (preppingCount > 0 || splittingCount > 0) {
+                          const parts: string[] = []
+                          if (preppingCount > 0) parts.push(`${preppingCount} 集优化提示词`)
+                          if (splittingCount > 0) parts.push(`${splittingCount} 集分镜拆分中`)
+                          if (readyCount > 0) parts.push(`${readyCount} 集已就绪`)
+                          return parts.join(' · ')
+                        }
+                        if (project.progress?.scene_split) {
+                          const done = project.progress.scene_split.completed ?? 0
+                          const total = project.progress.scene_split.total ?? episodes.length
+                          if (done >= total && scriptTabStoryboards.length < total) {
+                            return `分镜拆分完成，正在审查与精修提示词（${scriptTabStoryboards.length}/${total * 4} 个分镜已写入）`
+                          }
+                          return `分镜格式化进度：${done}/${total} 集`
+                        }
+                        return `已格式化 ${scriptTabStoryboards.length} 个分镜，正在继续处理剩余集数`
+                      })()}
+                    </p>
+                    {storyboardSplitTiming && (
+                      <p className="mt-1 text-[11px] text-violet-400">{storyboardSplitTiming}</p>
+                    )}
+                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
+                      <div
+                        className="h-full rounded-full bg-violet-500 transition-all duration-700"
+                        style={{
+                          width: project.progress?.scene_split?.total
+                            ? `${Math.min(100, ((project.progress.scene_split.completed ?? 0) / project.progress.scene_split.total) * 100)}%`
+                            : episodes.length > 0
+                              ? `${Math.min(100, (scriptTabStoryboards.length / Math.max(episodes.length * 4, 1)) * 100)}%`
+                              : '0%',
+                        }}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-violet-400">格式化完成后可进入各集工作台进行资源生成与出图，无需手动操作</p>
+                    {scriptProgressStalled && (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span>分镜格式化进度长时间未更新，可能已卡住。</span>
+                          <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
+                            <RefreshCw className="mr-1 h-3 w-3" />
+                            重新拉起
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -1384,19 +1436,24 @@ export function ScriptTab({
             if (!isAutoFormatting && formattingCount === 0) return null
             const progressPct = episodes.length > 0 ? Math.round((formattedCount / episodes.length) * 100) : 0
             return (
-              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="mb-4 rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-purple-50/60 px-4 py-3">
                 <div className="flex items-center gap-3">
-                  <Loader2 className="h-4 w-4 animate-spin text-amber-600 shrink-0" />
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <Loader2 className="h-4 w-4 animate-spin text-violet-600" />
+                  </div>
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-amber-800">
-                      正在自动转剧本格式…（{formattedCount}/{episodes.length} 集已完成）
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-violet-900">AI 自动处理中 · 分镜序列格式化</p>
+                      <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">
+                        {formattedCount}/{episodes.length} 集
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-violet-600">
+                      {formattingCount > 0 ? `当前 ${formattingCount} 集正在格式化` : `剩余 ${pendingCount} 集待处理`}，格式化完成后即可进入各集工作台进行资源生成与出图
                     </p>
-                    <p className="text-xs text-amber-600 mt-0.5">
-                      {formattingCount > 0 ? `当前 ${formattingCount} 集格式化中` : `剩余 ${pendingCount} 集待处理`}，完成后可查看优化后的剧本内容
-                    </p>
-                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-amber-200">
+                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
                       <div
-                        className="h-full rounded-full bg-amber-500 transition-all duration-700"
+                        className="h-full rounded-full bg-violet-500 transition-all duration-700"
                         style={{ width: `${progressPct}%` }}
                       />
                     </div>
@@ -1421,10 +1478,11 @@ export function ScriptTab({
                           <>
                           <div className="flex items-center gap-2">
                             <Loader2 className="h-4 w-4 animate-spin text-yellow-600" />
-                            <p className="text-sm font-medium text-yellow-800">资源提取进行中…</p>
+                            <p className="text-sm font-semibold text-yellow-800">AI 自动处理中 · 资源提取</p>
+                            <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-700">步骤 2/3</span>
                           </div>
-                          <p className="mt-1 text-xs text-yellow-600">
-                            正在从剧本文本中识别角色、场景、道具等资源…
+                          <p className="mt-1 text-xs text-yellow-700">
+                            正在从剧本文本中识别并提取全部角色、场景、道具资源，提取完成后将自动开始分镜序列格式化（步骤 3）
                           </p>
                         </>
                       ) : extractionDone ? (

@@ -1,7 +1,11 @@
 # ── build stage ──────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates
+ENV GOPROXY=https://goproxy.cn,direct \
+	GOSUMDB=sum.golang.google.cn
+
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+	&& apk add --no-cache git ca-certificates
 
 WORKDIR /app
 
@@ -10,12 +14,13 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o task-service ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o task-service ./cmd
 
 # ── runtime stage ─────────────────────────────────────────────────────────────
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+	&& apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 

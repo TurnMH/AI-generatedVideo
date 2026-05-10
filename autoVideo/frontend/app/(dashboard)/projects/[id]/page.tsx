@@ -503,13 +503,18 @@ export default function ProjectDetailPage() {
                     当前处于项目级总览模式。这里统一处理整体剧本大纲、项目级资源提取、分镜拆分、图片生成，以及进入语音与视频阶段的全局入口。
                   </p>
                   {projectSplitInProgress && (
-                    <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-400/10 px-4 py-3 text-left">
+                    <div className="mt-4 rounded-2xl border border-primary-300/30 bg-white/10 px-4 py-3 text-left">
                       <div className="flex items-start gap-3">
-                        <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-cyan-200" />
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/20">
+                          <Loader2 className="h-4 w-4 animate-spin text-cyan-200" />
+                        </div>
                         <div>
-                          <p className="text-sm font-semibold text-cyan-50">{projectSplitTitle}</p>
-                          <p className="mt-1 text-sm leading-6 text-cyan-100/90">{projectSplitDescription}</p>
-                          <p className="mt-2 text-xs text-cyan-100/75">{projectSplitFootnote}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-cyan-50">AI 自动处理中 · {projectSplitTitle}</p>
+                            <span className="rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-medium text-cyan-100">步骤 1/3</span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-cyan-100/90">{projectSplitDescription}</p>
+                          <p className="mt-1.5 text-[11px] text-cyan-100/60">{projectSplitFootnote}</p>
                         </div>
                       </div>
                     </div>
@@ -895,14 +900,16 @@ export default function ProjectDetailPage() {
               })}
               {episodes.length === 0 && (
                 projectSplitInProgress ? (
-                  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-5 text-center">
-                    <div className="flex flex-col items-center gap-2 text-blue-700">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <p className="text-sm font-medium">正在自动生成分集</p>
-                      <p className="max-w-[220px] text-xs leading-5 text-blue-600">
+                  <div className="rounded-xl border border-primary-200 bg-primary-50 px-3 py-5 text-center">
+                    <div className="flex flex-col items-center gap-2 text-primary-700">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-100">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      </div>
+                      <p className="text-sm font-semibold">AI 自动处理中</p>
+                      <p className="max-w-[220px] text-xs leading-5 text-primary-500">
                         {projectSplitTotal > 0
-                          ? `已识别 ${projectSplitCompleted}/${projectSplitTotal}，完成后分集会自动出现在这里。`
-                          : '系统正在分析剧本，分集生成后会自动出现在这里。'}
+                          ? `剧本解析中（${projectSplitCompleted}/${projectSplitTotal}），分集完成后自动出现在这里`
+                          : '正在解析剧本与自动分集，完成后分集会自动出现在这里'}
                       </p>
                     </div>
                   </div>

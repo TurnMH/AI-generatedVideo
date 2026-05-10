@@ -1,7 +1,11 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates tzdata
+ENV GOPROXY=https://goproxy.cn,direct \
+    GOSUMDB=sum.golang.google.cn
+
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+    && apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
 
@@ -14,7 +18,7 @@ COPY . .
 
 # Build binary (static, no CGO required for pure-Go postgres driver)
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-w -s" -o /model-service ./cmd/main.go
+    go build -ldflags="-w -s" -o /model-service ./cmd
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM scratch

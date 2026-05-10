@@ -1,4 +1,6 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
+ENV GOPROXY=https://goproxy.cn,direct \
+	GOSUMDB=sum.golang.google.cn
 
 WORKDIR /app
 
@@ -7,13 +9,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o video-service ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o video-service ./cmd
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.19
 
 # ca-certificates: TLS; tzdata: timezone support; ffmpeg: video processing
-RUN apk add --no-cache ca-certificates tzdata ffmpeg
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+	&& apk add --no-cache ca-certificates tzdata ffmpeg
 
 WORKDIR /app
 

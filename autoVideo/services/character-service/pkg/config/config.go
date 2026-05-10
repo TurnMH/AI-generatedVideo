@@ -59,6 +59,9 @@ type Config struct {
 	ProjectService struct {
 		BaseURL string `mapstructure:"base_url"`
 	} `mapstructure:"project_service"`
+	ModelService struct {
+		BaseURL string `mapstructure:"base_url"`
+	} `mapstructure:"model_service"`
 	Concurrency struct {
 		MaxGenerations int `mapstructure:"max_generations"`
 	} `mapstructure:"concurrency"`
@@ -97,6 +100,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("llm.timeout", 120)
 	viper.SetDefault("project_service.base_url", "http://localhost:8002")
 	viper.SetDefault("auth_service.base_url", "http://localhost:8001")
+	viper.SetDefault("model_service.base_url", "http://localhost:8008")
 	viper.SetDefault("gateway.addr", "http://localhost:8000")
 	viper.SetDefault("gateway.self_addr", "")
 

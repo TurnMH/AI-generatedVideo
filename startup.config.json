@@ -27,7 +27,7 @@
     {
       "name": "project-service",
       "script": "go",
-      "args": "run ./cmd/main.go",
+      "args": "run ./cmd/",
       "cwd": "autoVideo/services/project-service",
       "watch": false,
       "autorestart": true,
@@ -36,7 +36,7 @@
     {
       "name": "script-service",
       "script": "go",
-      "args": "run ./cmd/main.go",
+      "args": "run ./cmd/",
       "cwd": "autoVideo/services/script-service",
       "watch": false,
       "autorestart": true,
@@ -45,7 +45,7 @@
     {
       "name": "character-service",
       "script": "go",
-      "args": "run ./cmd/main.go",
+      "args": "run ./cmd/",
       "cwd": "autoVideo/services/character-service",
       "watch": false,
       "autorestart": true,
@@ -54,7 +54,7 @@
     {
       "name": "image-service",
       "script": "go",
-      "args": "run ./cmd/main.go",
+      "args": "run ./cmd/",
       "cwd": "autoVideo/services/image-service",
       "watch": false,
       "autorestart": true,
@@ -63,7 +63,7 @@
     {
       "name": "video-service",
       "script": "go",
-      "args": "run ./cmd/main.go",
+      "args": "run ./cmd/",
       "cwd": "autoVideo/services/video-service",
       "watch": false,
       "autorestart": true,

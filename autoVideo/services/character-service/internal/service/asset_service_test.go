@@ -1,11 +1,17 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/autovideo/character-service/internal/model"
+	"go.uber.org/zap"
 )
 
 func TestMergeAssetDescription(t *testing.T) {
@@ -132,4 +138,93 @@ func TestResolveAssetSuccessfulImageURL(t *testing.T) {
 			t.Fatalf("resolveAssetSuccessfulImageURL() = %q, want generated image", got)
 		}
 	})
+}
+
+func TestResolveChatFreeRouteUsesRuntimeModelMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/models" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":[{"model_key":"gpt-5.4","name":"GPT 5.4","provider":"openai","api_endpoint":"https://precision.example/v1","api_key_ref":"runtime.character.llm","is_active":true}]}`))
+	}))
+	defer server.Close()
+
+	svc := NewAssetService(
+		nil, nil, zap.NewNop(),
+		"https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second,
+		"https://claude.example/v1", "claude-key",
+		"https://qwen.example/v1", "qwen-key",
+		"https://zhipu.example/v1", "zhipu-key",
+		"https://gemini.example/v1", "gemini-key",
+		server.URL,
+	)
+
+	baseURL, apiKey := svc.resolveChatFreeRoute(context.Background(), "gpt-5.4")
+	if baseURL != "https://precision.example/v1" {
+		t.Fatalf("resolveChatFreeRoute() baseURL = %q, want precision endpoint", baseURL)
+	}
+	if apiKey != "fallback-key" {
+		t.Fatalf("resolveChatFreeRoute() apiKey = %q, want default runtime key", apiKey)
+	}
+}
+
+func TestResolveChatFreeRouteFallsBackToFamilyRouting(t *testing.T) {
+	svc := NewAssetService(
+		nil, nil, zap.NewNop(),
+		"https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second,
+		"https://claude.example/v1", "claude-key",
+		"https://qwen.example/v1", "qwen-key",
+		"https://zhipu.example/v1", "zhipu-key",
+		"https://gemini.example/v1", "gemini-key",
+		"",
+	)
+
+	baseURL, apiKey := svc.resolveChatFreeRoute(context.Background(), "claude-3-7-sonnet")
+	if baseURL != "https://claude.example/v1" {
+		t.Fatalf("resolveChatFreeRoute() baseURL = %q, want claude endpoint", baseURL)
+	}
+	if apiKey != "claude-key" {
+		t.Fatalf("resolveChatFreeRoute() apiKey = %q, want claude key", apiKey)
+	}
+}
+
+func TestChatFreeUsesFullRuntimeEndpointWithoutDuplicatingPath(t *testing.T) {
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected llm path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Gemini。"}}]}`))
+	}))
+	defer llmServer.Close()
+
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"code":0,"message":"success","data":[{"model_key":"gemini-2.5-flash","name":"gemini-2.5-flash","provider":"google","api_endpoint":"%s/v1/chat/completions","api_key_ref":"easyart","is_active":true}]}`,
+			llmServer.URL,
+		)))
+	}))
+	defer modelServer.Close()
+
+	svc := NewAssetService(
+		nil, nil, zap.NewNop(),
+		"https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second,
+		"https://claude.example/v1", "claude-key",
+		"https://qwen.example/v1", "qwen-key",
+		"https://zhipu.example/v1", "zhipu-key",
+		"https://gemini.example/v1", "gemini-key",
+		modelServer.URL,
+	)
+
+	reply, err := svc.ChatFree(context.Background(), []map[string]string{{
+		"role":    "user",
+		"content": "test",
+	}}, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("ChatFree() error = %v", err)
+	}
+	if reply != "Gemini。" {
+		t.Fatalf("ChatFree() reply = %q, want Gemini。", reply)
+	}
 }

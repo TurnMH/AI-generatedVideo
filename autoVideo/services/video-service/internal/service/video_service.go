@@ -1423,9 +1423,12 @@ func (s *VideoService) ModelStatus(ctx context.Context) []ModelStatusItem {
 }
 
 func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (generators.VideoGenerator, error) {
-	resolvedKey := normalizeVideoGeneratorKey(modelName)
+	resolvedKey, providerModel := resolveVideoGeneratorRoute(modelName)
 	if resolvedKey != "" {
 		if gen, ok := s.generators[resolvedKey]; ok && gen.IsAvailable(ctx) {
+			if providerModel != "" {
+				return bindRequestedVideoModel(gen, resolvedKey, providerModel), nil
+			}
 			return gen, nil
 		}
 		return nil, fmt.Errorf("video generator %q is unavailable", modelName)
@@ -1438,17 +1441,14 @@ func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (
 	return nil, fmt.Errorf("no available generator")
 }
 
-// SetFrameExtractorURL 配置末帧提取服务 URL（视频串行流程用）。
 func (s *VideoService) SetFrameExtractorURL(url string) {
 	s.frameExtractorURL = url
 }
 
-// SetSerialFailureAnalyzer wires in the LLM-based serial failure analyzer.
 func (s *VideoService) SetSerialFailureAnalyzer(a *SerialFailureAnalyzer) {
 	s.serialFailureAnalyzer = a
 }
 
-// callFrameExtractor 调用 frame-extractor-service 提取视频末帧，返回末帧图片 URL。
 func callFrameExtractor(ctx context.Context, videoURL string, projectID, userID int64, extractorBaseURL string) (string, error) {
 	body, err := json.Marshal(map[string]interface{}{
 		"video_url":  videoURL,
@@ -1472,7 +1472,6 @@ func callFrameExtractor(ctx context.Context, videoURL string, projectID, userID 
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("frame-extractor HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
-	// Parse {"frame_url": "..."}
 	var result struct {
 		FrameURL string `json:"frame_url"`
 	}
@@ -1485,46 +1484,81 @@ func callFrameExtractor(ctx context.Context, videoURL string, projectID, userID 
 	return result.FrameURL, nil
 }
 
-func normalizeVideoGeneratorKey(modelName string) string {
-	trimmed := strings.TrimSpace(strings.ToLower(modelName))
+func bindRequestedVideoModel(gen generators.VideoGenerator, generatorKey, providerModel string) generators.VideoGenerator {
+	switch typed := gen.(type) {
+	case *generators.KlingGenerator:
+		clone := typed.Clone()
+		clone.WithModel(providerModel)
+		return clone.WithName(generatorKey)
+	case *generators.WanGenerator:
+		return typed.CloneWithModel(providerModel)
+	case *generators.ViduGenerator:
+		return typed.CloneWithModel(providerModel, generatorKey)
+	case *generators.DoubaoGenerator:
+		return typed.CloneWithModel(providerModel, generatorKey)
+	case *generators.HubagiGenerator:
+		return typed.CloneWithModel(providerModel)
+	case *generators.SuannengGenerator:
+		return typed.CloneWithModel(providerModel)
+	default:
+		return gen
+	}
+}
+
+func resolveVideoGeneratorRoute(modelName string) (string, string) {
+	raw := strings.TrimSpace(modelName)
+	trimmed := strings.ToLower(raw)
 	switch trimmed {
 	case "", "auto":
-		return ""
+		return "", ""
 	case "comfyui", "comfyui-video", "comfyui-local-video", "local", "local-video":
-		return "comfyui-video"
+		return "comfyui-video", ""
 	case "sora", "sora2", "sora-2":
-		return "sora2"
-	case "wan", "wanx", "wan2.1", "wan2.6", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
-		return "wan"
+		return "sora2", ""
+	case "wan", "wanx", "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
+		return "wan", "wanx2.1-i2v-turbo"
+	case "wan2.6":
+		return "wan", "wan2.6"
 	case "veo", "veo3.1", "hubagi-veo3.1", "voe3.1", "hubagi-voe3.1", "xingwei-voe3.1":
-		return "hubagi-voe3.1"
+		return "hubagi-voe3.1", "voe3.1"
 	case "tc-gv", "hubagi-tc-gv", "xingwei-3.1", "hubagi-xingwei-3.1":
-		return "hubagi-TC-GV"
-	// Kling and aliases
-	case "kling", "kling-v3", "kling-3.0", "xinghe-3.0", "kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni",
-		"kling-v1.5", "kling-v1.6", "kling-v2", "kling-v2.1":
-		return "kling"
-	// Doubao V4.0 (xingguang-3.0, ByteDance Ark)
+		return "hubagi-TC-GV", "TC-GV"
+	case "kling":
+		return "kling", ""
+	case "kling-v3", "kling-3.0", "xinghe-3.0":
+		return "kling", "kling-v3"
+	case "kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni":
+		return "kling", "kling-v3-omni"
+	case "kling-v1.5":
+		return "kling", "kling-v1-5"
+	case "kling-v1.6":
+		return "kling", "kling-v1-6"
+	case "kling-v2":
+		return "kling", "kling-v2"
+	case "kling-v2.1":
+		return "kling", "kling-v2-1"
 	case "doubao", "v4.0", "xingguang-3.0", "doubao-v4", "doubao-v4.0":
-		return "doubao"
-	// Doubao SeedDream (doubao-seedance / xingtu, ByteDance Ark)
-	case "doubao-seedance", "doubao-seedream", "doubao-seedream-4-0-250828", "seedream", "xingtu":
-		return "doubao-seedance"
-	// Vidu Q3 Pro (xingcheng-2.6)
+		return "doubao", "V4.0"
+	case "doubao-seedance", "doubao-seedream", "seedream", "xingtu":
+		return "doubao-seedance", ""
+	case "doubao-seedream-4-0-250828":
+		return "doubao-seedance", "doubao-seedream-4-0-250828"
 	case "vidu", "viduq3-pro", "vidu-q3-pro", "xingcheng-2.6", "vidu-3pro", "vidu官方-3pro":
-		return "vidu"
-	// Vidu Q3 Mix (xingchen-3.1)
+		return "vidu", "viduq3-pro"
 	case "vidu-mix", "viduq3-mix", "vidu-q3-mix", "xingchen-3.1", "vidu官方-mix":
-		return "vidu-mix"
-	// Suanneng Seedance-1.5-Pro (xingguang-2.5, SophNet)
+		return "vidu-mix", "viduq3-mix"
 	case "suanneng", "seedance-1.5-pro", "seedance", "xingguang-2.5", "sophnet":
-		return "suanneng"
-	// Gaga-1 (xingdian2.0)
+		return "suanneng", "doubao-seedance-1-5-pro-251215"
 	case "gaga", "gaga-1", "xingdian2.0", "xingdian-2.0":
-		return "gaga"
+		return "gaga", ""
 	default:
-		return modelName
+		return raw, ""
 	}
+}
+
+func normalizeVideoGeneratorKey(modelName string) string {
+	key, _ := resolveVideoGeneratorRoute(modelName)
+	return key
 }
 
 // motionPrompt —— 根据运动模式、风格预设和分镜场景描述生成视频生成提示词

@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ============================================================
 # docker-compose.full.yml — autoVideo 全量部署
 # 包含：基础设施 + 所有微服务 + 前端 + API Gateway
@@ -19,6 +17,7 @@ x-go-service: &go-service
   networks:
     - autoVideo-net
   environment:
+    - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
     - POSTGRES_HOST=postgres
     - POSTGRES_PORT=5432
     - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -212,6 +211,8 @@ services:
     <<: *go-service
     ports:
       - "8002:8002"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
@@ -222,7 +223,7 @@ services:
       auth:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8002/healthz"]
+      test: ["CMD", "/bin/busybox", "wget", "-qO-", "http://localhost:8002/healthz"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -233,6 +234,8 @@ services:
     <<: *go-service
     ports:
       - "8003:8003"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
@@ -255,10 +258,14 @@ services:
     <<: *go-service
     ports:
       - "8004:8004"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - CHARACTER_AUTH_SERVICE_BASE_URL=http://auth:8001
+      - CHARACTER_MODEL_SERVICE_BASE_URL=http://model:8008
       - STORAGE_BASE_URL=http://storage:8009
     depends_on:
       postgres:
@@ -270,7 +277,10 @@ services:
     <<: *go-service
     ports:
       - "8005:8005"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -293,7 +303,10 @@ services:
     <<: *go-service
     ports:
       - "8006:8006"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - VIDEO_SERVICE_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -317,6 +330,8 @@ services:
     <<: *go-service
     ports:
       - "8007:8007"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
@@ -336,6 +351,8 @@ services:
     <<: *go-service
     ports:
       - "8008:8008"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
@@ -350,6 +367,8 @@ services:
     <<: *go-service
     ports:
       - "8009:8009"
+    volumes:
+      - ../config.local.yaml:/app/config.local.yaml:ro
     environment:
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - MINIO_ENDPOINT=minio:9000

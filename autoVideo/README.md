@@ -16,6 +16,7 @@
 - [服务一览](#服务一览)
 - [环境变量](docs/env.md)
 - [开发指南](docs/development.md)
+- [云上迁移复盘](docs/cloud-deployment-notes.md)
 - [API 文档](docs/api.md)
 
 补充说明：

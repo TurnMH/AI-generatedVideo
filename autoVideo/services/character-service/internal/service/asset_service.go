@@ -27,6 +27,15 @@ type llmProvider struct {
 	apiKey  string
 }
 
+type chatRuntimeModel struct {
+	ModelKey    string  `json:"model_key"`
+	Name        string  `json:"name"`
+	Provider    string  `json:"provider"`
+	APIEndpoint string  `json:"api_endpoint"`
+	APIKeyRef   *string `json:"api_key_ref,omitempty"`
+	IsActive    bool    `json:"is_active"`
+}
+
 type AssetService struct {
 	repo           *repository.AssetRepo
 	storage        *StorageClient
@@ -43,6 +52,10 @@ type AssetService struct {
 	llmQwen         llmProvider // Alibaba DashScope (qwen* models)
 	llmZhipu        llmProvider // ZhipuAI BigModel (glm* models)
 	llmGemini       llmProvider // Gemini proxy (gemini* models)
+	modelServiceBaseURL string
+	chatCatalogMu      sync.RWMutex
+	chatCatalog        []chatRuntimeModel
+	chatCatalogExpiry  time.Time
 	pausedProjects  sync.Map
 	panelRegen      PanelRegenFunc
 }
@@ -63,6 +76,7 @@ func NewAssetService(
 	qwenBaseURL, qwenAPIKey string,
 	zhipuBaseURL, zhipuAPIKey string,
 	geminiBaseURL, geminiAPIKey string,
+	modelServiceBaseURL string,
 ) *AssetService {
 	if llmTimeout <= 0 {
 		llmTimeout = 120 * time.Second
@@ -85,6 +99,7 @@ func NewAssetService(
 		llmQwen:        llmProvider{baseURL: strings.TrimRight(qwenBaseURL, "/"), apiKey: qwenAPIKey},
 		llmZhipu:       llmProvider{baseURL: strings.TrimRight(zhipuBaseURL, "/"), apiKey: zhipuAPIKey},
 		llmGemini:      llmProvider{baseURL: strings.TrimRight(geminiBaseURL, "/"), apiKey: geminiAPIKey},
+		modelServiceBaseURL: strings.TrimRight(modelServiceBaseURL, "/"),
 	}
 }
 
@@ -1188,8 +1203,44 @@ func (s *AssetService) callLLMAssetChat(ctx context.Context, asset *model.Asset,
 	return &result, nil
 }
 
+func (s *AssetService) chatProviderByHints(hints ...string) llmProvider {
+	joined := strings.ToLower(strings.Join(hints, " "))
+	switch {
+	// easyart 必须在其他 provider 之前匹配，因为 api_key_ref='easyart' 的模型
+	// 无论其 provider 字段是什么（openai/zhipu 等），都应使用 easyart API key。
+	case strings.Contains(joined, "easyart"):
+		if s.llmClaude.apiKey != "" {
+			return llmProvider{apiKey: s.llmClaude.apiKey}
+		}
+	case strings.Contains(joined, "claude") || strings.Contains(joined, "anthropic"):
+		if s.llmClaude.baseURL != "" || s.llmClaude.apiKey != "" {
+			return s.llmClaude
+		}
+	case strings.Contains(joined, "qwen") || strings.Contains(joined, "dashscope") || strings.Contains(joined, "aliyun"):
+		if s.llmQwen.baseURL != "" || s.llmQwen.apiKey != "" {
+			return s.llmQwen
+		}
+	case strings.Contains(joined, "zhipu") || strings.Contains(joined, "glm") || strings.Contains(joined, "bigmodel"):
+		if s.llmZhipu.baseURL != "" || s.llmZhipu.apiKey != "" {
+			return s.llmZhipu
+		}
+	case strings.Contains(joined, "gemini"):
+		if s.llmGemini.baseURL != "" || s.llmGemini.apiKey != "" {
+			return s.llmGemini
+		}
+	case strings.Contains(joined, "openai") || strings.Contains(joined, "llm") || strings.Contains(joined, "default"):
+		return llmProvider{baseURL: s.llmBaseURL, apiKey: s.llmAPIKey}
+	}
+	return llmProvider{}
+}
+
 // chatFreeProvider resolves which base_url + api_key to use based on model name prefix.
 func (s *AssetService) chatFreeProvider(modelName string) (baseURL, apiKey string) {
+	if provider := s.chatProviderByHints(modelName); provider.baseURL != "" || provider.apiKey != "" {
+		if provider.baseURL != "" {
+			return provider.baseURL, provider.apiKey
+		}
+	}
 	m := strings.ToLower(modelName)
 	switch {
 	case strings.HasPrefix(m, "claude"):
@@ -1212,6 +1263,122 @@ func (s *AssetService) chatFreeProvider(modelName string) (baseURL, apiKey strin
 	return s.llmBaseURL, s.llmAPIKey
 }
 
+func (s *AssetService) cachedChatRuntimeModels() ([]chatRuntimeModel, bool) {
+	s.chatCatalogMu.RLock()
+	defer s.chatCatalogMu.RUnlock()
+	if time.Now().After(s.chatCatalogExpiry) || len(s.chatCatalog) == 0 {
+		return nil, false
+	}
+	out := make([]chatRuntimeModel, len(s.chatCatalog))
+	copy(out, s.chatCatalog)
+	return out, true
+}
+
+func (s *AssetService) listChatRuntimeModels(ctx context.Context) ([]chatRuntimeModel, error) {
+	if models, ok := s.cachedChatRuntimeModels(); ok {
+		return models, nil
+	}
+	if strings.TrimSpace(s.modelServiceBaseURL) == "" {
+		return nil, fmt.Errorf("model service base url not configured")
+	}
+	metaTimeout := 5 * time.Second
+	if s.llmTimeout > 0 && s.llmTimeout < metaTimeout {
+		metaTimeout = s.llmTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+	url := s.modelServiceBaseURL + "/api/v1/models?type=llm&enabled=true"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: metaTimeout}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		preview := string(body)
+		if len(preview) > 300 {
+			preview = preview[:300]
+		}
+		return nil, fmt.Errorf("model service error %d: %s", resp.StatusCode, preview)
+	}
+	var payload struct {
+		Code int                `json:"code"`
+		Data []chatRuntimeModel `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("parse model catalog: %w", err)
+	}
+	s.chatCatalogMu.Lock()
+	s.chatCatalog = make([]chatRuntimeModel, len(payload.Data))
+	copy(s.chatCatalog, payload.Data)
+	s.chatCatalogExpiry = time.Now().Add(30 * time.Second)
+	out := make([]chatRuntimeModel, len(payload.Data))
+	copy(out, payload.Data)
+	s.chatCatalogMu.Unlock()
+	return out, nil
+}
+
+func (s *AssetService) resolveChatRuntimeModel(ctx context.Context, modelName string) (*chatRuntimeModel, error) {
+	models, err := s.listChatRuntimeModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(modelName))
+	for i := range models {
+		if !models[i].IsActive {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(models[i].ModelKey)) == needle || strings.ToLower(strings.TrimSpace(models[i].Name)) == needle {
+			return &models[i], nil
+		}
+	}
+	return nil, fmt.Errorf("model %q not found in runtime catalog", modelName)
+}
+
+func (s *AssetService) resolveChatFreeRoute(ctx context.Context, modelName string) (baseURL, apiKey string) {
+	runtimeModel, err := s.resolveChatRuntimeModel(ctx, modelName)
+	if err != nil {
+		if s.log != nil && strings.TrimSpace(s.modelServiceBaseURL) != "" {
+			s.log.Warn("resolve chat runtime model failed", zap.String("model_name", modelName), zap.Error(err))
+		}
+		return s.chatFreeProvider(modelName)
+	}
+	fallbackBase, fallbackKey := s.chatFreeProvider(modelName)
+	provider := s.chatProviderByHints(stringPtrValue(runtimeModel.APIKeyRef), runtimeModel.Provider, runtimeModel.ModelKey, runtimeModel.Name)
+	baseURL = strings.TrimRight(strings.TrimSpace(runtimeModel.APIEndpoint), "/")
+	if provider.apiKey == "" {
+		provider.apiKey = fallbackKey
+	}
+	if provider.baseURL == "" {
+		provider.baseURL = fallbackBase
+	}
+	if baseURL == "" {
+		baseURL = provider.baseURL
+	}
+	if baseURL == "" {
+		baseURL = fallbackBase
+	}
+	return baseURL, provider.apiKey
+}
+
+func chatCompletionsURL(base string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(base), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/chat/completions") {
+		return trimmed
+	}
+	return trimmed + "/chat/completions"
+}
+
 // ChatFree performs a free-form LLM conversation without requiring an asset.
 // It is used by the left-side reference chat panel on the frontend.
 // Returns the assistant's plain-text reply.
@@ -1223,7 +1390,7 @@ func (s *AssetService) ChatFree(ctx context.Context, messages []map[string]strin
 		modelName = s.llmModel
 	}
 
-	providerBase, providerKey := s.chatFreeProvider(modelName)
+	providerBase, providerKey := s.resolveChatFreeRoute(ctx, modelName)
 
 	reqBody := map[string]interface{}{
 		"model":       modelName,
@@ -1239,7 +1406,8 @@ func (s *AssetService) ChatFree(ctx context.Context, messages []map[string]strin
 	llmCtx, cancel := context.WithTimeout(ctx, s.llmTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(llmCtx, http.MethodPost, providerBase+"/chat/completions", bytes.NewReader(body))
+	providerURL := chatCompletionsURL(providerBase)
+	req, err := http.NewRequestWithContext(llmCtx, http.MethodPost, providerURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -1263,7 +1431,7 @@ func (s *AssetService) ChatFree(ctx context.Context, messages []map[string]strin
 		if len(preview) > 300 {
 			preview = preview[:300]
 		}
-		return "", fmt.Errorf("llm error %d (provider=%s): %s", resp.StatusCode, providerBase, preview)
+		return "", fmt.Errorf("llm error %d (provider=%s): %s", resp.StatusCode, providerURL, preview)
 	}
 
 	// Guard against HTML error pages returned with 200 (e.g. WAF/proxy pages).
@@ -1272,7 +1440,7 @@ func (s *AssetService) ChatFree(ctx context.Context, messages []map[string]strin
 		if len(preview) > 300 {
 			preview = preview[:300]
 		}
-		return "", fmt.Errorf("llm returned non-JSON content-type %q (provider=%s): %s", ct, providerBase, preview)
+		return "", fmt.Errorf("llm returned non-JSON content-type %q (provider=%s): %s", ct, providerURL, preview)
 	}
 
 	var llmResp struct {
@@ -1290,7 +1458,7 @@ func (s *AssetService) ChatFree(ctx context.Context, messages []map[string]strin
 		if len(preview) > 300 {
 			preview = preview[:300]
 		}
-		return "", fmt.Errorf("parse llm response (provider=%s): %w — body: %s", providerBase, err, preview)
+		return "", fmt.Errorf("parse llm response (provider=%s): %w — body: %s", providerURL, err, preview)
 	}
 	if llmResp.Error != nil {
 		return "", fmt.Errorf("llm api error: %s", llmResp.Error.Message)
@@ -2348,6 +2516,13 @@ func appendGeneratedImageVersion(metadata map[string]interface{}, previousImageU
 		}
 	}
 	return deduped
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func numberValue(raw interface{}) float64 {

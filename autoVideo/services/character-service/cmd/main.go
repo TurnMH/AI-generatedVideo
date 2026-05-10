@@ -58,7 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatal("connect database failed", zap.Error(err))
 	}
-	if err = db.AutoMigrate(&model.Character{}, &model.StylePreset{}, &model.Asset{}, &model.Skill{}, &model.ProductionSkill{}, &model.CharacterGroup{}); err != nil {
+	if err = db.AutoMigrate(&model.Character{}, &model.StylePreset{}, &model.CharacterGroup{}, &model.Asset{}, &model.Skill{}, &model.ProductionSkill{}); err != nil {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 
@@ -100,6 +100,7 @@ func main() {
 		cfg.Qwen.BaseURL, cfg.Qwen.APIKey,
 		cfg.Zhipu.BaseURL, cfg.Zhipu.APIKey,
 		geminiBase, geminiKey,
+		cfg.ModelService.BaseURL,
 	)
 
 	// ── Kafka ────────────────────────────────────────────────────────────────

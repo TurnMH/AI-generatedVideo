@@ -72,6 +72,10 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func resolvedModelUsed(actualModel, fallback string) string {
+	return firstNonEmpty(strings.TrimSpace(actualModel), strings.TrimSpace(fallback))
+}
+
 // RetrySubmit calls submitFn up to maxAttempts times, backing off on rate-limit
 // (429) errors. The backoff sequence is 5s → 15s → 30s → 60s.
 // Any non-rate-limit error (or context cancellation) returns immediately.

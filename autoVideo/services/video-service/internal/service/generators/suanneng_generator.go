@@ -45,6 +45,15 @@ func NewSuannengGenerator(apiKey, baseURL, model string) *SuannengGenerator {
 // Name —— 返回生成器名称
 func (g *SuannengGenerator) Name() string { return "suanneng" }
 
+// CloneWithModel returns a copy bound to the requested model.
+func (g *SuannengGenerator) CloneWithModel(model string) *SuannengGenerator {
+	clone := *g
+	if model != "" {
+		clone.Model = model
+	}
+	return &clone
+}
+
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *SuannengGenerator) IsAvailable(_ context.Context) bool { return g.APIKey != "" }
 
@@ -316,7 +325,7 @@ func (g *SuannengGenerator) queryTask(ctx context.Context, taskID string) (*Vide
 		return &VideoClip{
 			ClipURL:     videoURL,
 			DurationSec: 5,
-			ModelUsed:   g.Name(),
+			ModelUsed:   resolvedModelUsed(g.Model, g.Name()),
 		}, true, nil
 	case "failed":
 		return nil, false, fmt.Errorf("suanneng: task %s failed", taskID)

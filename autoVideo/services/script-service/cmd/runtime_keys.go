@@ -97,7 +97,7 @@ func doFetchRuntimeAPIKeys(client *http.Client, baseURL, secret string) ([]runti
 func buildServiceToken(secret string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	claims, _ := json.Marshal(map[string]interface{}{
-		"user_id":    1,
+		"user_id":    "1",
 		"role":       "service",
 		"token_type": "access",
 		"iat":        time.Now().Unix(),

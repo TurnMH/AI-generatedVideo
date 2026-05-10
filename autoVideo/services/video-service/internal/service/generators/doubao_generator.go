@@ -54,6 +54,18 @@ func NewDoubaoSeedanceGenerator(apiKey, baseURL, model, genName string) *DoubaoG
 // Name —— 返回生成器名称
 func (g *DoubaoGenerator) Name() string { return g.genName }
 
+// CloneWithModel returns a copy bound to the requested model/name.
+func (g *DoubaoGenerator) CloneWithModel(model, genName string) *DoubaoGenerator {
+	clone := *g
+	if model != "" {
+		clone.Model = model
+	}
+	if genName != "" {
+		clone.genName = genName
+	}
+	return &clone
+}
+
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *DoubaoGenerator) IsAvailable(_ context.Context) bool { return g.APIKey != "" }
 
@@ -376,7 +388,7 @@ func (g *DoubaoGenerator) queryTask(ctx context.Context, taskID string) (*VideoC
 		return &VideoClip{
 			ClipURL:     videoURL,
 			DurationSec: 5,
-			ModelUsed:   g.genName,
+			ModelUsed:   resolvedModelUsed(g.Model, g.genName),
 		}, true, nil
 	case "failed":
 		return nil, false, fmt.Errorf("doubao: task %s failed", taskID)

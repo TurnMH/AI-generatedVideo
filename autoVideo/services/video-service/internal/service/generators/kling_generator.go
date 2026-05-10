@@ -122,6 +122,13 @@ func (g *KlingGenerator) WithOmniModel(model string) *KlingGenerator {
 	return g
 }
 
+// Clone returns a shallow copy so per-request model selection does not mutate
+// the shared generator instance kept in VideoService.
+func (g *KlingGenerator) Clone() *KlingGenerator {
+	clone := *g
+	return &clone
+}
+
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *KlingGenerator) IsAvailable(ctx context.Context) bool {
 	if g.rotator != nil && g.rotator.Len() > 0 {
@@ -320,7 +327,7 @@ func (g *KlingGenerator) queryTask(ctx context.Context, taskID string, token str
 		return &VideoClip{
 			ClipURL:     videos[0].URL,
 			DurationSec: videos[0].Duration,
-			ModelUsed:   g.Name(),
+			ModelUsed:   resolvedModelUsed(g.ModelName, g.Name()),
 		}, true, nil
 	case "failed":
 		reason := strings.TrimSpace(result.Data.TaskStatusMsg)

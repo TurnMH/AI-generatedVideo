@@ -8,7 +8,8 @@ WORKDIR /app
 
 # 安装依赖（利用缓存层）
 COPY package.json package-lock.json* ./
-RUN npm ci --prefer-offline
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm ci --prefer-offline
 
 # ── 构建阶段 ─────────────────────────────────────────────────
 FROM node:20-alpine AS builder
@@ -16,6 +17,7 @@ WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN mkdir -p public
 
 # 构建时注入环境变量（运行时变量通过容器 env 传入）
 ARG NEXT_PUBLIC_API_URL=/

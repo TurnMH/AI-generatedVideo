@@ -1,5 +1,3 @@
-version: "3.9"
-
 networks:
   autoVideo-net:
     driver: bridge

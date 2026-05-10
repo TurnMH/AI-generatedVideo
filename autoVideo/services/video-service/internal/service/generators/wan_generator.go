@@ -18,6 +18,7 @@ import (
 type WanGenerator struct {
 	APIKey  string
 	BaseURL string
+	Model   string
 	client  *http.Client
 }
 
@@ -29,12 +30,25 @@ func NewWanGenerator(apiKey, _ /* secretKey unused */, baseURL string) *WanGener
 	return &WanGenerator{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
+		Model:   "wanx2.1-i2v-turbo",
 		client:  &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
 // Name —— 返回生成器名称 "wan"
 func (g *WanGenerator) Name() string { return "wan" }
+
+// CloneWithModel returns a copy bound to the requested model.
+func (g *WanGenerator) CloneWithModel(model string) *WanGenerator {
+	clone := *g
+	if model != "" {
+		clone.Model = model
+	}
+	if clone.Model == "" {
+		clone.Model = "wanx2.1-i2v-turbo"
+	}
+	return &clone
+}
 
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *WanGenerator) IsAvailable(ctx context.Context) bool {
@@ -155,7 +169,7 @@ func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string
 	}
 
 	body := wanSubmitReq{
-		Model: "wanx2.1-i2v-turbo",
+		Model: firstNonEmpty(g.Model, "wanx2.1-i2v-turbo"),
 		Input: wanSubmitInput{
 			ImgURL:       imgURL,
 			Prompt:       req.Prompt,
@@ -254,7 +268,7 @@ func (g *WanGenerator) queryTask(ctx context.Context, taskID string) (*VideoClip
 		return &VideoClip{
 			ClipURL:     result.Output.VideoURL,
 			DurationSec: 5,
-			ModelUsed:   "wan",
+			ModelUsed:   resolvedModelUsed(g.Model, "wan"),
 		}, true, nil
 	case "FAILED":
 		msg := result.Message

@@ -87,7 +87,7 @@ INSERT INTO models (name, provider, type, api_endpoint, is_active, priority, cos
     'Claude-3.7-Sonnet',
     'anthropic',
     'llm',
-    'https://api.anthropic.com/v1/messages',
+    '',
     TRUE, 9, 0.003, 'token',
     '{"max_tokens":200000,"context_window":200000,"supports_vision":true,"supports_function_calling":true,"anthropic_version":"2023-06-01","model_id":"claude-3-7-sonnet-20250219"}'
 ),

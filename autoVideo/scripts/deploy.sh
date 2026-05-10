@@ -26,6 +26,19 @@ ok()   { echo -e "\033[1;32m[ok]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[warn]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 
+rebuild_project_image() {
+  local image="autovideo/project:${TAG}"
+  local context="services/project-service"
+
+  if [ ! -f "$context/Dockerfile" ]; then
+    warn "未找到 $context/Dockerfile，跳过 project 显式重建"
+    return
+  fi
+
+  log "显式重建 project 镜像（compose 为 image-only 服务）..."
+  docker build -t "$image" "$context"
+}
+
 # ── 检查 .env 文件 ────────────────────────────────────────────
 ENV_FILE="infra/.env.${ENV}"
 if [ ! -f "$ENV_FILE" ]; then
@@ -39,6 +52,10 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 log "使用配置：$ENV_FILE，镜像标签：$TAG"
+
+if ! command -v migrate >/dev/null 2>&1; then
+  err "golang-migrate 未安装，终止部署"
+fi
 
 # ── 拉取最新代码（可选，CI 环境下通常已完成）──────────────────
 if [ "${CI:-false}" = "false" ]; then
@@ -68,19 +85,28 @@ done
 ok "PostgreSQL ✓"
 
 # ── 数据库迁移 ────────────────────────────────────────────────
-if command -v migrate >/dev/null 2>&1; then
-  log "执行数据库迁移..."
-  # 从 env 文件读取密码
-  PG_PASS=$(grep POSTGRES_PASSWORD "$ENV_FILE" | cut -d= -f2 | tr -d '"' | tr -d ' ')
-  for svc_dir in services/*/migrations; do
-    [ -d "$svc_dir" ] || continue
-    svc_name=$(echo "$svc_dir" | sed 's|.*/\([^/]*\)/migrations|\1|' | sed 's/-service//')
-    DB_URL="postgres://postgres:${PG_PASS}@localhost:5432/${svc_name}_db?sslmode=disable"
-    migrate -path "$svc_dir" -database "$DB_URL" up 2>/dev/null && ok "migrate $svc_name ✓" || warn "migrate $svc_name 已是最新或失败，跳过"
-  done
-else
-  warn "golang-migrate 未安装，跳过自动迁移"
-fi
+log "执行数据库迁移..."
+# 从 env 文件读取密码
+PG_PASS=$(grep POSTGRES_PASSWORD "$ENV_FILE" | cut -d= -f2 | tr -d '"' | tr -d ' ')
+for svc_dir in services/*/migrations; do
+  [ -d "$svc_dir" ] || continue
+  svc_name=$(echo "$svc_dir" | sed 's|.*/\([^/]*\)/migrations|\1|' | sed 's/-service//')
+  DB_URL="postgres://postgres:${PG_PASS}@localhost:5432/${svc_name}_db?sslmode=disable"
+
+  migrate_output=""
+  if migrate_output=$(migrate -path "$svc_dir" -database "$DB_URL" up 2>&1); then
+    ok "migrate $svc_name ✓"
+    continue
+  fi
+
+  if printf '%s' "$migrate_output" | grep -qi "no change"; then
+    ok "migrate $svc_name 已是最新"
+    continue
+  fi
+
+  printf '%s\n' "$migrate_output" >&2
+  err "migrate $svc_name 失败"
+done
 
 # ── 拉取最新镜像并启动全量服务 ───────────────────────────────────
 if [ -f "$COMPOSE_FULL" ]; then
@@ -91,8 +117,13 @@ if [ -f "$COMPOSE_FULL" ]; then
     AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" pull
   fi
 
+  rebuild_project_image
+
   log "启动全量服务..."
   AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d
+
+  log "强制刷新 project 容器以应用最新镜像..."
+  AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d --no-deps --force-recreate project
 
   # 等待 Gateway 就绪
   log "等待 API Gateway 响应..."

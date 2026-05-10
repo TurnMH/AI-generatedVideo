@@ -1,12 +1,15 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
+ENV GOPROXY=https://goproxy.cn,direct \
+	GOSUMDB=sum.golang.google.cn
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o gateway-service ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o gateway-service ./cmd
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata wget
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+	&& apk add --no-cache ca-certificates tzdata wget
 WORKDIR /app
 COPY --from=builder /app/gateway-service .
 EXPOSE 8000

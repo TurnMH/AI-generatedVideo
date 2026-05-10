@@ -2,6 +2,10 @@
 const apiProxyTarget = (process.env.API_PROXY_TARGET || 'http://localhost:8000').replace(/\/+$/, '')
 
 const nextConfig = {
+  output: 'standalone',
+  images: {
+    domains: ['localhost', 'cdn.autovideo.ai'],
+  },
   async rewrites() {
     return [
       {

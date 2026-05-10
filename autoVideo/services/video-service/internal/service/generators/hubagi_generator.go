@@ -38,6 +38,15 @@ func NewHubagiGenerator(apiKey, baseURL, model string) *HubagiGenerator {
 // Name —— 返回生成器名称，格式为 "hubagi-{模型名}"
 func (g *HubagiGenerator) Name() string { return "hubagi-" + g.Model }
 
+// CloneWithModel returns a copy bound to the requested model.
+func (g *HubagiGenerator) CloneWithModel(model string) *HubagiGenerator {
+	clone := *g
+	if model != "" {
+		clone.Model = model
+	}
+	return &clone
+}
+
 // IsAvailable —— 检查 API Key 是否已配置
 func (g *HubagiGenerator) IsAvailable(ctx context.Context) bool {
 	return g.APIKey != ""
@@ -215,7 +224,7 @@ func (g *HubagiGenerator) queryTask(ctx context.Context, taskID string) (*VideoC
 		return &VideoClip{
 			ClipURL:     videoURL,
 			DurationSec: float64(5),
-			ModelUsed:   g.Name(),
+			ModelUsed:   resolvedModelUsed(g.Model, g.Name()),
 		}, true, nil
 	case "failed":
 		msg := "task failed"
