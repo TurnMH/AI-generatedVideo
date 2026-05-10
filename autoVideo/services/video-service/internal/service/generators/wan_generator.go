@@ -81,9 +81,10 @@ type wanSubmitReq struct {
 
 type wanSubmitInput struct {
 	ImgURL       string   `json:"img_url,omitempty"`
-	Prompt       string   `json:"prompt,omitempty"`
-	Function     string   `json:"function"`
-	ExtendPrompt bool     `json:"extend_prompt"`
+	Text         string   `json:"text,omitempty"`         // t2v: text prompt (wanx2.1-t2v-*)
+	Prompt       string   `json:"prompt,omitempty"`       // i2v: motion description
+	Function     string   `json:"function,omitempty"`     // i2v only: "video-synthesis"
+	ExtendPrompt bool     `json:"extend_prompt,omitempty"` // i2v only
 	RefImgs      []string `json:"ref_imgs,omitempty"` // character reference images for consistency
 }
 
@@ -154,31 +155,45 @@ func (g *WanGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*Vid
 }
 
 // submit —— 向 DashScope API 提交视频生成请求，返回任务 ID
+// 自动区分 t2v（文生视频，wanx2.1-t2v-*）与 i2v（图生视频，wanx2.1-i2v-*）两种模式。
 func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
-	imgURL := req.SourceImageURL
-	needOSSResolve := false
+	isT2V := strings.Contains(g.Model, "t2v")
 
-	// If the image is on a local/internal URL, upload to DashScope OSS first
-	if isLocalURL(imgURL) {
-		ossURL, err := g.uploadToOSS(ctx, imgURL)
-		if err != nil {
-			return "", fmt.Errorf("upload to OSS: %w", err)
+	var body wanSubmitReq
+	var needOSSResolve bool
+
+	if isT2V {
+		// Text-to-video: wanx2.1-t2v-turbo — 无需图片，仅传文本 prompt
+		body = wanSubmitReq{
+			Model:      firstNonEmpty(g.Model, "wanx2.1-t2v-turbo"),
+			Input:      wanSubmitInput{Text: req.Prompt},
+			Parameters: wanAspectRatioParams(req.AspectRatio),
 		}
-		imgURL = ossURL
-		needOSSResolve = true
+	} else {
+		// Image-to-video: wanx2.1-i2v-turbo — 需要源图片
+		imgURL := req.SourceImageURL
+		// If the image is on a local/internal URL, upload to DashScope OSS first
+		if isLocalURL(imgURL) {
+			ossURL, err := g.uploadToOSS(ctx, imgURL)
+			if err != nil {
+				return "", fmt.Errorf("upload to OSS: %w", err)
+			}
+			imgURL = ossURL
+			needOSSResolve = true
+		}
+		body = wanSubmitReq{
+			Model: firstNonEmpty(g.Model, "wanx2.1-i2v-turbo"),
+			Input: wanSubmitInput{
+				ImgURL:       imgURL,
+				Prompt:       req.Prompt,
+				Function:     "video-synthesis",
+				ExtendPrompt: true,
+				RefImgs:      req.CharacterImageURLs, // inject character reference images
+			},
+			Parameters: wanAspectRatioParams(req.AspectRatio),
+		}
 	}
 
-	body := wanSubmitReq{
-		Model: firstNonEmpty(g.Model, "wanx2.1-i2v-turbo"),
-		Input: wanSubmitInput{
-			ImgURL:       imgURL,
-			Prompt:       req.Prompt,
-			Function:     "video-synthesis",
-			ExtendPrompt: true,
-			RefImgs:      req.CharacterImageURLs, // inject character reference images
-		},
-		Parameters: wanAspectRatioParams(req.AspectRatio),
-	}
 	b, _ := json.Marshal(body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,

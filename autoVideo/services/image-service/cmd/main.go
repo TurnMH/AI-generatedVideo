@@ -79,7 +79,7 @@ func main() {
 	}
 	// Register additional DashScope/Tongyi image models from config (tongyi_models list)
 	for _, modelName := range cfg.Models.TongyiModels {
-		if modelName == "" || modelName == "wanx-v1" {
+		if modelName == "" || modelName == "wanx2.1-t2i-turbo" {
 			continue // already registered as "tongyi"
 		}
 		gens[modelName] = generators.NewTongyiGeneratorForModel(cfg.Models.TongyiKeys, cfg.Models.DashScopeBase, modelName, modelName, logger)

@@ -1517,6 +1517,8 @@ func resolveVideoGeneratorRoute(modelName string) (string, string) {
 		return "sora2", ""
 	case "wan", "wanx", "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
 		return "wan", "wanx2.1-i2v-turbo"
+	case "wan-t2v", "wan2.1-t2v", "wanx2.1-t2v", "wanx2.1-t2v-turbo":
+		return "wan", "wanx2.1-t2v-turbo"
 	case "wan2.6":
 		return "wan", "wan2.6"
 	case "veo", "veo3.1", "hubagi-veo3.1", "voe3.1", "hubagi-voe3.1", "xingwei-voe3.1":

@@ -27,7 +27,7 @@ type tongyiGenerator struct {
 
 // NewTongyiGenerator —— 创建通义万相图片生成器实例，返回 ImageGenerator 接口
 func NewTongyiGenerator(apiKeys []string, dashScopeBase string, logger *zap.Logger) ImageGenerator {
-	return NewTongyiGeneratorForModel(apiKeys, dashScopeBase, "wanx-v1", "tongyi", logger)
+	return NewTongyiGeneratorForModel(apiKeys, dashScopeBase, "wanx2.1-t2i-turbo", "tongyi", logger)
 }
 
 // NewTongyiGeneratorForModel —— 创建指定模型名称的通义万相图片生成器
