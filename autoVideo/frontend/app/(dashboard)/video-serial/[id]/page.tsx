@@ -232,6 +232,23 @@ export default function SerialProjectDetailPage() {
     return { ...overview, stats: { episodeReady, episodeFailed, assetTotal, assetCompleted, assetActive, assetFailed, storyboardTotal, storyboardCompleted, storyboardActive, storyboardFailed } }
   }, [project, episodes, stepperAssetsRaw, stepperStoryboardsRaw, episodeWorkspaceMeta, isExtractingStoryboards])
 
+  const projectProgress = project?.progress
+  const projectTargetEpisodes = project?.target_episodes ?? 0
+  const projectSplitInProgress = selectedEpisodeId === null && episodes.length === 0 && (
+    project?.status === 'script_processing' || projectProgress?.stage === 'episode_splitting'
+  )
+  const projectSplitTotal = projectProgress?.episode_split?.total ?? 0
+  const projectSplitCompleted = projectProgress?.episode_split?.completed ?? 0
+  const projectSplitTitle = projectProgress?.message?.trim()
+    || (projectSplitTotal > 0
+      ? `正在生成分集结构（${projectSplitCompleted}/${projectSplitTotal}）`
+      : projectTargetEpisodes > 0
+        ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
+        : '正在拆分剧本并生成分集结构')
+  const projectSplitDescription = projectSplitTotal > 0
+    ? `系统正在分析剧本、提取关键词并生成分集。当前已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿，完成后左侧分集列表会自动出现。`
+    : '系统正在分析剧本内容并自动生成分集。生成完成后，左侧会自动出现分集列表，下面的大纲区也会刷新出最新结果。'
+
   const selectedEpisode = selectedEpisodeId == null ? undefined : episodes.find((ep) => ep.id === selectedEpisodeId)
   const selectedEpisodeMeta = selectedEpisode ? episodeWorkspaceMeta.get(selectedEpisode.id) : undefined
   const selectedEpisodeAssetSummary = selectedEpisodeMeta ? `${selectedEpisodeMeta.assetCompleted}/${selectedEpisodeMeta.assetTotal || 0}` : '0/0'
@@ -342,6 +359,81 @@ export default function SerialProjectDetailPage() {
 
   return (
     <div className="space-y-4">
+      {selectedEpisodeId === null && (() => {
+        const assetActiveCount = stepperAssetsRaw.filter(
+          (asset: any) => asset?.name !== '__extracting__' && ['pending', 'generating', 'paused'].includes(asset?.status)
+        ).length
+        const isScriptProcessing = project.status === 'script_processing'
+          || project.progress?.stage === 'episode_splitting'
+          || project.progress?.stage === 'script_prepping'
+        const isAssetExtracting = assetActiveCount > 0 || isExtractingAssets
+        const isStoryboardRunning = isExtractingStoryboards
+          || stepperStoryboardsRaw.some((storyboard: any) => ['pending', 'generating', 'paused'].includes(storyboard?.status))
+
+        if (!isScriptProcessing && !isAssetExtracting && !isStoryboardRunning) return null
+
+        const banners: Array<{ icon: React.ReactNode; title: string; desc: string; step: string; color: string }> = []
+
+        if (isScriptProcessing) {
+          const postSplitRunning = !projectSplitInProgress && episodes.length > 0
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-blue-300" />,
+            title: postSplitRunning ? 'AI 正在润色剧本并自动衔接资源/分镜' : projectSplitTitle,
+            desc: postSplitRunning
+              ? (project.progress?.message?.trim() || '系统正在逐集润色、审查与套用格式化剧本，完成后会自动继续资源提取与分镜流程。')
+              : projectSplitDescription,
+            step: postSplitRunning ? '自动链路' : '步骤 1/3',
+            color: 'border-blue-400/30 bg-blue-500/10',
+          })
+        }
+        if (isAssetExtracting) {
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-amber-300" />,
+            title: `资源提取进行中（${assetActiveCount} 个处理队列）`,
+            desc: 'AI 大模型正在识别并提取剧本中的角色、场景、道具等资产，提取完毕后将自动衔接分镜拆分流程。',
+            step: '步骤 2/3',
+            color: 'border-amber-400/30 bg-amber-500/10',
+          })
+        }
+        if (isStoryboardRunning) {
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-violet-300" />,
+            title: '分镜拆分进行中',
+            desc: '系统正在为各分集自动拆分镜头序列，完成后可在各集工作台查看分镜并批量生成图片。',
+            step: '步骤 3/3',
+            color: 'border-violet-400/30 bg-violet-500/10',
+          })
+        }
+
+        return (
+          <div className="space-y-2">
+            {banners.map((banner) => (
+              <div
+                key={`${banner.step}-${banner.title}`}
+                className={`flex items-start gap-4 rounded-2xl border px-5 py-4 text-white backdrop-blur-sm ${banner.color} bg-gradient-to-r from-slate-900/80 to-slate-800/60`}
+              >
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10">
+                  {banner.icon}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-white">{banner.title}</span>
+                    <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/70">
+                      {banner.step}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] text-white/60">
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
+                      进行中
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-white/70">{banner.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* Header */}
       {selectedEpisodeId === null ? (
         <div className="overflow-hidden rounded-[28px] border border-surface-200/70 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 text-white shadow-sm">

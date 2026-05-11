@@ -52,6 +52,8 @@ export default function ProjectDetailPage() {
   // 是否处于自动管线模式（新建项目或手动触发自动分集时置 true）
   const [autoStoryboardPending, setAutoStoryboardPending] = useState(() => searchParams.get('autoStart') === '1')
   const autoOpenedRef = useRef(false)
+  // 首集资源就绪后自动触发分镜提取（每个项目只触发一次）
+  const autoFirstEpisodeDoneRef = useRef(false)
   const { toast } = useToast()
 
   const sharedEpisodeFilterValue = useMemo(
@@ -107,6 +109,48 @@ export default function ProjectDetailPage() {
     { refreshInterval: 5000 }
   )
   const stepperStoryboardsRaw = (storyboardsData as { data?: any[] })?.data ?? []
+
+  // 自动管线：第一集资源全部提取完毕且尚无分镜时，自动触发项目级分镜提取
+  useEffect(() => {
+    if (autoFirstEpisodeDoneRef.current) return
+    if (episodes.length === 0) return
+    const firstEp = episodes[0]
+    const assetsVisible = stepperAssetsRaw.filter(
+      (a: any) => a?.name !== '__extracting__' && a?.status !== 'extracting'
+    )
+    const firstEpAssets = assetsVisible.filter((a: any) =>
+      Array.isArray(a?.episode_ids) && a.episode_ids.map(Number).includes(firstEp.id)
+    )
+    if (firstEpAssets.length === 0) return
+    const allDone = firstEpAssets.every(
+      (a: any) => a?.status === 'completed' || a?.status === 'failed' || a?.status === 'qa_failed'
+    )
+    const hasActive = firstEpAssets.some(
+      (a: any) => a?.status === 'pending' || a?.status === 'generating' || a?.status === 'paused'
+    )
+    const hasStoryboards = stepperStoryboardsRaw.some(
+      (sb: any) => Number(sb?.episode_id) === firstEp.id
+    )
+    if (allDone && !hasActive && !hasStoryboards) {
+      autoFirstEpisodeDoneRef.current = true
+      // 自动触发分镜提取（静默，不弹 toast）
+      setIsExtractingStoryboards(true)
+      ;(projectAPI.extractStoryboards(projectId) as Promise<unknown>)
+        .then(() => {
+          void mutateStoryboardsData()
+          setTimeout(() => setIsExtractingStoryboards(false), 5000)
+          toast({
+            title: '✅ 第一集资源就绪，已自动开始分镜提取',
+            description: '系统检测到首集资源提取完毕，已自动触发全项目分镜拆分，请稍候查看各集分镜进度。',
+            variant: 'success',
+          })
+        })
+        .catch(() => {
+          setIsExtractingStoryboards(false)
+          autoFirstEpisodeDoneRef.current = false // 允许下次重试
+        })
+    }
+  }, [episodes, stepperAssetsRaw, stepperStoryboardsRaw, projectId, mutateStoryboardsData, toast])
 
   const episodeWorkspaceMeta = useMemo(() => {
     const meta = new Map<number, {
@@ -464,6 +508,77 @@ export default function ProjectDetailPage() {
 
   return (
     <div className="space-y-4">
+      {/* Pipeline 状态横幅 — 资源提取/分镜/剧本处理中时显示醒目提示 */}
+      {(() => {
+        const assetActiveCount = stepperAssetsRaw.filter(
+          (a: any) => a?.name !== '__extracting__' && ['pending', 'generating', 'paused'].includes(a?.status)
+        ).length
+        const isScriptProcessing = project.status === 'script_processing' || project.progress?.stage === 'episode_splitting'
+        const isAssetExtracting = assetActiveCount > 0 || isExtractingAssets
+        const isStoryboardRunning = isExtractingStoryboards || (() => {
+          return stepperStoryboardsRaw.some((sb: any) => ['pending', 'generating', 'paused'].includes(sb?.status))
+        })()
+
+        if (!isScriptProcessing && !isAssetExtracting && !isStoryboardRunning) return null
+
+        const banners: Array<{ icon: React.ReactNode; title: string; desc: string; step: string; color: string }> = []
+        if (isScriptProcessing) {
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-blue-300" />,
+            title: 'AI 正在分析剧本并自动拆分分集',
+            desc: '系统正在调用大语言模型解析剧本结构、提取分集大纲，完成后分集列表会自动出现。无需重复操作，请耐心等待。',
+            step: '步骤 1/3',
+            color: 'border-blue-400/30 bg-blue-500/10',
+          })
+        }
+        if (isAssetExtracting) {
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-amber-300" />,
+            title: `资源提取进行中（${assetActiveCount} 个处理队列）`,
+            desc: 'AI 大模型正在识别并提取剧本中的角色、场景、道具等资产，提取完毕后将自动衔接分镜拆分流程。',
+            step: '步骤 2/3',
+            color: 'border-amber-400/30 bg-amber-500/10',
+          })
+        }
+        if (isStoryboardRunning) {
+          banners.push({
+            icon: <Loader2 className="h-5 w-5 animate-spin text-violet-300" />,
+            title: '分镜拆分进行中',
+            desc: '系统正在为各分集自动拆分镜头序列，完成后可在各集工作台查看分镜并批量生成图片。',
+            step: '步骤 3/3',
+            color: 'border-violet-400/30 bg-violet-500/10',
+          })
+        }
+
+        return (
+          <div className="space-y-2">
+            {banners.map((b, idx) => (
+              <div
+                key={idx}
+                className={`flex items-start gap-4 rounded-2xl border px-5 py-4 text-white backdrop-blur-sm ${b.color} bg-gradient-to-r from-slate-900/80 to-slate-800/60`}
+              >
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10">
+                  {b.icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-white">{b.title}</span>
+                    <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/70">
+                      {b.step}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] text-white/60">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
+                      进行中
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-white/70">{b.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* Header */}
       {selectedEpisodeId === null ? (
         <div className="overflow-hidden rounded-[28px] border border-surface-200/70 bg-gradient-to-br from-slate-950 via-violet-950 to-slate-900 p-6 text-white shadow-sm">

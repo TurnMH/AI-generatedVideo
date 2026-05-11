@@ -1587,9 +1587,32 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	//   1. PolishEpisode    — AI润色：提升标题/摘要/内容可读性（依赖完整关键词库）
 	//   2. AutoOptimizeReview — 转剧本格式 → AI审查 → 自动修复不足
 	//   3. ApplyOptimizedText — 将剧本格式结果写入 script_excerpt，并串联资源提取 → 分镜提取
-	go func(eps []model.Episode, pid uint64) {
+	go func(eps []model.Episode, pid uint64, userID uint64) {
 		autoCtx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
 		defer cancel()
+		processedEpisodes := 0
+		timedOut := false
+		defer func() {
+			sceneStatus := "done"
+			message := "全部完成"
+			completed := len(eps)
+			if timedOut {
+				sceneStatus = "failed"
+				completed = processedEpisodes
+				message = fmt.Sprintf("自动处理提前结束（%d/%d 集），可手动继续资源与分镜", processedEpisodes, len(eps))
+			}
+			s.updateProgress(pid, ProgressInfo{
+				Stage: "idle",
+				EpisodeSplit: &StageProgress{
+					Total: len(eps), Completed: len(eps), Status: "done",
+				},
+				SceneSplit: &StageProgress{
+					Total: len(eps), Completed: completed, Status: sceneStatus,
+				},
+				Message: message,
+			})
+			_ = s.projectRepo.UpdateStatus(pid, userID, "script_ready")
+		}()
 
 		// Pre-fetch project-level data once for all episodes to avoid N×HTTP redundancy.
 		autoWritingHints := s.fetchWritingSkillHints(autoCtx, pid)
@@ -1607,6 +1630,15 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		for _, ep := range eps {
 			select {
 			case <-autoCtx.Done():
+				timedOut = true
+				if s.logger != nil {
+					s.logger.Warn("post-split auto pipeline stopped before completion",
+						zap.Uint64("project_id", pid),
+						zap.Int("completed_episodes", processedEpisodes),
+						zap.Int("total_episodes", len(eps)),
+						zap.Error(autoCtx.Err()),
+					)
+				}
 				return
 			default:
 			}
@@ -1635,8 +1667,9 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 					s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
 				}
 			}
+			processedEpisodes++
 		}
-	}(dbEpisodes, projectID)
+	}(dbEpisodes, projectID, project.UserID)
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Phase 3: Scene splitting per episode (storyboard generation)
@@ -1684,19 +1717,6 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		}
 	}
 	*/
-
-	// ── All done ─────────────────────────────────────────────────────────────
-	s.updateProgress(projectID, ProgressInfo{
-		Stage: "idle",
-		EpisodeSplit: &StageProgress{
-			Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
-		},
-		SceneSplit: &StageProgress{
-			Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
-		},
-		Message: "全部完成",
-	})
-	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "script_ready")
 
 	return dbEpisodes, nil
 }
