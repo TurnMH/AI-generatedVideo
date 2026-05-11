@@ -1,4 +1,4 @@
-# Runtime provider secrets must stay in local-only config, not in VCS.
+# Tracked base config only. Put provider secrets in config.docker.local.yaml.
 http:
   mode: debug
 

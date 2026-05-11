@@ -47,6 +47,9 @@ func loadConfig() (*Config, error) {
 		viper.AddConfigPath(".")
 	}
 	_ = viper.ReadInConfig() // ignore error — env vars are the fallback
+	if err := mergeOverrideConfig(); err != nil {
+		return nil, err
+	}
 
 	// Map shared config paths
 	if v := viper.GetString("storage.base_url"); v != "" {
@@ -62,6 +65,22 @@ func loadConfig() (*Config, error) {
 	cfg.StorageBucket = viper.GetString("storage_bucket")
 	cfg.JWTSecret = viper.GetString("jwt_secret")
 	return &cfg, nil
+}
+
+func mergeOverrideConfig() error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return viper.MergeConfig(file)
 }
 
 func main() {

@@ -133,6 +133,38 @@ func mergeKeys(single string, multiple []string, rawList string) []string {
 	return keys
 }
 
+func mergeOverrideConfig() error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return viper.MergeConfig(file)
+}
+
+func watchedConfigPaths(path string) []string {
+	paths := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	for _, candidate := range []string{strings.TrimSpace(path), strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))} {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		paths = append(paths, candidate)
+	}
+	return paths
+}
+
 func MaxProviderKeyCount(cfg *Config) int {
 	maxCount := len(cfg.Models.OpenAIKeys)
 	if len(cfg.Models.TongyiKeys) > maxCount {
@@ -241,6 +273,7 @@ func Load() *Config {
 		viper.AddConfigPath("/app")
 	}
 	_ = viper.ReadInConfig()
+	_ = mergeOverrideConfig()
 
 	// Merge service-specific section on top of shared values
 	if sub := viper.Sub("image-service"); sub != nil {
@@ -373,19 +406,28 @@ func StartWatcher(path string, onChange func(*Config)) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		var lastMod time.Time
-		if info, err := os.Stat(path); err == nil {
-			lastMod = info.ModTime()
+		lastMod := map[string]time.Time{}
+		for _, candidate := range watchedConfigPaths(path) {
+			if info, err := os.Stat(candidate); err == nil {
+				lastMod[candidate] = info.ModTime()
+			}
 		}
 		for range ticker.C {
-			info, err := os.Stat(path)
-			if err != nil {
+			changed := false
+			for _, candidate := range watchedConfigPaths(path) {
+				info, err := os.Stat(candidate)
+				if err != nil {
+					continue
+				}
+				if info.ModTime().After(lastMod[candidate]) {
+					lastMod[candidate] = info.ModTime()
+					changed = true
+				}
+			}
+			if !changed {
 				continue
 			}
-			if info.ModTime().After(lastMod) {
-				lastMod = info.ModTime()
-				onChange(Load())
-			}
+			onChange(Load())
 		}
 	}()
 }

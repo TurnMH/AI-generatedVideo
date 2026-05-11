@@ -17,7 +17,8 @@ x-go-service: &go-service
   networks:
     - autoVideo-net
   environment:
-    - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+    - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+    - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
     - POSTGRES_HOST=postgres
     - POSTGRES_PORT=5432
     - POSTGRES_USER=${POSTGRES_USER:-postgres}
@@ -189,7 +190,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -197,7 +198,8 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - REDIS_ADDR=redis:6379
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,9 +218,10 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - PROJECT_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -240,9 +243,10 @@ services:
     ports:
       - "8003:8003"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -265,9 +269,10 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - CHARACTER_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -285,9 +290,10 @@ services:
     ports:
       - "8005:8005"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -311,9 +317,10 @@ services:
     ports:
       - "8006:8006"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - VIDEO_SERVICE_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -338,9 +345,10 @@ services:
     ports:
       - "8007:8007"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - REDIS_ADDR=redis:6379
@@ -360,9 +368,10 @@ services:
     ports:
       - "8008:8008"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -377,9 +386,10 @@ services:
     ports:
       - "8009:8009"
     volumes:
-      - ../config.docker.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}

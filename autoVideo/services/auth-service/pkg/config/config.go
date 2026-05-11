@@ -10,6 +10,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -62,6 +63,22 @@ type GatewayConfig struct {
 	SelfAddr string `mapstructure:"self_addr"`
 }
 
+func mergeOverrideConfig() error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return viper.MergeConfig(file)
+}
+
 // func Load() *Config —— 函数签名解读：
 //   - func     : 关键字，声明一个函数
 //   - Load     : 函数名，大写开头 → 公开，包外可以调用
@@ -103,6 +120,9 @@ func Load() *Config {
 	if err := viper.ReadInConfig(); err != nil {
 		// log.Printf —— 打印日志但不终止程序（对比下面的 log.Fatalf 会终止）
 		log.Printf("config file not found, using defaults/env: %v", err)
+	}
+	if err := mergeOverrideConfig(); err != nil {
+		log.Printf("failed to merge override config: %v", err)
 	}
 
 	// Merge service-specific section on top of shared values

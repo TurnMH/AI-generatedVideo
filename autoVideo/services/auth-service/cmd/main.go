@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -225,22 +226,47 @@ func main() {
 	zapLogger.Info("Server exited")
 }
 
+func watchedConfigPaths(path string) []string {
+	paths := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	for _, candidate := range []string{strings.TrimSpace(path), strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))} {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		paths = append(paths, candidate)
+	}
+	return paths
+}
+
 func watchRuntimeKeySync(apiKeySvc service.APIKeyService, configFile string, logger *zap.Logger) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	var lastMod time.Time
-	if info, err := os.Stat(configFile); err == nil {
-		lastMod = info.ModTime()
+	lastMod := map[string]time.Time{}
+	for _, candidate := range watchedConfigPaths(configFile) {
+		if info, err := os.Stat(candidate); err == nil {
+			lastMod[candidate] = info.ModTime()
+		}
 	}
 	for range ticker.C {
-		info, err := os.Stat(configFile)
-		if err != nil {
+		changed := false
+		for _, candidate := range watchedConfigPaths(configFile) {
+			info, err := os.Stat(candidate)
+			if err != nil {
+				continue
+			}
+			if !info.ModTime().After(lastMod[candidate]) {
+				continue
+			}
+			lastMod[candidate] = info.ModTime()
+			changed = true
+		}
+		if !changed {
 			continue
 		}
-		if !info.ModTime().After(lastMod) {
-			continue
-		}
-		lastMod = info.ModTime()
 		if err := apiKeySvc.SyncRuntimeAPIKeys(configFile); err != nil {
 			logger.Warn("sync runtime api keys on config change failed", zap.String("config_file", configFile), zap.Error(err))
 			continue
