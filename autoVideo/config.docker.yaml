@@ -1,3 +1,4 @@
+# Runtime provider secrets must stay in local-only config, not in VCS.
 http:
   mode: debug
 
