@@ -24,7 +24,7 @@ x-go-service: &go-service
     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
     - REDIS_ADDR=redis:6379
     - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    - KAFKA_BROKERS=kafka:9092
+    - KAFKA_BROKERS=kafka:29092
     - MINIO_ENDPOINT=minio:9000
     - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
     - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -89,25 +89,26 @@ services:
       retries: 5
 
   zookeeper:
-    image: bitnami/zookeeper:3.8
+    image: confluentinc/cp-zookeeper:7.5.0
     container_name: autovideo-zookeeper
     <<: *restart
     ports:
       - "2181:2181"
     environment:
-      ALLOW_ANONYMOUS_LOGIN: "yes"
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
     volumes:
-      - zookeeper_data:/bitnami/zookeeper
+      - zookeeper_data:/var/lib/zookeeper/data
     networks:
       - autoVideo-net
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep Mode"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   kafka:
-    image: bitnami/kafka:3.6
+    image: confluentinc/cp-kafka:7.5.0
     container_name: autovideo-kafka
     <<: *restart
     ports:
@@ -116,17 +117,20 @@ services:
       zookeeper:
         condition: service_healthy
     environment:
-      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
-      - kafka_data:/bitnami/kafka
+      - kafka_data:/var/lib/kafka/data
     networks:
       - autoVideo-net
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -185,7 +189,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -200,7 +204,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -212,8 +216,9 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - PROJECT_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -235,7 +240,7 @@ services:
     ports:
       - "8003:8003"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
       - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -246,7 +251,7 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=kafka:29092
     depends_on:
       postgres:
         condition: service_healthy
@@ -260,7 +265,7 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
       - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -280,7 +285,7 @@ services:
     ports:
       - "8005:8005"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
       - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -292,7 +297,7 @@ services:
       - COMFYUI_URL=${COMFYUI_URL:-}
       - STORAGE_BASE_URL=http://storage:8009
       - CHARACTER_BASE_URL=http://character:8004
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=kafka:29092
     depends_on:
       postgres:
         condition: service_healthy
@@ -306,7 +311,7 @@ services:
     ports:
       - "8006:8006"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
       - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -318,7 +323,7 @@ services:
       - WAN_BASE_URL=${WAN_BASE_URL:-https://visual.volcengineapi.com}
       - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
       - STORAGE_BASE_URL=http://storage:8009
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=kafka:29092
       - FFMPEG_TEMP_DIR=/tmp/autovideo
     depends_on:
       postgres:
@@ -333,12 +338,13 @@ services:
     ports:
       - "8007:8007"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - REDIS_ADDR=redis:6379
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=kafka:29092
     depends_on:
       postgres:
         condition: service_healthy
@@ -354,8 +360,9 @@ services:
     ports:
       - "8008:8008"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -370,8 +377,9 @@ services:
     ports:
       - "8009:8009"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ../config.docker.yaml:/app/config.local.yaml:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}

@@ -30,7 +30,7 @@ import { authAPI } from '@/lib/api'
 const navItems = [
   {
     label: '视频',
-    href: '/video',
+    href: '/projects',
     icon: FolderOpen,
   },
   {

@@ -67,7 +67,7 @@ export interface StageProgress {
 }
 
 export interface ProjectProgress {
-  stage?: 'episode_splitting' | 'scene_splitting' | 'idle'
+  stage?: 'episode_splitting' | 'scene_splitting' | 'script_prepping' | 'idle'
   episode_split?: StageProgress
   scene_split?: StageProgress
   message?: string

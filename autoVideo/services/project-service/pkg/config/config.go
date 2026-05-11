@@ -92,6 +92,36 @@ func parseDelimitedKeys(raw string) []string {
 	return keys
 }
 
+
+func normalizedStringSlice(raw any) []string {
+	switch value := raw.(type) {
+	case []string:
+		normalized := make([]string, 0, len(value))
+		for _, item := range value {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		return normalized
+	case []any:
+		normalized := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				trimmed := strings.TrimSpace(text)
+				if trimmed != "" {
+					normalized = append(normalized, trimmed)
+				}
+			}
+		}
+		return normalized
+	case string:
+		return parseDelimitedKeys(value)
+	default:
+		return nil
+	}
+}
+
 func providerKeyCount(singlePath, listPath string) int {
 	keys := append([]string{}, parseDelimitedKeys(viper.GetString(singlePath))...)
 	keys = append(keys, viper.GetStringSlice(listPath)...)
@@ -208,6 +238,8 @@ func Load(logger *zap.Logger) (*Config, error) {
 	viper.SetEnvPrefix("PROJECT")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	sharedKafkaBrokers := []string(nil)
+	serviceKafkaBrokers := []string(nil)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -217,15 +249,22 @@ func Load(logger *zap.Logger) (*Config, error) {
 			logger.Warn("config file not found, using defaults and environment variables")
 		}
 	}
+	sharedKafkaBrokers = normalizedStringSlice(viper.Get("kafka.brokers"))
 
 	// Merge service-specific section on top of shared values
 	if sub := viper.Sub("project-service"); sub != nil {
+		serviceKafkaBrokers = normalizedStringSlice(sub.Get("kafka.brokers"))
 		viper.MergeConfigMap(sub.AllSettings())
 	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	if len(serviceKafkaBrokers) > 0 {
+		cfg.Kafka.Brokers = serviceKafkaBrokers
+	} else if len(sharedKafkaBrokers) > 0 {
+		cfg.Kafka.Brokers = sharedKafkaBrokers
 	}
 	imageWorkers := viper.GetInt("image-service.concurrency.max_workers")
 	maxProviderKeys := 1
