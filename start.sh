@@ -40,22 +40,34 @@ if [ "$(uname -s)" = "Darwin" ]; then
   open -a Docker >/dev/null 2>&1 || true
 fi
 
+ZOOKEEPER_IMAGE="${AUTOVIDEO_ZOOKEEPER_IMAGE:-docker.m.daocloud.io/confluentinc/cp-zookeeper:7.5.0}"
+KAFKA_IMAGE="${AUTOVIDEO_KAFKA_IMAGE:-docker.m.daocloud.io/confluentinc/cp-kafka:7.5.0}"
+
+if [ "$DOCKER_ACCESS_MODE" = "missing" ]; then
+  echo "[start] 未检测到 Docker，请先安装 Docker 后重试"
+  exit 1
+fi
+
+if [ "$DOCKER_ACCESS_MODE" = "sudo" ]; then
+  echo "[start] 当前用户无 Docker 直连权限，已自动切换为 sudo docker"
+fi
+
 echo "[start] 等待 Docker daemon 就绪..."
 for _ in $(seq 1 60); do
-  if docker info >/dev/null 2>&1; then
+  if docker_cmd info >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-if ! docker info >/dev/null 2>&1; then
-  echo "[start] Docker daemon 未就绪，请先手动启动 Docker Desktop 后重试"
+if ! docker_cmd info >/dev/null 2>&1; then
+  echo "[start] Docker 不可用：请确认 Docker daemon 已启动，且当前用户具备 docker 或 sudo docker 权限"
   exit 1
 fi
 
-cat > "$COMPOSE_OVERRIDE" <<'EOF'
+cat > "$COMPOSE_OVERRIDE" <<EOF
 services:
   zookeeper:
-    image: docker.m.daocloud.io/confluentinc/cp-zookeeper:7.5.0
+    image: ${ZOOKEEPER_IMAGE}
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -66,7 +78,7 @@ services:
       retries: 10
 
   kafka:
-    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.5.0
+    image: ${KAFKA_IMAGE}
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -87,23 +99,23 @@ services:
 EOF
 
 echo "[start] 启动基础设施..."
-docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_OVERRIDE" up -d >/dev/null
+docker_cmd compose -f "$COMPOSE_BASE" -f "$COMPOSE_OVERRIDE" up -d >/dev/null
 
 echo "[start] 等待 PostgreSQL/Redis/Kafka 就绪..."
 for _ in $(seq 1 40); do
-  if docker exec autovideo-postgres pg_isready -U postgres -q >/dev/null 2>&1; then
+  if docker_cmd exec autovideo-postgres pg_isready -U postgres -q >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 for _ in $(seq 1 40); do
-  if docker exec autovideo-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+  if docker_cmd exec autovideo-redis redis-cli ping 2>/dev/null | grep -q PONG; then
     break
   fi
   sleep 2
 done
 for _ in $(seq 1 60); do
-  if docker exec autovideo-kafka kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+  if docker_cmd exec autovideo-kafka kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
     break
   fi
   sleep 3

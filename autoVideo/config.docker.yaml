@@ -1,0 +1,178 @@
+# Tracked base config only. Put provider secrets in config.docker.local.yaml.
+http:
+  mode: debug
+
+db:
+  max_open_conns: 20
+  max_idle_conns: 5
+  conn_max_lifetime: 3600
+
+redis:
+  addr: "redis:6379"
+  password: ""
+
+kafka:
+  brokers:
+    - "kafka:29092"
+
+jwt:
+  access_secret: "autovideo-access-secret-change-in-prod"
+  secret: "autovideo-access-secret-change-in-prod"
+
+storage:
+  base_url: "http://storage:8009"
+
+gateway:
+  addr: "http://gateway:8000"
+  self_addr: ""
+
+auth_service:
+  base_url: "http://auth:8001"
+
+log:
+  level: "info"
+  format: "json"
+
+auth-service:
+  server:
+    port: "8001"
+  gateway:
+    self_addr: "http://auth:8001"
+  database:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=auth_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 0
+  jwt:
+    refresh_secret: "01db4c8767254a30c2b15e0baa40d4d24da10f114f54c85a818ec69a650f6657"
+    access_ttl: 120
+    refresh_ttl: 7
+  crypto:
+    encryption_key: "4fd1963c09ef49525fe25e40759f5aaa61fc6b259360f2ece8d201fcad7b87a7"
+
+project-service:
+  server:
+    port: "8002"
+  gateway:
+    self_addr: "http://project:8002"
+  database:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=project_db sslmode=disable TimeZone=Asia/Shanghai"
+  auth_service:
+    grpc_addr: "auth:9001"
+    base_url: "http://auth:8001"
+  kafka:
+    brokers:
+      - "kafka:29092"
+    consumer_group: "project-service-v2"
+    consumer_topic: "storyboard.generate.request"
+    producer_topic: "storyboard.generate.result"
+  image:
+    base_url: "http://image:8005"
+
+script-service:
+  http:
+    port: 8003
+  gateway:
+    self_addr: "http://script:8003"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=script_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 1
+  kafka:
+    consumer_group: "script-service"
+    consumer_topic: "script.analyze.request"
+    producer_topic: "script.analyze.result"
+  image_service:
+    base_url: "http://image:8005"
+  character_service:
+    url: "http://character:8004"
+
+character-service:
+  http:
+    port: 8004
+  gateway:
+    self_addr: "http://character:8004"
+  grpc_port: 9004
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=character_db sslmode=disable TimeZone=Asia/Shanghai"
+  image:
+    base_url: "http://image:8005"
+  project_service:
+    base_url: "http://project:8002"
+
+image-service:
+  http:
+    port: 8005
+  gateway:
+    self_addr: "http://image:8005"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=image_db sslmode=disable TimeZone=Asia/Shanghai"
+  character:
+    base_url: "http://character:8004"
+  storage:
+    base_url: "http://storage:8009"
+
+video-service:
+  http:
+    port: 8006
+  gateway:
+    self_addr: "http://video:8006"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=video_db sslmode=disable TimeZone=Asia/Shanghai"
+  character:
+    base_url: "http://character:8004"
+  storage:
+    base_url: "http://storage:8009"
+  frame_extractor:
+    base_url: "http://frame-extractor:8010"
+
+task-service:
+  http:
+    port: 8007
+  gateway:
+    self_addr: "http://task:8007"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=task_db sslmode=disable TimeZone=Asia/Shanghai"
+
+model-service:
+  http:
+    port: 8008
+  gateway:
+    self_addr: "http://model:8008"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=model_db sslmode=disable TimeZone=Asia/Shanghai"
+  redis:
+    db: 3
+
+storage-service:
+  http:
+    port: 8009
+  gateway:
+    self_addr: "http://storage:8009"
+  db:
+    dsn: "host=postgres port=5432 user=postgres password=postgres dbname=storage_db sslmode=disable TimeZone=Asia/Shanghai"
+  storage:
+    driver: minio
+    minio:
+      endpoint: "minio:9000"
+      access_key: "minioadmin"
+      secret_key: "minioadmin123"
+      use_ssl: false
+      path_style: true
+    cdn_base_url: "http://minio:9000"
+    cdn_include_bucket: true
+    buckets:
+      images: "images"
+      videos: "videos"
+      scripts: "scripts"
+      characters: "characters"
+      uploads: "uploads"
+      exports: "exports"
+      dubbing: "dubbing"
+      audios: "audios"
+
+frame-extractor-service:
+  http:
+    port: 8010
+  storage:
+    base_url: "http://storage:8009"
+    bucket: "images"

@@ -92,6 +92,69 @@ func parseDelimitedKeys(raw string) []string {
 	return keys
 }
 
+func normalizedStringSlice(raw any) []string {
+	switch value := raw.(type) {
+	case []string:
+		normalized := make([]string, 0, len(value))
+		for _, item := range value {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		return normalized
+	case []any:
+		normalized := make([]string, 0, len(value))
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			trimmed := strings.TrimSpace(text)
+			if trimmed != "" {
+				normalized = append(normalized, trimmed)
+			}
+		}
+		return normalized
+	case string:
+		return parseDelimitedKeys(value)
+	default:
+		return nil
+	}
+}
+
+func mergeOverrideConfig(v *viper.Viper) error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return v.MergeConfig(file)
+}
+
+func watchedConfigPaths(path string) []string {
+	paths := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	for _, candidate := range []string{strings.TrimSpace(path), strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))} {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		paths = append(paths, candidate)
+	}
+	return paths
+}
+
 func providerKeyCount(singlePath, listPath string) int {
 	keys := append([]string{}, parseDelimitedKeys(viper.GetString(singlePath))...)
 	keys = append(keys, viper.GetStringSlice(listPath)...)
@@ -208,6 +271,8 @@ func Load(logger *zap.Logger) (*Config, error) {
 	viper.SetEnvPrefix("PROJECT")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	sharedKafkaBrokers := []string(nil)
+	serviceKafkaBrokers := []string(nil)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -217,15 +282,25 @@ func Load(logger *zap.Logger) (*Config, error) {
 			logger.Warn("config file not found, using defaults and environment variables")
 		}
 	}
+	if err := mergeOverrideConfig(viper.GetViper()); err != nil {
+		return nil, err
+	}
+	sharedKafkaBrokers = normalizedStringSlice(viper.Get("kafka.brokers"))
 
 	// Merge service-specific section on top of shared values
 	if sub := viper.Sub("project-service"); sub != nil {
+		serviceKafkaBrokers = normalizedStringSlice(sub.Get("kafka.brokers"))
 		viper.MergeConfigMap(sub.AllSettings())
 	}
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	if len(serviceKafkaBrokers) > 0 {
+		cfg.Kafka.Brokers = serviceKafkaBrokers
+	} else if len(sharedKafkaBrokers) > 0 {
+		cfg.Kafka.Brokers = sharedKafkaBrokers
 	}
 	imageWorkers := viper.GetInt("image-service.concurrency.max_workers")
 	maxProviderKeys := 1
@@ -254,26 +329,35 @@ func StartWatcher(path string, logger *zap.Logger, onChange func(*Config)) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		var lastMod time.Time
-		if info, err := os.Stat(path); err == nil {
-			lastMod = info.ModTime()
+		lastMod := map[string]time.Time{}
+		for _, candidate := range watchedConfigPaths(path) {
+			if info, err := os.Stat(candidate); err == nil {
+				lastMod[candidate] = info.ModTime()
+			}
 		}
 		for range ticker.C {
-			info, err := os.Stat(path)
-			if err != nil {
-				continue
-			}
-			if info.ModTime().After(lastMod) {
-				lastMod = info.ModTime()
-				cfg, err := Load(logger)
+			changed := false
+			for _, candidate := range watchedConfigPaths(path) {
+				info, err := os.Stat(candidate)
 				if err != nil {
-					if logger != nil {
-						logger.Warn("config hot-reload failed", zap.Error(err))
-					}
 					continue
 				}
-				onChange(cfg)
+				if info.ModTime().After(lastMod[candidate]) {
+					lastMod[candidate] = info.ModTime()
+					changed = true
+				}
 			}
+			if !changed {
+				continue
+			}
+			cfg, err := Load(logger)
+			if err != nil {
+				if logger != nil {
+					logger.Warn("config hot-reload failed", zap.Error(err))
+				}
+				continue
+			}
+			onChange(cfg)
 		}
 	}()
 }

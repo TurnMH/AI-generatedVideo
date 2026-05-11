@@ -10,6 +10,22 @@ import (
 	"github.com/spf13/viper"
 )
 
+func mergeOverrideConfig(v *viper.Viper) error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return v.MergeConfig(file)
+}
+
 func buildRuntimeSystemKeys(configFile string) ([]model.SystemAPIKey, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -21,6 +37,9 @@ func buildRuntimeSystemKeys(configFile string) ([]model.SystemAPIKey, error) {
 		v.AddConfigPath(".")
 	}
 	if err := v.ReadInConfig(); err != nil {
+		return nil, err
+	}
+	if err := mergeOverrideConfig(v); err != nil {
 		return nil, err
 	}
 

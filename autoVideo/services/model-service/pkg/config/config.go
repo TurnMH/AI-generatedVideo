@@ -44,6 +44,22 @@ type LogConfig struct {
 	Level string
 }
 
+func mergeOverrideConfig(v *viper.Viper) error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return v.MergeConfig(file)
+}
+
 // Load —— 从环境变量和配置文件读取运行时配置，返回 Config 结构体
 // Load reads configuration from environment variables and an optional config file.
 func Load() (*Config, error) {
@@ -78,6 +94,9 @@ func Load() (*Config, error) {
 	}
 
 	_ = v.ReadInConfig()
+	if err := mergeOverrideConfig(v); err != nil {
+		return nil, err
+	}
 
 	// Merge service-specific section on top of shared values
 	if sub := v.Sub("model-service"); sub != nil {

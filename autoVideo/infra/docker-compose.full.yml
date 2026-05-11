@@ -17,14 +17,15 @@ x-go-service: &go-service
   networks:
     - autoVideo-net
   environment:
-    - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+    - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+    - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
     - POSTGRES_HOST=postgres
     - POSTGRES_PORT=5432
     - POSTGRES_USER=${POSTGRES_USER:-postgres}
     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
     - REDIS_ADDR=redis:6379
     - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    - KAFKA_BROKERS=kafka:9092
+    - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
     - MINIO_ENDPOINT=minio:9000
     - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
     - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -185,7 +186,7 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
@@ -193,14 +194,15 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - REDIS_ADDR=redis:6379
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -212,8 +214,10 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - PROJECT_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -235,9 +239,10 @@ services:
     ports:
       - "8003:8003"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -246,7 +251,7 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -260,9 +265,10 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - CHARACTER_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -280,9 +286,10 @@ services:
     ports:
       - "8005:8005"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -292,7 +299,7 @@ services:
       - COMFYUI_URL=${COMFYUI_URL:-}
       - STORAGE_BASE_URL=http://storage:8009
       - CHARACTER_BASE_URL=http://character:8004
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -306,9 +313,10 @@ services:
     ports:
       - "8006:8006"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
-      - AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - VIDEO_SERVICE_AUTH_SERVICE_BASE_URL=http://auth:8001
@@ -318,7 +326,7 @@ services:
       - WAN_BASE_URL=${WAN_BASE_URL:-https://visual.volcengineapi.com}
       - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
       - STORAGE_BASE_URL=http://storage:8009
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
       - FFMPEG_TEMP_DIR=/tmp/autovideo
     depends_on:
       postgres:
@@ -333,12 +341,14 @@ services:
     ports:
       - "8007:8007"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - REDIS_ADDR=redis:6379
-      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -354,8 +364,10 @@ services:
     ports:
       - "8008:8008"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -370,8 +382,10 @@ services:
     ports:
       - "8009:8009"
     volumes:
-      - ../config.local.yaml:/app/config.local.yaml:ro
+      - ..:/app/autovideo-config:ro
     environment:
+      - AUTOVIDEO_CONFIG_FILE=/app/autovideo-config/config.docker.yaml
+      - AUTOVIDEO_CONFIG_OVERRIDE_FILE=/app/autovideo-config/config.docker.local.yaml
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}

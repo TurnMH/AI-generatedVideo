@@ -64,7 +64,7 @@ rsync -av video/ user@server:/opt/video/
 
 仅在你准备走完整镜像和 `docker compose.full.yml` 时使用。
 
-1. 复制 `autoVideo/config.yaml` 为 `autoVideo/config.local.yaml`，填入真实数据库、JWT 和运行期 key。
+1. 默认直接使用仓库内的 `autoVideo/config.docker.yaml` 作为容器网络配置模板；如需自定义，复制它为你自己的配置文件，并通过 `AUTOVIDEO_SHARED_CONFIG` 指向该文件。
 2. 复制 `autoVideo/services/gateway-service/config.yaml` 为 `autoVideo/services/gateway-service/config.local.yaml`。
 3. 复制 `autoVideo/infra/.env.example` 为 `autoVideo/infra/.env`，填入容器环境变量。
 4. 构建镜像：`cd autoVideo && bash scripts/build.sh --env=prod --tag=latest`
@@ -74,9 +74,9 @@ rsync -av video/ user@server:/opt/video/
 
 补充说明：
 
-1. `docker-compose.full.yml` 现在会把 `autoVideo/config.local.yaml` 挂载到 `auth-service` 容器内。
+1. `docker-compose.full.yml` 现在默认会把 `autoVideo/config.docker.yaml` 挂载到各 Go 服务容器内；若你设置了 `AUTOVIDEO_SHARED_CONFIG`，则以该路径为准。
 2. 容器首启时，`auth-service` 会先用这个文件把运行期 key 同步到数据库。
-3. 如果你后续修改了 `config.local.yaml` 并希望业务立即使用新 key，建议重启 `auth`、`project`、`script`、`character`、`image`、`video` 这几个服务。
+3. 如果你后续修改了共享配置并希望业务立即使用新 key，建议重启 `auth`、`project`、`script`、`character`、`image`、`video` 这几个服务。
 
 ## 本地启动与访问
 

@@ -115,6 +115,9 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	}
+	if err := mergeOverrideConfig(); err != nil {
+		return nil, err
+	}
 
 	// Merge service-specific section on top of shared values
 	if sub := viper.Sub("script-service"); sub != nil {
@@ -128,26 +131,67 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+func mergeOverrideConfig() error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return viper.MergeConfig(file)
+}
+
+func watchedConfigPaths(path string) []string {
+	paths := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	for _, candidate := range []string{strings.TrimSpace(path), strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))} {
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		paths = append(paths, candidate)
+	}
+	return paths
+}
+
 // StartWatcher polls the config file at path every 30 seconds and calls onChange
 // when the file's modification time changes. It runs in a background goroutine.
 func StartWatcher(path string, onChange func(*Config)) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		var lastMod time.Time
-		if info, err := os.Stat(path); err == nil {
-			lastMod = info.ModTime()
+		lastMod := map[string]time.Time{}
+		for _, candidate := range watchedConfigPaths(path) {
+			if info, err := os.Stat(candidate); err == nil {
+				lastMod[candidate] = info.ModTime()
+			}
 		}
 		for range ticker.C {
-			info, err := os.Stat(path)
-			if err != nil {
+			changed := false
+			for _, candidate := range watchedConfigPaths(path) {
+				info, err := os.Stat(candidate)
+				if err != nil {
+					continue
+				}
+				if info.ModTime().After(lastMod[candidate]) {
+					lastMod[candidate] = info.ModTime()
+					changed = true
+				}
+			}
+			if !changed {
 				continue
 			}
-			if info.ModTime().After(lastMod) {
-				lastMod = info.ModTime()
-				if cfg, err := Load(); err == nil {
-					onChange(cfg)
-				}
+			if cfg, err := Load(); err == nil {
+				onChange(cfg)
 			}
 		}
 	}()

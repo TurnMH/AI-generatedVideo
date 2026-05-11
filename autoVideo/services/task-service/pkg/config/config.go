@@ -75,6 +75,9 @@ func Load() (*Config, error) {
 	v.AutomaticEnv()
 
 	_ = v.ReadInConfig()
+	if err := mergeOverrideConfig(v); err != nil {
+		return nil, err
+	}
 
 	// Merge service-specific section on top of shared values
 	if sub := v.Sub("task-service"); sub != nil {
@@ -103,4 +106,20 @@ func Load() (*Config, error) {
 		},
 	}
 	return cfg, nil
+}
+
+func mergeOverrideConfig(v *viper.Viper) error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return v.MergeConfig(file)
 }

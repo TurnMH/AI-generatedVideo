@@ -32,13 +32,11 @@ done
 
 echo "[stop] 应用进程已清理"
 
-if command -v docker >/dev/null 2>&1; then
-  if docker info >/dev/null 2>&1; then
-    if [ -f "$COMPOSE_OVERRIDE" ]; then
-      docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_OVERRIDE" down >/dev/null 2>&1 || true
-    else
-      docker compose -f "$COMPOSE_BASE" down >/dev/null 2>&1 || true
-    fi
-    echo "[stop] 基础设施已停止"
+if [ "$DOCKER_ACCESS_MODE" != "missing" ] && docker_cmd info >/dev/null 2>&1; then
+  if [ -f "$COMPOSE_OVERRIDE" ]; then
+    docker_cmd compose -f "$COMPOSE_BASE" -f "$COMPOSE_OVERRIDE" down >/dev/null 2>&1 || true
+  else
+    docker_cmd compose -f "$COMPOSE_BASE" down >/dev/null 2>&1 || true
   fi
+  echo "[stop] 基础设施已停止"
 fi

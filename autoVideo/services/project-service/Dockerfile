@@ -19,7 +19,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 FROM alpine:3.20 AS healthcheck-tools
 
-RUN apk add --no-cache busybox-static
+RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
+    && apk add --no-cache busybox-static
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM scratch

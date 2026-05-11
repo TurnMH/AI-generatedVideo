@@ -94,6 +94,9 @@ func Load(cfgFile string) (*Config, error) {
 			return nil, err
 		}
 	}
+	if err := mergeOverrideConfig(); err != nil {
+		return nil, err
+	}
 
 	// Merge service-specific section on top of shared values
 	if sub := viper.Sub("storage-service"); sub != nil {
@@ -105,6 +108,22 @@ func Load(cfgFile string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func mergeOverrideConfig() error {
+	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
+	if overrideFile == "" {
+		return nil
+	}
+	file, err := os.Open(overrideFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	return viper.MergeConfig(file)
 }
 
 // setDefaults —— 为所有配置项设置默认值
