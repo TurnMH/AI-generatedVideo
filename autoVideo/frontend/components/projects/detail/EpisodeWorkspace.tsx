@@ -125,8 +125,10 @@ export function EpisodeWorkspace({ projectId, episodeId, episode, project, initi
     if (awaitingAutoStoryboard && storyboardStats.total === 0 && episode?.status !== 'scene_splitting') {
       return {
         tone: 'blue',
-        title: '资源提取完成，正在自动开启镜头拆分',
-        description: isSerial ? '系统会继续拆分镜头并生成串行场景分组，无需再手动点一次。' : '系统会继续拆分镜头条目，无需再手动点一次。',
+        title: '资源条目已就绪，正在自动开启镜头拆分',
+        description: isSerial
+          ? '系统会继续拆分镜头并生成串行场景分组，资源图仍会在后台继续生成，无需再手动点一次。'
+          : '系统会继续拆分镜头条目，资源图仍会在后台继续生成，无需再手动点一次。',
       }
     }
     if (isExtractingStoryboards || episode?.status === 'scene_splitting') {
@@ -263,7 +265,7 @@ export function EpisodeWorkspace({ projectId, episodeId, episode, project, initi
                     ? '待开始'
                   : '待资源',
         hint: awaitingAutoStoryboard
-          ? '资源完成后自动开启'
+          ? '资源条目识别后自动开启'
           : isExtractingStoryboards || episode?.status === 'scene_splitting'
             ? '正在拆分镜头条目'
             : storyboardStats.generating > 0 || storyboardStats.paused > 0
@@ -325,27 +327,11 @@ export function EpisodeWorkspace({ projectId, episodeId, episode, project, initi
       autoSwitchedRef.current = true
       toast({
         title: '已自动开启本集镜头拆分',
-        description: `资源提取完成，已切换到${storyboardWorkspaceLabel}。`,
+        description: `后端已接管自动衔接，当前已切换到${storyboardWorkspaceLabel}，资源图会继续在后台生成。`,
         variant: 'success',
       })
     }
   }, [awaitingAutoStoryboard, episode?.status, storyboardStats.total, storyboardStats.active, toast, storyboardWorkspaceLabel])
-
-  // 资源全部完成且处于等待自动拆分状态时，自动触发镜头拆分
-  const autoExtractTriggeredRef = useRef(false)
-  useEffect(() => {
-    if (!awaitingAutoStoryboard) {
-      autoExtractTriggeredRef.current = false
-      return
-    }
-    if (autoExtractTriggeredRef.current) return
-    if (assetStats.extracting || assetStats.active > 0 || assetStats.total === 0) return
-    if (storyboardStats.total > 0 || episode?.status === 'scene_splitting') return
-    // 资源已全部完成，自动启动镜头拆分
-    autoExtractTriggeredRef.current = true
-    handleExtractStoryboards()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [awaitingAutoStoryboard, assetStats.extracting, assetStats.active, assetStats.total, storyboardStats.total, episode?.status])
 
   const handleExtractAssets = async () => {
     setIsExtracting(true)

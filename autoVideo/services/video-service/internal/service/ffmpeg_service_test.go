@@ -104,3 +104,22 @@ func TestConcatClipsAddsSilentAudioTrackWhenInputHasNoAudio(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildXfadeFilterComplexSupportsPerCutTransitions(t *testing.T) {
+	fc := buildXfadeFilterComplex(
+		[]float64{4.0, 5.0, 6.0},
+		[]string{"wipeleft", "fade"},
+		[]float64{0.22, 0.45},
+	)
+
+	for _, want := range []string{
+		"xfade=transition=wipeleft:duration=0.220:offset=3.780",
+		"xfade=transition=fade:duration=0.450:offset=8.330",
+		"acrossfade=d=0.220",
+		"acrossfade=d=0.450",
+	} {
+		if !strings.Contains(fc, want) {
+			t.Fatalf("filter_complex %q does not contain %q", fc, want)
+		}
+	}
+}

@@ -66,6 +66,9 @@ func (s *MotionPromptService) RefineBatch(
 	motionMode string,
 	stylePreset string,
 	charDescriptions string,
+	sceneGroupKeys []string,
+	cameraHints []string,
+	moodHints []string,
 ) []string {
 	if len(perClipDescs) == 0 {
 		return nil
@@ -75,7 +78,7 @@ func (s *MotionPromptService) RefineBatch(
 		modelFamily == "doubao" || modelFamily == "vidu" || modelFamily == "suanneng"
 
 	systemPrompt := s.buildSystemPrompt(useChinese, motionMode, stylePreset)
-	userPrompt := s.buildUserPrompt(perClipDescs, charDescriptions, useChinese)
+	userPrompt := s.buildUserPrompt(perClipDescs, charDescriptions, sceneGroupKeys, cameraHints, moodHints, useChinese)
 
 	reqBody := map[string]any{
 		"model": s.llmModel,
@@ -184,6 +187,15 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 【画面风格】%s
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
+【场景分组元数据 — 必须利用】
+━━━━━━━━━━━━━━━━━━━━━━━━
+用户输入的每条片段还会携带 scene_group / camera / mood 元数据：
+1. same_scene_as_prev=true 时，优先延续动作、朝向、视线与运动能量；
+2. scene_group 发生变化时，先建立新场景或新空间关系，再自然承接人物；
+3. camera / mood 非空时，把它们视为强约束，不可忽略或随意改写；
+4. 若上一镜与下一镜属于同 scene_group，过渡提示优先写成动作连续、视线引导或匹配切。
+
+━━━━━━━━━━━━━━━━━━━━━━━━
 【禁止清单】
 ━━━━━━━━━━━━━━━━━━━━━━━━
 ✗ 画面闪烁/帧抖动/身份漂移（服装/面貌跨镜头突变）
@@ -236,6 +248,15 @@ Motion mode: %s (%s) — calibrate energy accordingly
 Visual style: %s
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
+SCENE-GROUP METADATA — MUST BE USED:
+━━━━━━━━━━━━━━━━━━━━━━━━
+Each clip may also carry scene_group / camera / mood metadata:
+1. When same_scene_as_prev=true, preserve action, facing direction, eyeline, and energy continuity first.
+2. When scene_group changes, begin with a brief spatial re-establishing beat before pushing action forward.
+3. Non-empty camera or mood values are hard constraints, not optional flavor text.
+4. Within the same scene_group, prefer action continuity, eyeline bridges, or match cuts in the handoff cue.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
 FORBIDDEN:
 ━━━━━━━━━━━━━━━━━━━━━━━━
 ✗ Frame flicker / temporal jitter / identity drift (costume/face change mid-sequence)
@@ -250,7 +271,7 @@ Output ONLY a valid JSON array of strings, one entry per clip, no additional tex
 ["motion for clip 0", "motion for clip 1", ...]`, mode, motionMode, stylePreset)
 }
 
-func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions string, useChinese bool) string {
+func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions string, sceneGroupKeys, cameraHints, moodHints []string, useChinese bool) string {
 	var sb strings.Builder
 	if strings.TrimSpace(charDescriptions) != "" {
 		if useChinese {
@@ -264,18 +285,52 @@ func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions s
 		}
 	}
 	if useChinese {
-		sb.WriteString(fmt.Sprintf("总片段数：%d\n\n场景序列：\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("总片段数：%d\n元数据约束：same_scene_as_prev=true 表示必须与上一镜延续动作、轴线和能量。\n\n场景序列：\n", len(descs)))
 	} else {
-		sb.WriteString(fmt.Sprintf("Total clips: %d\n\nScene sequence:\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("Total clips: %d\nMetadata rule: same_scene_as_prev=true means the clip must continue the prior clip's action line, facing direction, and energy.\n\nScene sequence:\n", len(descs)))
 	}
 	for i, d := range descs {
+		meta := formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints, i)
 		if useChinese {
-			sb.WriteString(fmt.Sprintf("[片段%d] %s\n", i, d))
+			sb.WriteString(fmt.Sprintf("[片段%d]%s %s\n", i, meta, d))
 		} else {
-			sb.WriteString(fmt.Sprintf("[Clip %d] %s\n", i, d))
+			sb.WriteString(fmt.Sprintf("[Clip %d]%s %s\n", i, meta, d))
 		}
 	}
 	return sb.String()
+}
+
+func formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints []string, idx int) string {
+	parts := []string{
+		fmt.Sprintf("[scene_group=%s]", motionPromptSliceValue(sceneGroupKeys, idx, "-")),
+		fmt.Sprintf("[same_scene_as_prev=%t]", sameSceneAsPrevious(sceneGroupKeys, idx)),
+	}
+	if camera := strings.TrimSpace(motionPromptSliceValue(cameraHints, idx, "")); camera != "" {
+		parts = append(parts, fmt.Sprintf("[camera=%s]", camera))
+	}
+	if mood := strings.TrimSpace(motionPromptSliceValue(moodHints, idx, "")); mood != "" {
+		parts = append(parts, fmt.Sprintf("[mood=%s]", mood))
+	}
+	return strings.Join(parts, "")
+}
+
+func motionPromptSliceValue(items []string, idx int, fallback string) string {
+	if idx < 0 || idx >= len(items) {
+		return fallback
+	}
+	if trimmed := strings.TrimSpace(items[idx]); trimmed != "" {
+		return trimmed
+	}
+	return fallback
+}
+
+func sameSceneAsPrevious(sceneGroupKeys []string, idx int) bool {
+	if idx <= 0 || idx >= len(sceneGroupKeys) {
+		return false
+	}
+	current := strings.TrimSpace(sceneGroupKeys[idx])
+	prev := strings.TrimSpace(sceneGroupKeys[idx-1])
+	return current != "" && strings.EqualFold(current, prev)
 }
 
 // extractLLMContent pulls the assistant message content from an OpenAI-format response body.

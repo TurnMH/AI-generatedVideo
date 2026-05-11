@@ -3,6 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +57,95 @@ func NewExtractService(
 		jwtSecret:         jwtSecret,
 		logger:            logger,
 	}
+}
+
+func (s *ExtractService) buildServiceToken(projectID uint64) (string, error) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims := map[string]interface{}{
+		"user_id":    1,
+		"project_id": projectID,
+		"role":       "service",
+		"token_type": "access",
+		"iat":        time.Now().Unix(),
+		"exp":        time.Now().Add(10 * time.Minute).Unix(),
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	payload := base64.RawURLEncoding.EncodeToString(claimsJSON)
+	unsigned := header + "." + payload
+	mac := hmac.New(sha256.New, []byte(s.jwtSecret))
+	mac.Write([]byte(unsigned))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return unsigned + "." + sig, nil
+}
+
+// ResumeStaleExtractions restarts project/episode extraction flows that were
+// interrupted before the sentinel asset could be cleared.
+func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) (int, error) {
+	sentinels, err := s.assetSvc.repo.FindActiveExtractionSentinels(limit)
+	if err != nil {
+		return 0, err
+	}
+	resumed := 0
+	for _, sentinel := range sentinels {
+		jwtToken, tokenErr := s.buildServiceToken(sentinel.ProjectID)
+		if tokenErr != nil {
+			if s.logger != nil {
+				s.logger.Warn("resume stale extraction skipped: build token failed",
+					zap.Uint64("project_id", sentinel.ProjectID),
+					zap.Error(tokenErr),
+				)
+			}
+			continue
+		}
+		resumed++
+		if len(sentinel.EpisodeIDs) == 1 {
+			episodeID := uint64(sentinel.EpisodeIDs[0])
+			go func(projectID, episodeID uint64, token string) {
+				resumeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+				if s.logger != nil {
+					s.logger.Info("resuming interrupted episode asset extraction",
+						zap.Uint64("project_id", projectID),
+						zap.Uint64("episode_id", episodeID),
+					)
+				}
+				if _, resumeErr := s.ExtractFromEpisode(resumeCtx, projectID, episodeID, token); resumeErr != nil && s.logger != nil {
+					s.logger.Warn("resume interrupted episode extraction failed",
+						zap.Uint64("project_id", projectID),
+						zap.Uint64("episode_id", episodeID),
+						zap.Error(resumeErr),
+					)
+				}
+			}(sentinel.ProjectID, episodeID, jwtToken)
+			continue
+		}
+		go func(projectID uint64, token string) {
+			resumeCtx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+			defer cancel()
+			if s.logger != nil {
+				s.logger.Info("resuming interrupted project asset extraction", zap.Uint64("project_id", projectID))
+			}
+			if err := s.assetSvc.repo.DeleteByProjectID(projectID); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("resume interrupted project extraction skipped: clear assets failed",
+						zap.Uint64("project_id", projectID),
+						zap.Error(err),
+					)
+				}
+				return
+			}
+			if _, resumeErr := s.ExtractFromProject(resumeCtx, projectID, token); resumeErr != nil && s.logger != nil {
+				s.logger.Warn("resume interrupted project extraction failed",
+					zap.Uint64("project_id", projectID),
+					zap.Error(resumeErr),
+				)
+			}
+		}(sentinel.ProjectID, jwtToken)
+	}
+	return resumed, nil
 }
 
 type extractedAsset struct {

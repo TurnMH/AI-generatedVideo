@@ -77,3 +77,68 @@ func TestBuildVideoScenePrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveTransitionPlanUsesSceneSemantics(t *testing.T) {
+	transitions, durations := resolveTransitionPlan(model.RenderConfig{}, 3,
+		[]string{"room", "room", "street"},
+		[]string{"角色冲向门口", "镜头继续跟随角色冲刺", "夜色街头建立环境"},
+		[]string{"向左跟拍", "向左推进", "固定镜头"},
+		[]string{"tense", "tense", "calm"},
+	)
+
+	if len(transitions) != 2 || len(durations) != 2 {
+		t.Fatalf("unexpected transition plan sizes: %v %v", transitions, durations)
+	}
+	if transitions[0] != "wipeleft" {
+		t.Fatalf("first cut = %q, want wipeleft", transitions[0])
+	}
+	if transitions[1] != "fade" {
+		t.Fatalf("second cut = %q, want fade", transitions[1])
+	}
+	if durations[0] != 0.22 {
+		t.Fatalf("first duration = %v, want 0.22", durations[0])
+	}
+	if durations[1] < 0.32 {
+		t.Fatalf("second duration = %v, want >= 0.32", durations[1])
+	}
+}
+
+func TestResolveTransitionPlanHonorsExplicitOverride(t *testing.T) {
+	transitions, durations := resolveTransitionPlan(model.RenderConfig{
+		"transition":          "circleclose",
+		"transition_duration": 0.7,
+	}, 3, []string{"a", "b", "c"}, nil, nil, nil)
+
+	for i, want := range []string{"circleclose", "circleclose"} {
+		if transitions[i] != want {
+			t.Fatalf("transition[%d] = %q, want %q", i, transitions[i], want)
+		}
+		if durations[i] != 0.7 {
+			t.Fatalf("duration[%d] = %v, want 0.7", i, durations[i])
+		}
+	}
+}
+
+func TestMotionPromptUserPromptIncludesSceneMetadata(t *testing.T) {
+	svc := &MotionPromptService{}
+	prompt := svc.buildUserPrompt(
+		[]string{"角色冲向门口", "镜头贴着人物继续前冲"},
+		"主角：红色风衣，短发。",
+		[]string{"scene-a", "scene-a"},
+		[]string{"向左跟拍", "特写推进"},
+		[]string{"tense", "tense"},
+		false,
+	)
+
+	for _, want := range []string{
+		"[scene_group=scene-a]",
+		"[same_scene_as_prev=true]",
+		"[camera=特写推进]",
+		"[mood=tense]",
+		"Metadata rule: same_scene_as_prev=true",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt %q does not contain %q", prompt, want)
+		}
+	}
+}

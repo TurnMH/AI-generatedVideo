@@ -34,8 +34,8 @@ func (s *VideoService) tryPerClipAudioCompose(
 	task *model.VideoTask,
 	clipURLs []string,
 	perClipDialogues []string,
-	transition string,
-	transitionDur float64,
+	transitions []string,
+	transitionDurations []float64,
 ) (string, bool) {
 	if s.dubbing == nil || s.ffmpeg == nil {
 		return "", false
@@ -118,7 +118,7 @@ func (s *VideoService) tryPerClipAudioCompose(
 		muxed = append(muxed, local)
 	}
 
-	merged, err := s.ffmpeg.ConcatLocalNormalizedClips(ctx, muxed, transition, transitionDur)
+	merged, err := s.ffmpeg.ConcatLocalNormalizedClipsWithTransitionPlan(ctx, muxed, transitions, transitionDurations)
 	if err != nil {
 		s.logger.Warn("per-clip audio compose: concat failed, falling back",
 			zap.Int64("task_id", task.ID), zap.Error(err))

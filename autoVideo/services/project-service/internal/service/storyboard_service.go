@@ -289,10 +289,24 @@ func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, ve
 		// nearest preceding storyboard that actually has a generated image.
 		var prevPromptUsed string
 		var prevImageURL string
-		if prevSB, _ := s.repo.FindAdjacentBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); prevSB != nil {
+		if strings.TrimSpace(sb.SceneGroupKey) != "" {
+			if !sb.IsSceneFirstClip {
+				if prevSB, _ := s.repo.FindAdjacentInSceneBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); prevSB != nil {
+					prevPromptUsed = prevSB.PromptUsed
+					prevImageURL = prevSB.ImageURL
+					if prevImageURL == "" {
+						if anchor := s.repo.FindPrecedingWithImageInScene(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); anchor != nil {
+							prevImageURL = anchor.ImageURL
+							if prevPromptUsed == "" {
+								prevPromptUsed = anchor.PromptUsed
+							}
+						}
+					}
+				}
+			}
+		} else if prevSB, _ := s.repo.FindAdjacentBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); prevSB != nil {
 			prevPromptUsed = prevSB.PromptUsed
 			prevImageURL = prevSB.ImageURL
-			// Serial non-first clips have no image; walk back to find the nearest one with an image.
 			if prevImageURL == "" {
 				if anchor := s.repo.FindPrecedingWithImage(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); anchor != nil {
 					prevImageURL = anchor.ImageURL
@@ -878,7 +892,7 @@ func (s *StoryboardService) StatusCounts(projectID uint64) (map[string]int64, er
 
 // ResumeStaleStoryboards —— 启动时恢复卡在 generating 状态的分镜
 // ResumeStaleStoryboards resets any "generating" storyboards back to "pending"
-// and re-dispatches all pending/failed storyboards via Kafka.
+// and re-dispatches pending storyboards via Kafka.
 // Called at startup to recover from crashes.
 func (s *StoryboardService) ResumeStaleStoryboards() {
 	reset, err := s.repo.ResetGeneratingToPending()
@@ -888,6 +902,28 @@ func (s *StoryboardService) ResumeStaleStoryboards() {
 	}
 	if reset > 0 {
 		s.logger.Info("reset stale generating storyboards to pending", zap.Int64("count", reset))
+	}
+	projectIDs, err := s.repo.FindProjectIDsByStatuses([]string{"pending"}, 200)
+	if err != nil {
+		s.logger.Error("failed to find pending storyboard projects for startup resume", zap.Error(err))
+		return
+	}
+	for _, projectID := range projectIDs {
+		dispatched, dispatchErr := s.dispatchReadyStoryboards(projectID, nil, []string{"pending"}, "")
+		if dispatchErr != nil {
+			s.logger.Warn("startup storyboard redispatch skipped",
+				zap.Uint64("project_id", projectID),
+				zap.Error(dispatchErr),
+			)
+			continue
+		}
+		if dispatched > 0 {
+			s.setProjectGenerationScope(projectID, nil)
+			s.logger.Info("startup storyboard redispatch complete",
+				zap.Uint64("project_id", projectID),
+				zap.Int("dispatched", dispatched),
+			)
+		}
 	}
 }
 

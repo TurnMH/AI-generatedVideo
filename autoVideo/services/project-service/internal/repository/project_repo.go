@@ -87,6 +87,36 @@ func (r *ProjectRepo) List(userID uint64, keyword, status, projectType string, p
 	return projects, total, nil
 }
 
+// FindAutoPreparationCandidates returns projects that were left in the
+// post-split auto-preparation stage and should be resumed after a restart.
+func (r *ProjectRepo) FindAutoPreparationCandidates(limit int) ([]model.Project, error) {
+	var projects []model.Project
+	query := r.db.Model(&model.Project{}).
+		Where("status IN ?", []string{"script_processing", "asset_generating"}).
+		Where("COALESCE(progress ->> 'stage', '') = ?", "script_prepping").
+		Order("updated_at ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&projects).Error
+	return projects, err
+}
+
+// FindEpisodeGenerationCandidates returns projects that were interrupted before
+// episode splitting completed and should be restarted on service boot.
+func (r *ProjectRepo) FindEpisodeGenerationCandidates(limit int) ([]model.Project, error) {
+	var projects []model.Project
+	query := r.db.Model(&model.Project{}).
+		Where("status = ?", "script_processing").
+		Where("COALESCE(progress ->> 'stage', '') IN ?", []string{"", "episode_splitting"}).
+		Order("updated_at ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&projects).Error
+	return projects, err
+}
+
 // Update —— 保存项目记录的全部字段更新
 func (r *ProjectRepo) Update(p *model.Project) error {
 	return r.db.Save(p).Error

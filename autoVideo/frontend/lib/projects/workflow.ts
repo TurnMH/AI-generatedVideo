@@ -435,8 +435,9 @@ export function buildWorkflowSteps({
   const sceneSplitTotal = progress?.scene_split?.total ?? 0
   const sceneSplitCompleted = progress?.scene_split?.completed ?? 0
   const displayedEpisodeCount = getDisplayedEpisodeCount(project, episodeCount)
-  const scriptRunning = scriptStage === 'episode_splitting' || (project.status === 'script_processing' && !scriptStage)
-  const scriptDone = displayedEpisodeCount > 0 && scriptStage !== 'episode_splitting'
+  const scriptPreparing = scriptStage === 'script_prepping'
+  const scriptRunning = scriptStage === 'episode_splitting' || scriptPreparing || (project.status === 'script_processing' && !scriptStage)
+  const scriptDone = displayedEpisodeCount > 0 && scriptStage !== 'episode_splitting' && scriptStage !== 'script_prepping'
 
   const assets = assetStats ?? {
     total: 0,
@@ -508,7 +509,9 @@ export function buildWorkflowSteps({
           status: scriptRunning ? 'current' : scriptDone ? 'done' : 'current',
           processing: scriptRunning,
           subLabel: scriptRunning
-            ? episodeSplitTotal > 0
+            ? scriptPreparing
+              ? '自动润色中'
+              : episodeSplitTotal > 0
               ? `${episodeSplitCompleted}/${episodeSplitTotal}`
               : project.target_episodes > 0
                 ? `0/${project.target_episodes}`
@@ -521,7 +524,9 @@ export function buildWorkflowSteps({
                 ? '待拆分'
                 : '未上传',
           progress: scriptRunning
-            ? toPercent(episodeSplitCompleted, episodeSplitTotal)
+            ? scriptPreparing
+              ? toPercent(sceneSplitCompleted, sceneSplitTotal || displayedEpisodeCount)
+              : toPercent(episodeSplitCompleted, episodeSplitTotal)
             : scriptDone
               ? 100
               : project.script_file_url

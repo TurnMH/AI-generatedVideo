@@ -66,6 +66,9 @@ func TestComposeAssetImagePromptIncludesTypeSpecificGuidance(t *testing.T) {
 			"pure white background",
 			"(no text:2.0)",
 			"(masterpiece:1.5)",
+			"strict model-sheet consistency",
+			"costume layers, accessories, hairstyle silhouette, and footwear clearly readable",
+			"neutral presentation pose, orthographic design-sheet readability",
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("prompt %q does not contain %q", prompt, want)
@@ -81,9 +84,32 @@ func TestComposeAssetImagePromptIncludesTypeSpecificGuidance(t *testing.T) {
 
 	t.Run("scene asset", func(t *testing.T) {
 		prompt := composeAssetImagePrompt("scene", "清晨浴室", "柔和灯光、镜面水汽、暖色氛围。", "", "")
-		// Anime path uses English no-person tags
-		if !strings.Contains(prompt, "no people") || !strings.Contains(prompt, "no humans") {
-			t.Fatalf("scene prompt missing strict no-person constraint: %q", prompt)
+		for _, want := range []string{
+			"no people",
+			"no humans",
+			"location design sheet",
+			"建筑结构、陈设关系、材质与光源方向必须可读",
+			"no silhouette",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("scene prompt %q does not contain %q", prompt, want)
+			}
+		}
+	})
+
+	t.Run("prop asset", func(t *testing.T) {
+		prompt := composeAssetImagePrompt("prop", "青铜匕首", "青铜刀身，木质握柄，边缘有磨损。", "强调纹饰", "")
+		for _, want := range []string{
+			"prop design sheet",
+			"青铜匕首",
+			"强调纹饰",
+			"prop turnaround reference",
+			"强调正三维轮廓、连接结构、接缝、刻纹、边缘磨损与功能构造可读性",
+			"front or three-quarter readable presentation",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("prop prompt %q does not contain %q", prompt, want)
+			}
 		}
 	})
 }

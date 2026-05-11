@@ -413,8 +413,18 @@ func (f *FFmpegService) ConcatClipsWithTransitions(ctx context.Context, clipURLs
 	if transition == "" {
 		return f.ConcatClips(ctx, clipURLs, videoMode)
 	}
-	if transitionDur <= 0 {
-		transitionDur = 0.5
+	transitions := make([]string, maxInt(len(clipURLs)-1, 0))
+	durations := make([]float64, len(transitions))
+	for i := range transitions {
+		transitions[i] = transition
+		durations[i] = transitionDur
+	}
+	return f.ConcatClipsWithTransitionPlan(ctx, clipURLs, videoMode, transitions, durations)
+}
+
+func (f *FFmpegService) ConcatClipsWithTransitionPlan(ctx context.Context, clipURLs []string, videoMode string, transitions []string, transitionDurations []float64) (string, error) {
+	if len(transitions) == 0 {
+		return f.ConcatClips(ctx, clipURLs, videoMode)
 	}
 
 	workDir, err := os.MkdirTemp(f.TempDir, "xfade-*")
@@ -477,28 +487,7 @@ func (f *FFmpegService) ConcatClipsWithTransitions(ctx context.Context, clipURLs
 	for _, p := range clipPaths {
 		inputs = append(inputs, "-i", p)
 	}
-
-	var fc strings.Builder
-	var offset float64
-	prevV := "[0:v]"
-	prevA := "[0:a]"
-	for i := 1; i < len(clipPaths); i++ {
-		offset += durations[i-1] - transitionDur
-		nextV := fmt.Sprintf("[v%d]", i)
-		nextA := fmt.Sprintf("[a%d]", i)
-		if i == len(clipPaths)-1 {
-			nextV = "[vout]"
-			nextA = "[aout]"
-		}
-		fmt.Fprintf(&fc, "%s[%d:v]xfade=transition=%s:duration=%.3f:offset=%.3f%s;",
-			prevV, i, transition, transitionDur, offset, nextV)
-		fmt.Fprintf(&fc, "%s[%d:a]acrossfade=d=%.3f%s;",
-			prevA, i, transitionDur, nextA)
-		prevV = nextV
-		prevA = nextA
-	}
-	// Remove trailing semicolon
-	fcStr := strings.TrimRight(fc.String(), ";")
+	fcStr := buildXfadeFilterComplex(durations, transitions, transitionDurations)
 
 	merged := filepath.Join(workDir, "merged.mp4")
 	args := inputs
@@ -514,6 +503,90 @@ func (f *FFmpegService) ConcatClipsWithTransitions(ctx context.Context, clipURLs
 		return "", fmt.Errorf("xfade concat: %w", err)
 	}
 	return merged, nil
+}
+
+func buildXfadeFilterComplex(durations []float64, transitions []string, transitionDurations []float64) string {
+	if len(durations) <= 1 || len(transitions) == 0 {
+		return ""
+	}
+	normalizedTransitions, normalizedDurations := normalizeXfadePlan(durations, transitions, transitionDurations)
+	var fc strings.Builder
+	var offset float64
+	prevV := "[0:v]"
+	prevA := "[0:a]"
+	for i := 1; i < len(durations); i++ {
+		currentDur := normalizedDurations[i-1]
+		offset += durations[i-1] - currentDur
+		nextV := fmt.Sprintf("[v%d]", i)
+		nextA := fmt.Sprintf("[a%d]", i)
+		if i == len(durations)-1 {
+			nextV = "[vout]"
+			nextA = "[aout]"
+		}
+		fmt.Fprintf(&fc, "%s[%d:v]xfade=transition=%s:duration=%.3f:offset=%.3f%s;",
+			prevV, i, normalizedTransitions[i-1], currentDur, offset, nextV)
+		fmt.Fprintf(&fc, "%s[%d:a]acrossfade=d=%.3f%s;",
+			prevA, i, currentDur, nextA)
+		prevV = nextV
+		prevA = nextA
+	}
+	return strings.TrimRight(fc.String(), ";")
+}
+
+func normalizeXfadePlan(durations []float64, transitions []string, transitionDurations []float64) ([]string, []float64) {
+	cutCount := len(durations) - 1
+	normalizedTransitions := make([]string, cutCount)
+	normalizedDurations := make([]float64, cutCount)
+	for i := 0; i < cutCount; i++ {
+		requestedTransition := ""
+		if i < len(transitions) {
+			requestedTransition = transitions[i]
+		}
+		requestedDuration := 0.5
+		if i < len(transitionDurations) {
+			requestedDuration = transitionDurations[i]
+		}
+		normalizedTransitions[i] = sanitizeXfadeTransition(requestedTransition)
+		normalizedDurations[i] = clampTransitionDuration(requestedDuration, durations[i], durations[i+1])
+	}
+	return normalizedTransitions, normalizedDurations
+}
+
+func sanitizeXfadeTransition(transition string) string {
+	switch strings.ToLower(strings.TrimSpace(transition)) {
+	case "fade", "wipeleft", "wiperight", "circleclose", "dissolve":
+		return strings.ToLower(strings.TrimSpace(transition))
+	default:
+		return "dissolve"
+	}
+}
+
+func clampTransitionDuration(requested, leftClipDur, rightClipDur float64) float64 {
+	if requested <= 0 {
+		requested = 0.5
+	}
+	maxAllowed := leftClipDur
+	if rightClipDur < maxAllowed {
+		maxAllowed = rightClipDur
+	}
+	maxAllowed -= 0.05
+	if maxAllowed <= 0.05 {
+		maxAllowed = 0.05
+	}
+	if requested > maxAllowed {
+		requested = maxAllowed
+	}
+	if requested < 0.05 {
+		requested = 0.05
+	}
+	return requested
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // DownloadFile —— 下载指定 URL 的文件并保存到本地路径

@@ -100,6 +100,8 @@ func composeCharacterPanelPrompt(name, description, promptUsed string, isLiveAct
 	identity = append(identity,
 		"the same single character across all reference panels",
 		"(identical subject, identical face shape, identical hairstyle, identical skin tone, identical costume, identical proportions:1.4)",
+		"same garment layers, same accessories, same footwear, same silhouette in every panel",
+		"production-ready character turnaround reference",
 	)
 
 	tags := []string{}
@@ -155,6 +157,10 @@ func composeCharacterPanelPrompt(name, description, promptUsed string, isLiveAct
 	if trimmedPrompt != "" {
 		tags = append(tags, trimmedPrompt)
 	}
+	tags = append(tags,
+		"identity must remain perfectly locked across all panels",
+		"wardrobe construction, fabric layers, trims, and accessories must stay consistent",
+	)
 
 	// Prepend a bilingual imperative instruction block.
 	// Tag-list format is ignored by instruction-tuned models (GPT-Image, Gemini);

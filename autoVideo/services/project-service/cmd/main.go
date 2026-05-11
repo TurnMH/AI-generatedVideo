@@ -115,6 +115,16 @@ func main() {
 	episodeSvc.SetCharacterService(characterBaseURL, cfg.JWT.AccessSecret)
 	episodeSvc.SetScriptService(cfg.Script.BaseURL)
 	episodeSvc.SetVideoService(videoBaseURL)
+	if resumed, resumeErr := episodeSvc.ResumeInterruptedEpisodeGeneration(20); resumeErr != nil {
+		logger.Error("failed to resume interrupted episode generation", zap.Error(resumeErr))
+	} else if resumed > 0 {
+		logger.Info("resumed interrupted episode generation pipelines", zap.Int("count", resumed))
+	}
+	if resumed, resumeErr := episodeSvc.ResumeInterruptedAutoPreparation(20); resumeErr != nil {
+		logger.Error("failed to resume interrupted auto preparation", zap.Error(resumeErr))
+	} else if resumed > 0 {
+		logger.Info("resumed interrupted auto preparation pipelines", zap.Int("count", resumed))
+	}
 	projectHandler := handler.NewProjectHandler(projectSvc, storageBaseURL, characterBaseURL, imageBaseURL, videoBaseURL, cfg.Script.BaseURL, cfg.JWT.AccessSecret)
 	episodeHandler := handler.NewEpisodeHandler(episodeSvc)
 	storyboardHandler := handler.NewStoryboardHandler(storyboardSvc, logger, characterBaseURL)

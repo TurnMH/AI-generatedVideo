@@ -70,8 +70,9 @@ func main() {
 	charRepo := repository.NewCharacterRepo(db)
 	styleRepo := repository.NewStyleRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
-	// Recover orphaned assets from previous unclean shutdown
-	if n, err := assetRepo.ResetOrphanedGenerating(); err != nil {
+	// Recover orphaned image-generation assets from previous unclean shutdown.
+	// Extraction sentinels are resumed separately below.
+	if n, err := assetRepo.ResetOrphanedGeneratingOnly(); err != nil {
 		log.Error("reset orphaned assets", zap.Error(err))
 	} else if n > 0 {
 		log.Info("reset orphaned generating assets on startup", zap.Int64("count", n))
@@ -163,6 +164,11 @@ func main() {
 		cfg.ProjectService.BaseURL, jwtUserSecret,
 		log,
 	)
+	if resumed, err := extractSvc.ResumeStaleExtractions(context.Background(), 20); err != nil {
+		log.Error("resume stale extractions", zap.Error(err))
+	} else if resumed > 0 {
+		log.Info("resumed interrupted extraction jobs", zap.Int("count", resumed))
+	}
 
 	assetHandler := handler.NewAssetHandler(assetSvc, extractSvc, log)
 

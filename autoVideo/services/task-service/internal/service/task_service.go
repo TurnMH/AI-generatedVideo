@@ -84,8 +84,17 @@ func (s *TaskService) Create(req CreateTaskReq) (*model.Task, error) {
 		payload,
 		req.Priority,
 	); err != nil {
-		// mark as failed if we cannot enqueue
 		s.logger.Error("kafka publish failed", zap.Uint64("task_id", task.ID), zap.Error(err))
+		task.Status = model.TaskFailed
+		task.ErrorMsg = "kafka publish: " + err.Error()
+		now := time.Now()
+		task.FinishedAt = &now
+		if task.StartedAt == nil {
+			task.StartedAt = &now
+		}
+		if saveErr := s.taskRepo.Save(task); saveErr != nil {
+			s.logger.Error("mark task failed after kafka publish error", zap.Uint64("task_id", task.ID), zap.Error(saveErr))
+		}
 	}
 
 	return task, nil
@@ -133,9 +142,26 @@ func (s *TaskService) CreateBatch(reqs []CreateTaskReq) ([]*model.Task, error) {
 			},
 		})
 	}
+	tasksByTopic := make(map[string][]*model.Task)
+	for _, task := range tasks {
+		topic := taskTypeTopic(task.TaskType)
+		tasksByTopic[topic] = append(tasksByTopic[topic], task)
+	}
 	for topic, msgs := range byTopic {
 		if err := s.kafka.PublishBatch(context.Background(), topic, msgs); err != nil {
 			s.logger.Error("batch kafka publish failed", zap.String("topic", topic), zap.Error(err))
+			now := time.Now()
+			for _, task := range tasksByTopic[topic] {
+				task.Status = model.TaskFailed
+				task.ErrorMsg = "kafka publish: " + err.Error()
+				task.FinishedAt = &now
+				if task.StartedAt == nil {
+					task.StartedAt = &now
+				}
+				if saveErr := s.taskRepo.Save(task); saveErr != nil {
+					s.logger.Error("mark batch task failed after kafka publish error", zap.Uint64("task_id", task.ID), zap.Error(saveErr))
+				}
+			}
 		}
 	}
 
@@ -311,6 +337,13 @@ func (s *TaskService) RetryFailedTasks(ctx context.Context) {
 		topic := taskTypeTopic(task.TaskType)
 		if err := s.kafka.Publish(ctx, topic, fmt.Sprintf("%d", task.ID), payload, task.Priority); err != nil {
 			s.logger.Error("RetryFailedTasks publish error", zap.Uint64("task_id", task.ID), zap.Error(err))
+			task.Status = model.TaskFailed
+			task.ErrorMsg = "kafka publish: " + err.Error()
+			now := time.Now()
+			task.FinishedAt = &now
+			if saveErr := s.taskRepo.Save(&task); saveErr != nil {
+				s.logger.Error("RetryFailedTasks save publish error state", zap.Uint64("task_id", task.ID), zap.Error(saveErr))
+			}
 		}
 
 		s.logger.Info("task retried", zap.Uint64("task_id", task.ID), zap.Int("retry_count", task.RetryCount))
