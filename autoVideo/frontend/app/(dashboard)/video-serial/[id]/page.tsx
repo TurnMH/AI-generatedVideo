@@ -404,6 +404,7 @@ export default function SerialProjectDetailPage() {
         const assetActiveCount = stepperAssetsRaw.filter(
           (asset: any) => asset?.name !== '__extracting__' && ['pending', 'generating', 'paused'].includes(asset?.status)
         ).length
+        const projectStage = project.progress?.stage as string | undefined
         const isScriptProcessing = project.status === 'script_processing'
           || project.progress?.stage === 'episode_splitting'
           || project.progress?.stage === 'script_prepping'

@@ -54,3 +54,35 @@ func TestLoadUsesKafkaBrokersFromDockerConfig(t *testing.T) {
 		t.Fatalf("cfg.Kafka.Brokers = %v, want [kafka:29092]", cfg.Kafka.Brokers)
 	}
 }
+
+func TestLoadMergesOverrideConfigFile(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	baseDir := t.TempDir()
+	basePath := filepath.Join(baseDir, "base.yaml")
+	overridePath := filepath.Join(baseDir, "override.yaml")
+
+	base := []byte("kafka:\n  brokers:\n    - \"base:29092\"\nproject-service:\n  llm:\n    base_url: \"https://base.example/v1\"\n")
+	override := []byte("project-service:\n  llm:\n    base_url: \"https://override.example/v1\"\n")
+	if err := os.WriteFile(basePath, base, 0o600); err != nil {
+		t.Fatalf("write base config: %v", err)
+	}
+	if err := os.WriteFile(overridePath, override, 0o600); err != nil {
+		t.Fatalf("write override config: %v", err)
+	}
+
+	t.Setenv("AUTOVIDEO_CONFIG_FILE", basePath)
+	t.Setenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE", overridePath)
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LLM.BaseURL != "https://override.example/v1" {
+		t.Fatalf("cfg.LLM.BaseURL = %q, want override value", cfg.LLM.BaseURL)
+	}
+	if len(cfg.Kafka.Brokers) != 1 || cfg.Kafka.Brokers[0] != "base:29092" {
+		t.Fatalf("cfg.Kafka.Brokers = %v, want base value to remain", cfg.Kafka.Brokers)
+	}
+}

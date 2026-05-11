@@ -48,7 +48,7 @@ services:
       retries: 5
 
   zookeeper:
-    image: docker.m.daocloud.io/confluentinc/cp-zookeeper:7.5.0
+    image: confluentinc/cp-zookeeper:7.5.0
     container_name: autovideo-zookeeper
     restart: unless-stopped
     ports:
@@ -67,7 +67,7 @@ services:
       retries: 5
 
   kafka:
-    image: docker.m.daocloud.io/confluentinc/cp-kafka:7.5.0
+    image: confluentinc/cp-kafka:7.5.0
     container_name: autovideo-kafka
     restart: unless-stopped
     ports:
