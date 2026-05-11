@@ -445,6 +445,10 @@ type ProgressInfo struct {
 	EpisodeSplit *StageProgress `json:"episode_split,omitempty"`
 	SceneSplit   *StageProgress `json:"scene_split,omitempty"`
 	Message      string         `json:"message,omitempty"`
+	PhaseLabel   string         `json:"phase_label,omitempty"`
+	NextStep     string         `json:"next_step,omitempty"`
+	CurrentEpisode int          `json:"current_episode,omitempty"`
+	TotalEpisodes  int          `json:"total_episodes,omitempty"`
 	StartedAt    string         `json:"started_at,omitempty"`
 	UpdatedAt    string         `json:"updated_at,omitempty"`
 }
@@ -612,7 +616,12 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 			Total: len(episodes), Completed: 0, Status: "running",
 		},
 		Message: "正在准备分镜拆分…",
+		PhaseLabel: "自动拆分分镜中",
+		NextStep: "分镜拆分完成后即可继续出图或进入后续制作",
+		CurrentEpisode: 0,
+		TotalEpisodes: len(episodes),
 	})
+	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "storyboard_generating")
 
 	clipDuration := 5
 	videoModel := ""
@@ -689,6 +698,31 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 	}
 
 	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, project.ProjectType, startSequence)
+	patchedContinuity := 0
+	if created > 0 && s.storyboardSvc != nil && s.storyboardSvc.continuityAuditor != nil {
+		auditCtx, cancelAudit := context.WithTimeout(ctx, 90*time.Second)
+		result, auditErr := s.storyboardSvc.AuditSceneContinuity(auditCtx, projectID, episodeID)
+		cancelAudit()
+		if auditErr != nil {
+			if s.logger != nil {
+				s.logger.Warn("automatic storyboard continuity audit failed",
+					zap.Uint64("project_id", projectID),
+					zap.Bool("single_episode", episodeID != nil),
+					zap.Error(auditErr),
+				)
+			}
+		} else if result != nil {
+			patchedContinuity = result.TotalPatched
+			if s.logger != nil {
+				s.logger.Info("automatic storyboard continuity audit completed",
+					zap.Uint64("project_id", projectID),
+					zap.Bool("single_episode", episodeID != nil),
+					zap.Int("patched_storyboards", patchedContinuity),
+					zap.Int("groups", result.TotalGroups),
+				)
+			}
+		}
+	}
 	if episodeID != nil {
 		if err := s.storyboardSvc.repo.ReindexSequenceNumbers(projectID); err != nil {
 			return 0, fmt.Errorf("reindex storyboard sequence: %w", err)
@@ -710,8 +744,23 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 		SceneSplit: &StageProgress{
 			Total: len(episodes), Completed: len(episodes), Status: "done",
 		},
-		Message: fmt.Sprintf("分镜拆分完成，共生成 %d 条分镜", created),
+		Message: func() string {
+			if patchedContinuity > 0 {
+				return fmt.Sprintf("分镜拆分完成，共生成 %d 条分镜，并自动修正 %d 处连贯性问题", created, patchedContinuity)
+			}
+			return fmt.Sprintf("分镜拆分完成，共生成 %d 条分镜", created)
+		}(),
+		PhaseLabel: "分镜已就绪",
+		NextStep: func() string {
+			if patchedContinuity > 0 {
+				return "分镜已完成自动连贯性校正，可以继续生成分镜图片、配音或视频"
+			}
+			return "可以继续生成分镜图片、配音或视频"
+		}(),
+		CurrentEpisode: len(episodes),
+		TotalEpisodes: len(episodes),
 	})
+	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "storyboard_ready")
 	if s.logger != nil {
 		s.logger.Info("manual storyboard extraction completed",
 			zap.Uint64("project_id", projectID),
@@ -971,6 +1020,14 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 - 对需要人物连续说话或复杂动作的段落，用[长镜头:时长/说明]明确标注，指出应在单个连续镜头内完成，避免视频生成时出现跳切或场景衔接断裂
 - 相邻分镜之间，确保动作有交代（起身→走近→开口），避免无缘由的位置跳变
 
+**连续性硬规则（必须遵守）：**
+- 同一场景内，人物服装、发型、持有物、伤势、站位朝向不能无缘由变化
+- 同一角色连续说话时，必须交代动作延续和视线方向，避免上一句站立、下一句突然坐下或转身
+- 新场景第一次出现时，优先给出清晰的地点与空间锚点，让后续镜头能稳定继承背景结构
+- 如果角色从画面左侧移动到右侧，必须在文字中明确写出移动过程，不能让后续镜头直接跳位
+- 重要道具一旦出现在角色手中，直到放下或转场前都要持续标注
+- 每个段落只保留一个核心视觉动作，避免一个自然段同时承载多个互相冲突的镜头意图
+
 **输出要求：**
 - 返回纯文本格式（不要JSON），直接输出优化后的分集脚本内容
 - 保持原有文字风格，只在视觉关键节点加入标注
@@ -1091,39 +1148,54 @@ func (s *EpisodeService) fetchStoryboardPromptTemplate(ctx context.Context, styl
 	if s.scriptBaseURL == "" || strings.TrimSpace(styleKey) == "" {
 		return ""
 	}
-	url := fmt.Sprintf("%s/api/v1/prompt-templates?style_key=%s&resource_type=storyboard&active_only=true", s.scriptBaseURL, styleKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return ""
-	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.Warn("fetch storyboard prompt template failed", zap.String("style_key", styleKey), zap.Error(err))
+	for _, key := range storyboardTemplateLookupKeys(styleKey) {
+		url := fmt.Sprintf("%s/api/v1/prompt-templates?style_key=%s&resource_type=storyboard&active_only=true", s.scriptBaseURL, key)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
 		}
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var result struct {
-		Data []struct {
-			Content  string `json:"content"`
-			IsActive bool   `json:"is_active"`
-		} `json:"data"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &result); err != nil {
-		return ""
-	}
-	for _, t := range result.Data {
-		if t.IsActive && strings.TrimSpace(t.Content) != "" {
-			return t.Content
+		resp, err := client.Do(req)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("fetch storyboard prompt template failed", zap.String("style_key", key), zap.Error(err))
+			}
+			continue
+		}
+		var result struct {
+			Data []struct {
+				Content  string `json:"content"`
+				IsActive bool   `json:"is_active"`
+			} `json:"data"`
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			continue
+		}
+		for _, t := range result.Data {
+			if t.IsActive && strings.TrimSpace(t.Content) != "" {
+				return t.Content
+			}
 		}
 	}
 	return ""
+}
+
+func storyboardTemplateLookupKeys(styleKey string) []string {
+	trimmed := strings.TrimSpace(styleKey)
+	if trimmed == "" {
+		return nil
+	}
+	keys := []string{trimmed}
+	switch trimmed {
+	case "storyboard_anime2d":
+		keys = append(keys, "animation_v43")
+	}
+	return keys
 }
 
 // applyPromptTemplate replaces {scene}, {characters}, {action}, {mood} placeholders
@@ -1279,6 +1351,10 @@ func (s *EpisodeService) GenerateFromScriptWithOptions(ctx context.Context, proj
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
+	var previousProgress ProgressInfo
+	if len(project.Progress) > 0 {
+		_ = json.Unmarshal(project.Progress, &previousProgress)
+	}
 
 	// ── Layer 2: Status guard ──
 	// If already processing, refuse to start another generation.
@@ -1296,9 +1372,19 @@ func (s *EpisodeService) GenerateFromScriptWithOptions(ctx context.Context, proj
 
 	// Immediately mark as script_processing + initialize progress
 	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "script_processing")
+	progressMessage := "准备中…"
+	phaseLabel := ""
+	nextStep := ""
+	if force && (previousProgress.Stage == "episode_splitting" || project.Status == "script_processing") {
+		progressMessage = "服务恢复后已重新开始分集生成…"
+		phaseLabel = "已自动恢复分集生成"
+		nextStep = "系统会重新分析剧本并恢复分集结构，完成后自动进入后续剧本准备流程"
+	}
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
-		Message:      "准备中…",
+		Message:      progressMessage,
+		PhaseLabel:   phaseLabel,
+		NextStep:     nextStep,
 		EpisodeSplit: &StageProgress{Status: "running"},
 	})
 
@@ -1334,7 +1420,7 @@ func (s *EpisodeService) IsGenerationStalled(projectID uint64, threshold time.Du
 		}
 	}
 
-	if project.Status != "script_processing" && progress.Stage != "episode_splitting" && progress.Stage != "scene_splitting" {
+	if project.Status != "script_processing" && progress.Stage != "episode_splitting" && progress.Stage != "scene_splitting" && progress.Stage != "script_prepping" {
 		return false, nil
 	}
 	if progress.UpdatedAt == "" {
@@ -1364,7 +1450,272 @@ func (s *EpisodeService) HasActiveGeneration(projectID uint64) (bool, error) {
 
 	return project.Status == "script_processing" ||
 		progress.Stage == "episode_splitting" ||
-		progress.Stage == "scene_splitting", nil
+		progress.Stage == "scene_splitting" ||
+		progress.Stage == "script_prepping", nil
+}
+
+func (s *EpisodeService) episodeAutoPrepared(ep model.Episode) bool {
+	optimizedText := strings.TrimSpace(ep.OptimizedText)
+	if optimizedText == "" {
+		return false
+	}
+	if ep.OptimizeStatus != "done" || ep.ReviewStatus != "done" {
+		return false
+	}
+	return strings.TrimSpace(ep.ScriptExcerpt) == optimizedText
+}
+
+func (s *EpisodeService) countPreparedEpisodes(eps []model.Episode) int {
+	count := 0
+	for _, ep := range eps {
+		if s.episodeAutoPrepared(ep) {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEpisodes, processedEpisodes int, timedOut, resumed bool) {
+	finalStatus := "script_ready"
+	sceneStatus := "done"
+	message := "自动剧本处理已完成"
+	phaseLabel := "剧本自动处理完成"
+	nextStep := "可以继续资源提取、分镜拆分或进入后续制作"
+	completed := totalEpisodes
+	if timedOut {
+		finalStatus = "failed"
+		sceneStatus = "failed"
+		completed = processedEpisodes
+		message = fmt.Sprintf("自动处理提前结束（%d/%d 集），可手动继续资源与分镜", processedEpisodes, totalEpisodes)
+		phaseLabel = "自动处理已中断"
+		nextStep = "建议继续资源提取或从可用分集开始手动推进分镜"
+	} else if s.characterBaseURL != "" {
+		finalStatus = "asset_generating"
+		message = fmt.Sprintf("剧本优化完成（%d/%d 集），资源与分镜正在后台继续", totalEpisodes, totalEpisodes)
+		phaseLabel = "资源与分镜正在后台继续"
+		nextStep = "系统会自动继续资源提取，并在准备好后进入分镜拆分"
+	}
+	if resumed {
+		switch {
+		case timedOut:
+			message = fmt.Sprintf("服务重启后已尝试恢复，但自动处理仍提前结束（%d/%d 集）", processedEpisodes, totalEpisodes)
+			phaseLabel = "恢复后处理已中断"
+		case finalStatus == "asset_generating":
+			message = fmt.Sprintf("服务重启后已自动恢复，剧本优化完成（%d/%d 集），资源与分镜继续处理中", totalEpisodes, totalEpisodes)
+			phaseLabel = "已自动恢复资源与分镜流程"
+		case finalStatus == "script_ready":
+			message = fmt.Sprintf("服务重启后已自动恢复并完成剧本处理（%d/%d 集）", totalEpisodes, totalEpisodes)
+			phaseLabel = "已自动恢复剧本处理"
+		}
+	}
+	s.updateProgress(projectID, ProgressInfo{
+		Stage: "idle",
+		EpisodeSplit: &StageProgress{
+			Total: totalEpisodes, Completed: totalEpisodes, Status: "done",
+		},
+		SceneSplit: &StageProgress{
+			Total: totalEpisodes, Completed: completed, Status: sceneStatus,
+		},
+		Message: message,
+		PhaseLabel: phaseLabel,
+		NextStep: nextStep,
+		CurrentEpisode: completed,
+		TotalEpisodes: totalEpisodes,
+	})
+	_ = s.projectRepo.UpdateStatus(projectID, userID, finalStatus)
+}
+
+func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, eps []model.Episode, resumed bool) {
+	if len(eps) == 0 {
+		return
+	}
+	go func(project model.Project, eps []model.Episode, resumed bool) {
+		autoCtx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+		defer cancel()
+		processedEpisodes := s.countPreparedEpisodes(eps)
+		timedOut := false
+		defer func() {
+			s.finishAutoPreparation(project.ID, project.UserID, len(eps), processedEpisodes, timedOut, resumed)
+		}()
+
+		if processedEpisodes >= len(eps) {
+			return
+		}
+
+		// Pre-fetch project-level data once for all episodes to avoid N×HTTP redundancy.
+		autoWritingHints := s.fetchWritingSkillHints(autoCtx, project.ID)
+		autoProductionHints := s.fetchProductionSkillHints(autoCtx, project.ID)
+		var autoKwLib *KeywordLibrary
+		if proj, pErr := s.projectRepo.FindByIDNoAuth(project.ID); pErr == nil {
+			var lib KeywordLibrary
+			if len(proj.KeywordLibrary) > 0 {
+				if jsonErr := json.Unmarshal(proj.KeywordLibrary, &lib); jsonErr == nil {
+					autoKwLib = &lib
+				}
+			}
+		}
+
+		for _, ep := range eps {
+			if s.episodeAutoPrepared(ep) {
+				continue
+			}
+			select {
+			case <-autoCtx.Done():
+				timedOut = true
+				if s.logger != nil {
+					s.logger.Warn("post-split auto pipeline stopped before completion",
+						zap.Uint64("project_id", project.ID),
+						zap.Int("completed_episodes", processedEpisodes),
+						zap.Int("total_episodes", len(eps)),
+						zap.Bool("resumed", resumed),
+						zap.Error(autoCtx.Err()),
+					)
+				}
+				return
+			default:
+			}
+
+			message := fmt.Sprintf("正在润色并准备第 %d/%d 集，随后自动继续资源与分镜…", processedEpisodes+1, len(eps))
+			phaseLabel := "剧本优化与资源准备中"
+			nextStep := "当前集准备完成后会自动开始资源提取，并衔接分镜拆分"
+			if resumed {
+				message = fmt.Sprintf("服务重启后已自动恢复，正在准备第 %d/%d 集…", processedEpisodes+1, len(eps))
+				phaseLabel = "已自动恢复剧本优化与资源准备"
+				nextStep = "当前集恢复完成后会继续资源提取，并自动衔接分镜拆分"
+			}
+			s.updateProgress(project.ID, ProgressInfo{
+				Stage: "script_prepping",
+				EpisodeSplit: &StageProgress{
+					Total: len(eps), Completed: len(eps), Status: "done",
+				},
+				SceneSplit: &StageProgress{
+					Total: len(eps), Completed: processedEpisodes, Status: "running",
+				},
+				Message: message,
+				PhaseLabel: phaseLabel,
+				NextStep: nextStep,
+				CurrentEpisode: processedEpisodes + 1,
+				TotalEpisodes: len(eps),
+			})
+
+			if _, err := s.polishEpisodeInternal(autoCtx, ep.ID, project.ID, autoWritingHints, autoProductionHints, autoKwLib); err != nil && s.logger != nil {
+				s.logger.Warn("auto-polish episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
+			}
+			updated, err := s.autoOptimizeReviewInternal(autoCtx, ep.ID, project.ID, autoWritingHints, autoKwLib)
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warn("auto optimize-review episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
+				}
+				if s.characterBaseURL != "" {
+					if extractErr := s.extractAssetsForEpisode(autoCtx, project.ID, ep.ID); extractErr != nil && s.logger != nil {
+						s.logger.Warn("fallback asset extraction after optimize-review failure", zap.Uint64("episode_id", ep.ID), zap.Error(extractErr))
+					}
+				}
+				continue
+			}
+
+			autoPrepared := false
+			if updated.OptimizedText != "" {
+				if _, applyErr := s.ApplyOptimizedText(autoCtx, ep.ID, project.ID); applyErr != nil {
+					if s.logger != nil {
+						s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
+					}
+				} else {
+					autoPrepared = true
+				}
+			}
+			if !autoPrepared {
+				continue
+			}
+
+			processedEpisodes++
+			nextStep = "资源与分镜会在后台继续推进"
+			if processedEpisodes < len(eps) {
+				nextStep = "系统将继续处理下一集，并自动衔接资源与分镜"
+			}
+			if resumed {
+				nextStep = "系统会继续恢复后续分集，并自动衔接资源与分镜"
+			}
+			s.updateProgress(project.ID, ProgressInfo{
+				Stage: "script_prepping",
+				EpisodeSplit: &StageProgress{
+					Total: len(eps), Completed: len(eps), Status: "done",
+				},
+				SceneSplit: &StageProgress{
+					Total: len(eps), Completed: processedEpisodes, Status: "running",
+				},
+				Message: fmt.Sprintf("已完成 %d/%d 集自动准备，剩余集数会继续处理中…", processedEpisodes, len(eps)),
+				PhaseLabel: phaseLabel,
+				NextStep: nextStep,
+				CurrentEpisode: processedEpisodes,
+				TotalEpisodes: len(eps),
+			})
+		}
+	}(*project, eps, resumed)
+}
+
+// ResumeInterruptedAutoPreparation restarts projects that were left in
+// script_prepping after an unclean restart.
+func (s *EpisodeService) ResumeInterruptedAutoPreparation(limit int) (int, error) {
+	projects, err := s.projectRepo.FindAutoPreparationCandidates(limit)
+	if err != nil {
+		return 0, err
+	}
+	resumed := 0
+	for i := range projects {
+		episodes, epErr := s.episodeRepo.FindByProjectID(projects[i].ID)
+		if epErr != nil {
+			if s.logger != nil {
+				s.logger.Warn("resume auto preparation skipped: list episodes failed",
+					zap.Uint64("project_id", projects[i].ID),
+					zap.Error(epErr),
+				)
+			}
+			continue
+		}
+		if len(episodes) == 0 {
+			continue
+		}
+		if s.logger != nil {
+			s.logger.Info("resuming interrupted auto preparation",
+				zap.Uint64("project_id", projects[i].ID),
+				zap.Int("episode_count", len(episodes)),
+				zap.Int("already_prepared", s.countPreparedEpisodes(episodes)),
+			)
+		}
+		s.startAutoPreparationPipeline(&projects[i], episodes, true)
+		resumed++
+	}
+	return resumed, nil
+}
+
+// ResumeInterruptedEpisodeGeneration restarts projects that were still in the
+// episode split phase when the service was restarted.
+func (s *EpisodeService) ResumeInterruptedEpisodeGeneration(limit int) (int, error) {
+	projects, err := s.projectRepo.FindEpisodeGenerationCandidates(limit)
+	if err != nil {
+		return 0, err
+	}
+	resumed := 0
+	for _, project := range projects {
+		resumed++
+		if s.logger != nil {
+			s.logger.Info("resuming interrupted episode generation",
+				zap.Uint64("project_id", project.ID),
+			)
+		}
+		go func(projectID uint64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
+			defer cancel()
+			if _, resumeErr := s.GenerateFromScriptWithOptions(ctx, projectID, nil, true, false); resumeErr != nil && s.logger != nil {
+				s.logger.Warn("resume interrupted episode generation failed",
+					zap.Uint64("project_id", projectID),
+					zap.Error(resumeErr),
+				)
+			}
+		}(project.ID)
+	}
+	return resumed, nil
 }
 
 // doGenerateFromScript —— 执行剧集生成的核心逻辑，包含数据清理、分集和分镜创建
@@ -1582,94 +1933,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		},
 		Message: fmt.Sprintf("分集完成（%d 集），开始润色、格式化并串联资源与分镜…", len(dbEpisodes)),
 	})
-
-	// Post-split auto pipeline (background, sequential per episode):
-	//   1. PolishEpisode    — AI润色：提升标题/摘要/内容可读性（依赖完整关键词库）
-	//   2. AutoOptimizeReview — 转剧本格式 → AI审查 → 自动修复不足
-	//   3. ApplyOptimizedText — 将剧本格式结果写入 script_excerpt，并串联资源提取 → 分镜提取
-	go func(eps []model.Episode, pid uint64, userID uint64) {
-		autoCtx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
-		defer cancel()
-		processedEpisodes := 0
-		timedOut := false
-		defer func() {
-			sceneStatus := "done"
-			message := "全部完成"
-			completed := len(eps)
-			if timedOut {
-				sceneStatus = "failed"
-				completed = processedEpisodes
-				message = fmt.Sprintf("自动处理提前结束（%d/%d 集），可手动继续资源与分镜", processedEpisodes, len(eps))
-			}
-			s.updateProgress(pid, ProgressInfo{
-				Stage: "idle",
-				EpisodeSplit: &StageProgress{
-					Total: len(eps), Completed: len(eps), Status: "done",
-				},
-				SceneSplit: &StageProgress{
-					Total: len(eps), Completed: completed, Status: sceneStatus,
-				},
-				Message: message,
-			})
-			_ = s.projectRepo.UpdateStatus(pid, userID, "script_ready")
-		}()
-
-		// Pre-fetch project-level data once for all episodes to avoid N×HTTP redundancy.
-		autoWritingHints := s.fetchWritingSkillHints(autoCtx, pid)
-		autoProductionHints := s.fetchProductionSkillHints(autoCtx, pid)
-		var autoKwLib *KeywordLibrary
-		if proj, pErr := s.projectRepo.FindByIDNoAuth(pid); pErr == nil {
-			var lib KeywordLibrary
-			if len(proj.KeywordLibrary) > 0 {
-				if jsonErr := json.Unmarshal(proj.KeywordLibrary, &lib); jsonErr == nil {
-					autoKwLib = &lib
-				}
-			}
-		}
-
-		for _, ep := range eps {
-			select {
-			case <-autoCtx.Done():
-				timedOut = true
-				if s.logger != nil {
-					s.logger.Warn("post-split auto pipeline stopped before completion",
-						zap.Uint64("project_id", pid),
-						zap.Int("completed_episodes", processedEpisodes),
-						zap.Int("total_episodes", len(eps)),
-						zap.Error(autoCtx.Err()),
-					)
-				}
-				return
-			default:
-			}
-			// Step 1: polish novel text using the project keyword library.
-			if _, err := s.polishEpisodeInternal(autoCtx, ep.ID, pid, autoWritingHints, autoProductionHints, autoKwLib); err != nil && s.logger != nil {
-				s.logger.Warn("auto-polish episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
-			}
-			// Step 2: convert to screenplay format + AI review + repair
-			updated, err := s.autoOptimizeReviewInternal(autoCtx, ep.ID, pid, autoWritingHints, autoKwLib)
-			if err != nil {
-				if s.logger != nil {
-					s.logger.Warn("auto optimize-review episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
-				}
-				// Even if optimize-review fails, still trigger asset extraction from the
-				// existing script_excerpt so downstream steps are not fully blocked.
-				if s.characterBaseURL != "" {
-					if extractErr := s.extractAssetsForEpisode(autoCtx, pid, ep.ID); extractErr != nil && s.logger != nil {
-						s.logger.Warn("fallback asset extraction after optimize-review failure", zap.Uint64("episode_id", ep.ID), zap.Error(extractErr))
-					}
-				}
-				continue
-			}
-			// Step 3: auto-apply the screenplay text as the canonical script_excerpt
-			if updated.OptimizedText != "" {
-				if _, applyErr := s.ApplyOptimizedText(autoCtx, ep.ID, pid); applyErr != nil && s.logger != nil {
-					s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
-				}
-			}
-			processedEpisodes++
-		}
-	}(dbEpisodes, projectID, project.UserID)
+	s.startAutoPreparationPipeline(project, dbEpisodes, false)
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Phase 3: Scene splitting per episode (storyboard generation)
@@ -2323,6 +2587,13 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 ① [字幕:…] 标注内的全部文字 ② 引号内容（"…" 「…」'…'）③ 冒号引用句（角色名：内容）④ 角色的心理独白
 若一个分镜含多句对白，全部用 \n 拼接放入 dialogue，不截断不省略
 
+**镜头连续性规则（必须遵守）：**
+- 如果相邻分镜 location 相同，默认视为同一空间连续动作，人物站位、朝向、手中道具、受伤状态、服装层次必须延续，除非原文明确发生变化
+- 新 location 第一个分镜，优先使用 establishing / wide / full 等能交代空间关系的景别，不要直接跳进无背景特写
+- 当人物动作是连续链条时，拆分后的分镜必须保持动作前后逻辑，例如“起身→转头→走近→开口”，不能无缘由跳到结果态
+- description 中必须明确画面主次和空间层次，避免同一分镜同时承载两个互相竞争的动作焦点
+- 同一场景的光线方向和时间感要稳定，不允许上一镜夜色冷光、下一镜无说明变成日景暖光
+
 请严格按以下 JSON 格式返回：
 {"scenes": [
   {"description": "中文画面描述：角色1快步走进昏暗走廊，表情紧张，四周灯光昏黄。中景，正面机位。", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "walking fast", "emotion": "nervous"}], "items": ["道具1"], "mood": "tense", "location": "地点", "duration": %d, "dialogue": "对白"}
@@ -2332,7 +2603,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 %s`, episodeNum, modelDurationHint, refDuration, episodeNum, content)
 	}
 
-	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。"
+	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。"
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -2697,7 +2968,9 @@ Rules:
 11. If "lighting_note" is present, translate it to static panel lighting (e.g., "rim light" → "strong rim highlight on left side, hair backlit, face in shadow").
 12. If "art_note" is present, use it for background and set details.
 13. Append manga style keywords: "manga style, ink line art, high contrast black and white, screen tone, comic panel border, expressive character design".
-14. Return ONLY a JSON object: {"prompts": ["prompt for panel 1", "prompt for panel 2", ...]}`
+14. PANEL CONTINUITY: if adjacent panels share the same location, preserve costume, hairstyle, prop placement, lighting direction, and left/right subject placement unless the input explicitly changes them.
+15. ONE DECISIVE PANEL BEAT: each prompt must focus on one dominant visual action or emotion, not two competing panel ideas.
+16. Return ONLY a JSON object: {"prompts": ["prompt for panel 1", "prompt for panel 2", ...]}`
 	} else {
 		systemPrompt = `You are a professional image generation prompt engineer specializing in AI-driven video storyboards.
 Your task: produce polished, optimized image generation prompts for a sequence of storyboard scenes that will be used BOTH as reference images AND as video generation seeds.
@@ -2733,7 +3006,12 @@ Rules:
 12. If "art_note" is present, use it to describe scene environment and set dressing accurately.
 13. Preserve explicit era / period / costume cues. Dynasty/scifi/modern/retro setting details must be kept and strengthened.
 14. VIDEO-FRIENDLY COMPOSITION: avoid cluttered mid-ground; keep subject-background separation clean for AI video motion to work well.
-15. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
+15. ACTION CONTINUITY: if adjacent scenes share the same location or belong to one uninterrupted action, keep pose progression physically connected; do not jump from setup pose to resolved pose without an intermediate action beat.
+16. SPATIAL CONSISTENCY: preserve left/right frame placement, eyeline direction, hand-held props, environment geography, and key light direction unless the scene input explicitly signals a change.
+17. FIRST SHOT OF A NEW LOCATION: prefer a readable establishing or environment-anchored composition before pushing into close coverage, unless the scene input explicitly demands an immediate crash-in close-up.
+18. ONE DECISIVE VISUAL IDEA PER FRAME: do not describe two unrelated focal actions or multiple competing hero subjects in the same prompt.
+19. COSTUME AND PROP LOCK: wardrobe layers, accessories, injuries, dirt, blood, wetness, and damage state must remain stable across adjacent prompts until the input explicitly changes them.
+20. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
 	if skillHints != "" {

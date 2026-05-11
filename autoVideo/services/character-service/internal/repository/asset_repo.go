@@ -74,6 +74,19 @@ func (r *AssetRepo) FindRecoverablePending(limit int) ([]model.Asset, error) {
 	return assets, err
 }
 
+// FindActiveExtractionSentinels returns in-flight extraction sentinels that can be resumed.
+func (r *AssetRepo) FindActiveExtractionSentinels(limit int) ([]model.Asset, error) {
+	var assets []model.Asset
+	query := r.db.
+		Where("name = ? AND status = ?", "__extracting__", "extracting").
+		Order("updated_at ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&assets).Error
+	return assets, err
+}
+
 // PaginatedResult holds a page of assets plus total count.
 type PaginatedResult struct {
 	Items []model.Asset `json:"items"`
@@ -282,6 +295,15 @@ func (r *AssetRepo) ResetOrphanedGenerating() (int64, error) {
 	// Reset generating → pending
 	tx := r.db.Model(&model.Asset{}).
 		Where("status IN ?", []string{"generating", "extracting"}).
+		Update("status", "pending")
+	return tx.RowsAffected, tx.Error
+}
+
+// ResetOrphanedGeneratingOnly resets only image generation tasks and leaves
+// extraction sentinels for the extraction recovery flow.
+func (r *AssetRepo) ResetOrphanedGeneratingOnly() (int64, error) {
+	tx := r.db.Model(&model.Asset{}).
+		Where("status = ?", "generating").
 		Update("status", "pending")
 	return tx.RowsAffected, tx.Error
 }

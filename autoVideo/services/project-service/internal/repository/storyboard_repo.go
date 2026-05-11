@@ -217,6 +217,21 @@ func (r *StoryboardRepo) FindPendingOrFailed(projectID uint64, limit int) ([]mod
 	return sbs, err
 }
 
+// FindProjectIDsByStatuses returns distinct project IDs that still have
+// storyboards awaiting dispatch in one of the supplied statuses.
+func (r *StoryboardRepo) FindProjectIDsByStatuses(statuses []string, limit int) ([]uint64, error) {
+	var ids []uint64
+	query := r.db.Model(&model.Storyboard{}).
+		Distinct("project_id").
+		Where("status IN ?", statuses).
+		Order("project_id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Pluck("project_id", &ids).Error
+	return ids, err
+}
+
 // FindByProjectAndStatuses returns a bounded set of storyboards eligible for dispatch.
 func (r *StoryboardRepo) FindByProjectAndStatuses(projectID uint64, episodeID *uint64, statuses []string, limit int) ([]model.Storyboard, error) {
 	var sbs []model.Storyboard
@@ -259,12 +274,47 @@ func (r *StoryboardRepo) FindAdjacentBySequence(projectID uint64, sequenceNumber
 	return prev, next
 }
 
+// FindAdjacentInSceneBySequence returns adjacent storyboards restricted to the same
+// scene group so cross-scene continuity anchors do not bleed into a new scene.
+func (r *StoryboardRepo) FindAdjacentInSceneBySequence(projectID uint64, sequenceNumber int, episodeID *uint64, sceneGroupKey string) (prev *model.Storyboard, next *model.Storyboard) {
+	base := r.db.Model(&model.Storyboard{}).
+		Where("project_id = ? AND is_voided = false AND scene_group_key = ?", projectID, sceneGroupKey)
+	if episodeID != nil {
+		base = base.Where("episode_id = ?", *episodeID)
+	}
+	var prevSB, nextSB model.Storyboard
+	if err := base.Where("sequence_number < ?", sequenceNumber).
+		Order("sequence_number DESC").Limit(1).First(&prevSB).Error; err == nil {
+		prev = &prevSB
+	}
+	if err := base.Where("sequence_number > ?", sequenceNumber).
+		Order("sequence_number ASC").Limit(1).First(&nextSB).Error; err == nil {
+		next = &nextSB
+	}
+	return prev, next
+}
+
 // FindPrecedingWithImage returns the nearest preceding storyboard (by sequence_number) that
 // has a non-empty image_url. Used as the visual continuity anchor when the immediately
 // preceding storyboard is a serial non-first clip (which has no image of its own).
 func (r *StoryboardRepo) FindPrecedingWithImage(projectID uint64, sequenceNumber int, episodeID *uint64) *model.Storyboard {
 	base := r.db.Model(&model.Storyboard{}).
 		Where("project_id = ? AND is_voided = false AND sequence_number < ? AND image_url != ''", projectID, sequenceNumber)
+	if episodeID != nil {
+		base = base.Where("episode_id = ?", *episodeID)
+	}
+	var sb model.Storyboard
+	if err := base.Order("sequence_number DESC").Limit(1).First(&sb).Error; err == nil {
+		return &sb
+	}
+	return nil
+}
+
+// FindPrecedingWithImageInScene returns the nearest preceding storyboard with an image
+// inside the same scene group. This avoids dragging the previous scene's look into a new one.
+func (r *StoryboardRepo) FindPrecedingWithImageInScene(projectID uint64, sequenceNumber int, episodeID *uint64, sceneGroupKey string) *model.Storyboard {
+	base := r.db.Model(&model.Storyboard{}).
+		Where("project_id = ? AND is_voided = false AND sequence_number < ? AND image_url != '' AND scene_group_key = ?", projectID, sequenceNumber, sceneGroupKey)
 	if episodeID != nil {
 		base = base.Where("episode_id = ?", *episodeID)
 	}

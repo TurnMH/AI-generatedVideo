@@ -1964,11 +1964,17 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 
 	if isLiveAction {
 		// Live-action: single full-body portrait on pure white studio background.
+		identityAnchor := "the same single character, consistent facial structure, identical hairstyle, identical wardrobe layers, identical accessories, casting-reference precision"
 		tags = append(tags,
+			identityAnchor,
 			"(pure white background:1.6)", "plain white seamless studio backdrop",
 			"full body front view", "head to toe fully visible",
 			"(single character:1.5)", "(one person only:1.5)",
-			"standing in relaxed neutral pose", "both feet visible",
+			"standing in relaxed neutral pose", "neutral A-pose reference stance", "both feet visible",
+			"production costume reference", "wardrobe turnaround photo", "garment layering clearly readable",
+			"accessories, closures, trims, fabric weight and footwear clearly visible",
+			"objective character sheet framing", "clean silhouette separation", "centered subject",
+			"exactly one subject, no environmental storytelling", "full outfit silhouette locked for downstream consistency",
 		)
 		if name != "" {
 			tags = append(tags, name)
@@ -1982,13 +1988,18 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 		tags = append(tags,
 			"RAW photo", "(photorealistic:1.4)", "natural skin texture",
 			"professional studio lighting", "8K UHD", "ultra-detailed",
+			"face, hairline, costume silhouette, and footwear remain fully consistent",
 			"no anime", "no illustration",
+			"no props", "no extra limbs", "no duplicate person",
+			"no cropped head", "no cropped feet", "no side character", "no mannequin",
 		)
 	} else {
 		// Anime/illustration: multi-view character reference sheet.
 		// Layout: head-and-shoulder portrait on the left third (butterfly lighting) +
 		// full-body front / side / back three-views arranged side-by-side on the right two-thirds.
+		identityAnchor := "the same single character in every view, identical face, identical hairstyle, identical costume layers, identical accessories, strict model-sheet consistency"
 		tags = append(tags,
+			identityAnchor,
 			"character reference sheet", "character design sheet", "multi-view character design",
 			"(pure white background:1.6)", "plain white seamless backdrop",
 			"(single character:1.5)",
@@ -2002,6 +2013,9 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 			// Body proportion
 			"9-head body proportion", "slender elegant figure", "elongated legs",
 			"consistent character design across all views",
+			"costume layers, accessories, hairstyle silhouette, and footwear clearly readable",
+			"production-ready turnaround sheet",
+			"neutral presentation pose, orthographic design-sheet readability",
 		)
 		if name != "" {
 			tags = append(tags, name)
@@ -2015,6 +2029,9 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 		tags = append(tags,
 			"(masterpiece:1.5)", "best quality", "ultra-detailed illustration",
 			"8K", "2D anime style", "clean line art", "detailed fabric texture",
+			"same face and same outfit across all views",
+			"no extra character", "no duplicate limbs",
+			"no cropped panels", "no chibi distortion", "no floating props",
 		)
 	}
 
@@ -2034,11 +2051,14 @@ func composeScenePrompt(name, description, promptUsed string, isLiveAction bool)
 			"【纯净无人空镜】(Completely empty environment, absolute ZERO people, no humans, no creatures)",
 			"RAW photo", "8K UHD", "ultra-detailed",
 			"cinematic film look", "cinematic location photography",
+			"production design reference still", "establishing-shot location bible frame",
+			"single coherent location, no split scene montage",
 		}
 	} else {
 		tags = []string{
 			"【纯净无人空镜】(Completely empty environment, absolute ZERO people, no humans, no creatures)",
 			"environment concept art", "background art", "architectural scene illustration",
+			"location design sheet", "single coherent environment reference",
 		}
 	}
 
@@ -2055,10 +2075,13 @@ func composeScenePrompt(name, description, promptUsed string, isLiveAction bool)
 	if isLiveAction {
 		tags = append(tags,
 			// 避免模型脑补的物理属性
-			"three-point depth composition",
+			"three-point depth composition", "clear foreground, midground, background readability",
+			"architectural materials, weathering, practical lighting sources and atmosphere clearly readable",
+			"spatial continuity reference for production design",
 			"empty scene without any human presence",
 			// 强化无人
 			"absolutely nobody, vacant place",
+			"no silhouettes", "no portrait", "no hands", "no crowd", "no mannequin",
 			"cinematic motivated lighting", "detailed shadows",
 			"no anime", "no illustration", "no text", "no watermarks",
 		)
@@ -2066,8 +2089,11 @@ func composeScenePrompt(name, description, promptUsed string, isLiveAction bool)
 		tags = append(tags,
 			"场景概念图，纯空景，画面中绝对禁止出现任何人物或角色",
 			"突出空间结构与光线氛围",
+			"前景、中景、远景层次清晰，环境逻辑单一明确",
+			"建筑结构、陈设关系、材质与光源方向必须可读",
 			"(masterpiece:1.5)", "best quality", "clean illustration",
 			"no people", "no humans", "absolutely nobody", "vacant place",
+			"no silhouette", "no portrait", "no hands", "no crowd",
 			"no text", "no watermarks",
 		)
 	}
@@ -2083,6 +2109,7 @@ func composePropPrompt(name, description, promptUsed string, isLiveAction bool) 
 			"8K UHD", "tack-sharp focus throughout (f/8)", "no depth-of-field blur on subject",
 			"professional three-point studio lighting: key + fill + rim/edge light",
 			"clean white seamless studio backdrop",
+			"production prop reference", "single isolated hero prop", "full prop silhouette completely visible",
 		}
 		if name != "" {
 			tags = append(tags, name)
@@ -2096,12 +2123,14 @@ func composePropPrompt(name, description, promptUsed string, isLiveAction bool) 
 		tags = append(tags,
 			// Object isolation — strict no-person
 			"single hero prop isolated",
+			"three-quarter front product-reference angle unless the description specifies otherwise",
 			"(no human hands:1.8)", "(no people:1.8)", "(no persons:1.8)",
 			"(no faces:1.8)", "(no human figures:1.8)", "(no characters:1.8)",
-			"no cluttered background", "no secondary objects",
+			"no cluttered background", "no secondary objects", "no table clutter", "no holder stand unless explicitly described",
 			// Detail emphasis
 			"material surface texture macro-sharp", "authentic wear and patina if applicable",
 			"visible craftsmanship and construction details",
+			"mechanical seams, fasteners, engravings, edge wear, and manufacturing logic clearly readable when present",
 			"accurate scale and proportions",
 			// Anti-stylization
 			"no anime", "no cartoon", "no illustration", "no cel shading",
@@ -2115,6 +2144,7 @@ func composePropPrompt(name, description, promptUsed string, isLiveAction bool) 
 		// English structural tags
 		"prop design sheet", "product illustration", "no people", "no humans",
 		"isolated object on clean background", "hero shot",
+		"prop turnaround reference", "single isolated object design sheet", "clean silhouette",
 	}
 	if name != "" {
 		tags = append(tags, name)
@@ -2129,6 +2159,7 @@ func composePropPrompt(name, description, promptUsed string, isLiveAction bool) 
 		// Chinese context
 		"道具概念图，单一主体，绝对不出现任何人物",
 		"突出材质、结构、体积和细节",
+		"强调正三维轮廓、连接结构、接缝、刻纹、边缘磨损与功能构造可读性",
 		// Quality tokens
 		"(masterpiece:1.5)", "best quality", "ultra-detailed", "highly detailed illustration",
 		"clean illustration", "2D anime art style",
@@ -2136,6 +2167,7 @@ func composePropPrompt(name, description, promptUsed string, isLiveAction bool) 
 		"(no people:2.0)", "(no human figures:2.0)", "(no hands:2.0)",
 		"(no faces:2.0)", "(no characters:2.0)",
 		"clean white background", "single object",
+		"front or three-quarter readable presentation, no exploded-view collage unless explicitly described",
 		"(no text:2.0)", "no watermarks", "no labels",
 	)
 	return strings.Join(tags, ", ")

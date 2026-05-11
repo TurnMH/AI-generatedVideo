@@ -167,6 +167,7 @@ export function ScriptTab({
   const [showRegenerateDialog, setShowRegenerateDialog] = useState(false)
   const [showCreateEpisodeDialog, setShowCreateEpisodeDialog] = useState(false)
   const [showScriptPreviewDialog, setShowScriptPreviewDialog] = useState(false)
+  const [showSplitAdvancedSettings, setShowSplitAdvancedSettings] = useState(() => !project.text_model_id)
   const [creatingEpisode, setCreatingEpisode] = useState(false)
   const [savingSplitModel, setSavingSplitModel] = useState(false)
   const [savingImageModel, setSavingImageModel] = useState(false)
@@ -315,6 +316,7 @@ export function ScriptTab({
   const parsedTargetEpisodes = Number.parseInt(draftTargetEpisodes, 10)
   const hasValidTargetEpisodes = Number.isFinite(parsedTargetEpisodes) && parsedTargetEpisodes >= 1 && parsedTargetEpisodes <= 200
   const splitConfigReady = !!selectedSplitModel && hasValidTargetEpisodes
+  const shouldShowSplitSearch = splitModels.length > 8
   const filteredSplitModels = useMemo(() => {
     const keyword = splitModelSearch.trim().toLocaleLowerCase()
     if (!keyword) return splitModels
@@ -374,6 +376,39 @@ export function ScriptTab({
       : 0,
     Date.now()
   )
+  const splitProgressSummary = project.progress?.message
+    || (project.progress?.stage === 'episode_splitting'
+      ? `AI 正在识别集数边界与情节节点${project.progress?.episode_split?.total ? `（${project.progress.episode_split.completed}/${project.progress.episode_split.total} 集）` : '…'}`
+      : 'AI 正在分析剧本结构，自动识别分集边界与情节节点…')
+  const splitProgressPercent = project.progress?.episode_split?.total
+    ? Math.min(100, ((project.progress.episode_split.completed ?? 0) / Math.max(project.progress.episode_split.total, 1)) * 100)
+    : 0
+  const scenePreppingCount = episodes.filter((ep) => ep.status === 'script_prepping').length
+  const sceneSplittingCount = episodes.filter((ep) => ep.status === 'scene_splitting').length
+  const sceneReadyCount = episodes.filter((ep) => ep.status === 'scene_ready' || ep.status === 'done').length
+  const sceneProcessingSummary = (() => {
+    if (scenePreppingCount > 0 || sceneSplittingCount > 0) {
+      const parts: string[] = []
+      if (scenePreppingCount > 0) parts.push(`${scenePreppingCount} 集优化提示词`)
+      if (sceneSplittingCount > 0) parts.push(`${sceneSplittingCount} 集分镜拆分中`)
+      if (sceneReadyCount > 0) parts.push(`${sceneReadyCount} 集已就绪`)
+      return parts.join(' · ')
+    }
+    if (project.progress?.scene_split) {
+      const done = project.progress.scene_split.completed ?? 0
+      const total = project.progress.scene_split.total ?? episodes.length
+      if (done >= total && scriptTabStoryboards.length < total) {
+        return `分镜拆分完成，正在审查与精修提示词（${scriptTabStoryboards.length}/${total * 4} 个分镜已写入）`
+      }
+      return `分镜格式化进度：${done}/${total} 集`
+    }
+    return `已格式化 ${scriptTabStoryboards.length} 个分镜，正在继续处理剩余集数`
+  })()
+  const sceneProcessingProgress = project.progress?.scene_split?.total
+    ? Math.min(100, ((project.progress.scene_split.completed ?? 0) / Math.max(project.progress.scene_split.total, 1)) * 100)
+    : episodes.length > 0
+      ? Math.min(100, (scriptTabStoryboards.length / Math.max(episodes.length * 4, 1)) * 100)
+      : 0
 
   // Per-episode storyboard generation trigger
   const handleStartEpisodeStoryboard = async (episodeId: number) => {
@@ -1078,125 +1113,188 @@ export function ScriptTab({
                   <p className="text-xs text-surface-400">暂无可选文本模型</p>
                 ) : (
                   <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <Label className="text-xs font-medium text-surface-700">搜索筛选</Label>
-                        <span className="text-[11px] text-surface-400">支持中文搜索</span>
-                      </div>
-                      <div className="relative">
-                        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-surface-400" />
-                          <Input
-                            value={splitModelSearch}
-                            onChange={(event) => setSplitModelSearch(event.target.value)}
-                            placeholder="搜索模型、供应商、能力或备注"
-                            className="bg-white pl-8 pr-8"
-                          disabled={savingSplitModel || isProcessing}
-                        />
-                        {splitModelSearch ? (
-                          <button
-                            type="button"
-                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-surface-400 transition hover:bg-surface-100 hover:text-surface-600"
-                            onClick={() => setSplitModelSearch('')}
-                            disabled={savingSplitModel || isProcessing}
-                            aria-label="清空模型搜索"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium text-surface-700">选择模型</Label>
-                      <Select
-                        value={draftSplitModelId}
-                        onValueChange={handleSplitModelChange}
-                        disabled={savingSplitModel || isProcessing}
-                      >
-                        <SelectTrigger className="h-auto min-h-12 bg-white py-2.5">
-                          {selectedSplitModel ? (
-                            <div className="min-w-0 flex-1 text-left">
-                              <p className="truncate text-sm font-medium text-surface-900">{selectedSplitModel.name}</p>
-                              <p className="truncate text-[11px] text-surface-400">{selectedSplitModelRemark}</p>
-                            </div>
-                          ) : (
-                            <span className="truncate text-surface-400">手动选择分集模型</span>
-                          )}
-                        </SelectTrigger>
-                        <SelectContent>
-                          {filteredSplitModels.length > 0 ? (
-                            filteredSplitModels.map((model) => {
-                              const availability = getProjectModelAvailability(model)
-                              const remark = getSplitModelRemark(model)
-                              return (
-                                <SelectItem
-                                  key={model.id}
-                                  value={model.id.toString()}
-                                  textValue={`${model.name} ${getProviderLabel(model.provider)} ${remark}`}
-                                >
-                                  <div className="flex max-w-[360px] flex-col gap-1 py-0.5">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <span className="truncate font-medium">{model.name}</span>
-                                      <span className="text-xs text-surface-400">({getProviderLabel(model.provider)})</span>
-                                      <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${availability.color}`}>
-                                        {availability.label}
-                                      </span>
-                                      {model.is_default ? (
-                                        <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                                          默认
-                                        </Badge>
-                                      ) : null}
-                                    </div>
-                                    <p className="truncate text-[11px] leading-4 text-surface-500">{remark}</p>
-                                  </div>
-                                </SelectItem>
-                              )
-                            })
-                          ) : (
-                            <div className="px-3 py-2 text-xs text-surface-400">
-                              未找到匹配的模型，请尝试搜索模型名、供应商或“推理 / 长上下文”等中文关键词
-                            </div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium text-surface-700">目标分集数</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={200}
-                        step={1}
-                        value={draftTargetEpisodes}
-                        onChange={(event) => {
-                          setDraftTargetEpisodes(event.target.value.replace(/[^\d]/g, ''))
-                          setSplitSettingsDirty(true)
-                        }}
-                        placeholder="填写需要拆分的分集数量，例如 12"
-                        disabled={savingSplitModel || isProcessing}
-                        className="bg-white"
-                      />
-                      {recommendedEpisodeCount ? (
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] leading-4 text-emerald-700">
-                          <span>推荐 {recommendedEpisodeCount.count} 段（{recommendedEpisodeCount.reason}）</span>
-                          {draftTargetEpisodes !== String(recommendedEpisodeCount.count) ? (
-                            <button
-                              type="button"
-                              className="font-medium text-emerald-700 underline underline-offset-2"
-                              onClick={() => {
-                                setDraftTargetEpisodes(String(recommendedEpisodeCount.count))
-                                setSplitSettingsDirty(true)
-                              }}
-                            >
-                              采用推荐
-                            </button>
-                          ) : (
-                            <span className="text-emerald-600">已采用推荐值</span>
-                          )}
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-surface-900">分集高级设置</p>
+                          <Badge variant="outline" className="text-[11px]">
+                            {splitSettingsDirty ? '待应用' : '按当前配置执行'}
+                          </Badge>
+                          {selectedSplitModelAvailability ? (
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${selectedSplitModelAvailability.color}`}>
+                              {selectedSplitModelAvailability.label}
+                            </span>
+                          ) : null}
                         </div>
-                      ) : null}
+                        <p className="text-xs leading-5 text-surface-500">
+                          这一块默认收起。只有在需要更换分集模型、调整目标集数或手动覆盖推荐值时，再展开修改即可。
+                        </p>
+
+                        <div className="grid gap-2 md:grid-cols-3">
+                          <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
+                            <p className="text-[11px] text-surface-400">当前模型</p>
+                            <p className="truncate text-sm font-medium text-surface-900">{selectedSplitModel?.name || '未选择分集模型'}</p>
+                            <p className="truncate text-[11px] text-surface-500">{selectedSplitModelProvider || '展开后可切换模型'}</p>
+                          </div>
+                          <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
+                            <p className="text-[11px] text-surface-400">目标分集数</p>
+                            <p className="text-sm font-medium text-surface-900">{hasValidTargetEpisodes ? `${parsedTargetEpisodes} 集` : '未设置'}</p>
+                            <p className="text-[11px] text-surface-500">启动自动分集时会按这里的集数执行</p>
+                          </div>
+                          <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
+                            <p className="text-[11px] text-surface-400">智能建议</p>
+                            <p className="text-sm font-medium text-surface-900">
+                              {recommendedEpisodeCount ? `推荐 ${recommendedEpisodeCount.count} 集` : '暂无推荐'}
+                            </p>
+                            <p className="truncate text-[11px] text-surface-500">{recommendedEpisodeCount?.reason || '上传并解析剧本后自动计算推荐值'}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        {recommendedEpisodeCount && draftTargetEpisodes !== String(recommendedEpisodeCount.count) ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setDraftTargetEpisodes(String(recommendedEpisodeCount.count))
+                              setSplitSettingsDirty(true)
+                            }}
+                            disabled={savingSplitModel || isProcessing}
+                          >
+                            采用推荐
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setShowSplitAdvancedSettings((value) => !value)}
+                        >
+                          <ChevronDown className={`mr-1.5 h-3.5 w-3.5 transition-transform ${showSplitAdvancedSettings ? 'rotate-180' : ''}`} />
+                          {showSplitAdvancedSettings ? '收起设置' : '调整设置'}
+                        </Button>
+                      </div>
                     </div>
+
+                    {showSplitAdvancedSettings ? (
+                      <div className="space-y-4 border-t border-surface-100 pt-4">
+                        {shouldShowSplitSearch ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <Label className="text-xs font-medium text-surface-700">搜索筛选</Label>
+                              <span className="text-[11px] text-surface-400">支持中文搜索</span>
+                            </div>
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-surface-400" />
+                              <Input
+                                value={splitModelSearch}
+                                onChange={(event) => setSplitModelSearch(event.target.value)}
+                                placeholder="搜索模型、供应商、能力或备注"
+                                className="bg-white pl-8 pr-8"
+                                disabled={savingSplitModel || isProcessing}
+                              />
+                              {splitModelSearch ? (
+                                <button
+                                  type="button"
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-surface-400 transition hover:bg-surface-100 hover:text-surface-600"
+                                  onClick={() => setSplitModelSearch('')}
+                                  disabled={savingSplitModel || isProcessing}
+                                  aria-label="清空模型搜索"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-medium text-surface-700">选择模型</Label>
+                          <Select
+                            value={draftSplitModelId}
+                            onValueChange={handleSplitModelChange}
+                            disabled={savingSplitModel || isProcessing}
+                          >
+                            <SelectTrigger className="h-auto min-h-12 bg-white py-2.5">
+                              {selectedSplitModel ? (
+                                <div className="min-w-0 flex-1 text-left">
+                                  <p className="truncate text-sm font-medium text-surface-900">{selectedSplitModel.name}</p>
+                                  <p className="truncate text-[11px] text-surface-400">{selectedSplitModelRemark}</p>
+                                </div>
+                              ) : (
+                                <span className="truncate text-surface-400">手动选择分集模型</span>
+                              )}
+                            </SelectTrigger>
+                            <SelectContent>
+                              {filteredSplitModels.length > 0 ? (
+                                filteredSplitModels.map((model) => {
+                                  const availability = getProjectModelAvailability(model)
+                                  const remark = getSplitModelRemark(model)
+                                  return (
+                                    <SelectItem
+                                      key={model.id}
+                                      value={model.id.toString()}
+                                      textValue={`${model.name} ${getProviderLabel(model.provider)} ${remark}`}
+                                    >
+                                      <div className="flex max-w-[360px] flex-col gap-1 py-0.5">
+                                        <div className="flex min-w-0 items-center gap-2">
+                                          <span className="truncate font-medium">{model.name}</span>
+                                          <span className="text-xs text-surface-400">({getProviderLabel(model.provider)})</span>
+                                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${availability.color}`}>
+                                            {availability.label}
+                                          </span>
+                                          {model.is_default ? (
+                                            <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                                              默认
+                                            </Badge>
+                                          ) : null}
+                                        </div>
+                                        <p className="truncate text-[11px] leading-4 text-surface-500">{remark}</p>
+                                      </div>
+                                    </SelectItem>
+                                  )
+                                })
+                              ) : (
+                                <div className="px-3 py-2 text-xs text-surface-400">
+                                  未找到匹配的模型，请尝试搜索模型名、供应商或“推理 / 长上下文”等中文关键词
+                                </div>
+                              )}
+                            </SelectContent>
+                          </Select>
+                          {splitModelCapabilities.length > 0 ? (
+                            <p className="text-[11px] leading-4 text-surface-500">
+                              能力标签：{splitModelCapabilities.join(' · ')}
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-medium text-surface-700">目标分集数</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={200}
+                            step={1}
+                            value={draftTargetEpisodes}
+                            onChange={(event) => {
+                              setDraftTargetEpisodes(event.target.value.replace(/[^\d]/g, ''))
+                              setSplitSettingsDirty(true)
+                            }}
+                            placeholder="填写需要拆分的分集数量，例如 12"
+                            disabled={savingSplitModel || isProcessing}
+                            className="bg-white"
+                          />
+                          {recommendedEpisodeCount ? (
+                            <p className="text-[11px] leading-4 text-emerald-700">
+                              推荐 {recommendedEpisodeCount.count} 段（{recommendedEpisodeCount.reason}）
+                              {draftTargetEpisodes === String(recommendedEpisodeCount.count) ? '，当前已采用推荐值。' : '。'}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -1204,63 +1302,37 @@ export function ScriptTab({
           </div>
 
           {isProcessing && episodes.length === 0 ? (
-            <div className="rounded-xl border border-primary-100 bg-gradient-to-b from-primary-50/80 to-white px-6 py-8">
-              {/* AI 自动处理中 badge */}
-              <div className="mb-6 flex items-center justify-center">
-                <div className="inline-flex items-center gap-2 rounded-full border border-primary-200 bg-white px-4 py-1.5 shadow-sm">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-500" />
-                  <span className="text-sm font-medium text-primary-700">AI 自动处理中</span>
+            <div className="rounded-xl border border-primary-100 bg-gradient-to-b from-primary-50/80 to-white px-5 py-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-100">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary-600" />
                 </div>
-              </div>
-
-              {/* Pipeline steps */}
-              <div className="mx-auto max-w-md space-y-2.5">
-                {/* Step 1: active */}
-                <div className="flex items-start gap-3 rounded-xl border border-primary-200 bg-primary-50 px-4 py-3">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-500 shadow-sm">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-primary-900">分集生成进行中</p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-primary-600 shadow-sm">
+                      总控进度已同步到上方
+                    </span>
+                    {project.progress?.episode_split?.total ? (
+                      <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-medium text-primary-700">
+                        {project.progress.episode_split.completed ?? 0}/{project.progress.episode_split.total} 集
+                      </span>
+                    ) : null}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-primary-900">剧本解析与自动分集</p>
-                      <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-medium text-primary-600">进行中</span>
+                  <p className="mt-1 text-sm leading-6 text-primary-800">{splitProgressSummary}</p>
+                  <p className="mt-1 text-xs leading-5 text-primary-600">
+                    分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。
+                  </p>
+                  {splitProgressPercent > 0 ? (
+                    <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-primary-100">
+                      <div className="h-full rounded-full bg-primary-500 transition-all duration-700" style={{ width: `${splitProgressPercent}%` }} />
                     </div>
-                    <p className="mt-0.5 text-xs leading-5 text-primary-600">
-                      {project.progress?.message ||
-                        (project.progress?.stage === 'episode_splitting'
-                          ? `AI 正在识别集数边界与情节节点${project.progress?.episode_split?.total ? `（${project.progress.episode_split.completed}/${project.progress.episode_split.total} 集）` : '…'}`
-                          : 'AI 正在分析剧本结构，自动识别分集边界与情节节点…')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Step 2: pending */}
-                <div className="flex items-start gap-3 rounded-xl border border-surface-200 bg-surface-50/60 px-4 py-3 opacity-60">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface-300 bg-white">
-                    <span className="text-xs font-bold text-surface-400">2</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-surface-600">资源提取</p>
-                    <p className="mt-0.5 text-xs text-surface-400">分集完成后自动识别全部角色、场景、道具资源</p>
-                  </div>
-                </div>
-
-                {/* Step 3: pending */}
-                <div className="flex items-start gap-3 rounded-xl border border-surface-200 bg-surface-50/60 px-4 py-3 opacity-60">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-surface-300 bg-white">
-                    <span className="text-xs font-bold text-surface-400">3</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-surface-600">分镜序列格式化</p>
-                    <p className="mt-0.5 text-xs text-surface-400">资源就绪后自动拆分每集为分镜条目，格式化完成即可进入各集工作台</p>
-                  </div>
+                  ) : null}
                 </div>
               </div>
-
-              <p className="mt-5 text-center text-xs text-surface-400">无需手动操作，完成后页面自动刷新 · 整体约需 1–3 分钟</p>
 
               {scriptProgressStalled && (
-                <div className="mx-auto mt-4 max-w-md rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span>剧本解析超过 2 分钟无进展，可能已卡住。</span>
                     <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
@@ -1273,59 +1345,31 @@ export function ScriptTab({
             </div>
           ) : isProcessing && episodes.length > 0 ? (
             <div className="space-y-4">
-              {/* AI 自动处理中 · 分镜序列格式化 banner */}
               <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-purple-50 px-4 py-3.5">
                 <div className="flex items-start gap-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-100">
                     <Loader2 className="h-4 w-4 animate-spin text-violet-600" />
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-violet-900">AI 自动处理中 · 分镜序列格式化</p>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">步骤 3/3</span>
+                      <p className="text-sm font-semibold text-violet-900">分镜序列格式化进行中</p>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-violet-600 shadow-sm">
+                        总控进度已同步到上方
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">
+                        {sceneReadyCount}/{Math.max(episodes.length, 1)} 集就绪
+                      </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-violet-600">
+                    <p className="mt-1 text-sm leading-6 text-violet-800">
                       {project.progress?.message || `分集已完成（${episodes.length} 集），AI 正在逐集拆分分镜序列…`}
                     </p>
-                    <p className="mt-1 text-xs text-violet-500">
-                      {(() => {
-                        const preppingCount = episodes.filter(e => e.status === 'script_prepping').length
-                        const splittingCount = episodes.filter(e => e.status === 'scene_splitting').length
-                        const readyCount = episodes.filter(e => e.status === 'scene_ready' || e.status === 'done').length
-                        if (preppingCount > 0 || splittingCount > 0) {
-                          const parts: string[] = []
-                          if (preppingCount > 0) parts.push(`${preppingCount} 集优化提示词`)
-                          if (splittingCount > 0) parts.push(`${splittingCount} 集分镜拆分中`)
-                          if (readyCount > 0) parts.push(`${readyCount} 集已就绪`)
-                          return parts.join(' · ')
-                        }
-                        if (project.progress?.scene_split) {
-                          const done = project.progress.scene_split.completed ?? 0
-                          const total = project.progress.scene_split.total ?? episodes.length
-                          if (done >= total && scriptTabStoryboards.length < total) {
-                            return `分镜拆分完成，正在审查与精修提示词（${scriptTabStoryboards.length}/${total * 4} 个分镜已写入）`
-                          }
-                          return `分镜格式化进度：${done}/${total} 集`
-                        }
-                        return `已格式化 ${scriptTabStoryboards.length} 个分镜，正在继续处理剩余集数`
-                      })()}
-                    </p>
-                    {storyboardSplitTiming && (
+                    <p className="mt-1 text-xs text-violet-600">{sceneProcessingSummary}</p>
+                    {storyboardSplitTiming ? (
                       <p className="mt-1 text-[11px] text-violet-400">{storyboardSplitTiming}</p>
-                    )}
+                    ) : null}
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
-                      <div
-                        className="h-full rounded-full bg-violet-500 transition-all duration-700"
-                        style={{
-                          width: project.progress?.scene_split?.total
-                            ? `${Math.min(100, ((project.progress.scene_split.completed ?? 0) / project.progress.scene_split.total) * 100)}%`
-                            : episodes.length > 0
-                              ? `${Math.min(100, (scriptTabStoryboards.length / Math.max(episodes.length * 4, 1)) * 100)}%`
-                              : '0%',
-                        }}
-                      />
+                      <div className="h-full rounded-full bg-violet-500 transition-all duration-700" style={{ width: `${sceneProcessingProgress}%` }} />
                     </div>
-                    <p className="mt-1.5 text-[11px] text-violet-400">格式化完成后可进入各集工作台进行资源生成与出图，无需手动操作</p>
                     {scriptProgressStalled && (
                       <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
                         <div className="flex flex-wrap items-center justify-between gap-2">

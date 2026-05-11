@@ -52,8 +52,6 @@ export default function ProjectDetailPage() {
   // 是否处于自动管线模式（新建项目或手动触发自动分集时置 true）
   const [autoStoryboardPending, setAutoStoryboardPending] = useState(() => searchParams.get('autoStart') === '1')
   const autoOpenedRef = useRef(false)
-  // 首集资源就绪后自动触发分镜提取（每个项目只触发一次）
-  const autoFirstEpisodeDoneRef = useRef(false)
   const { toast } = useToast()
 
   const sharedEpisodeFilterValue = useMemo(
@@ -109,48 +107,6 @@ export default function ProjectDetailPage() {
     { refreshInterval: 5000 }
   )
   const stepperStoryboardsRaw = (storyboardsData as { data?: any[] })?.data ?? []
-
-  // 自动管线：第一集资源全部提取完毕且尚无分镜时，自动触发项目级分镜提取
-  useEffect(() => {
-    if (autoFirstEpisodeDoneRef.current) return
-    if (episodes.length === 0) return
-    const firstEp = episodes[0]
-    const assetsVisible = stepperAssetsRaw.filter(
-      (a: any) => a?.name !== '__extracting__' && a?.status !== 'extracting'
-    )
-    const firstEpAssets = assetsVisible.filter((a: any) =>
-      Array.isArray(a?.episode_ids) && a.episode_ids.map(Number).includes(firstEp.id)
-    )
-    if (firstEpAssets.length === 0) return
-    const allDone = firstEpAssets.every(
-      (a: any) => a?.status === 'completed' || a?.status === 'failed' || a?.status === 'qa_failed'
-    )
-    const hasActive = firstEpAssets.some(
-      (a: any) => a?.status === 'pending' || a?.status === 'generating' || a?.status === 'paused'
-    )
-    const hasStoryboards = stepperStoryboardsRaw.some(
-      (sb: any) => Number(sb?.episode_id) === firstEp.id
-    )
-    if (allDone && !hasActive && !hasStoryboards) {
-      autoFirstEpisodeDoneRef.current = true
-      // 自动触发分镜提取（静默，不弹 toast）
-      setIsExtractingStoryboards(true)
-      ;(projectAPI.extractStoryboards(projectId) as Promise<unknown>)
-        .then(() => {
-          void mutateStoryboardsData()
-          setTimeout(() => setIsExtractingStoryboards(false), 5000)
-          toast({
-            title: '✅ 第一集资源就绪，已自动开始分镜提取',
-            description: '系统检测到首集资源提取完毕，已自动触发全项目分镜拆分，请稍候查看各集分镜进度。',
-            variant: 'success',
-          })
-        })
-        .catch(() => {
-          setIsExtractingStoryboards(false)
-          autoFirstEpisodeDoneRef.current = false // 允许下次重试
-        })
-    }
-  }, [episodes, stepperAssetsRaw, stepperStoryboardsRaw, projectId, mutateStoryboardsData, toast])
 
   const episodeWorkspaceMeta = useMemo(() => {
     const meta = new Map<number, {
@@ -296,21 +252,118 @@ export default function ProjectDetailPage() {
 
   const projectProgress = project?.progress
   const projectTargetEpisodes = project?.target_episodes ?? 0
+  const structuredPhaseLabel = projectProgress?.phase_label?.trim()
+  const structuredNextStep = projectProgress?.next_step?.trim()
+  const projectAutoPrepRunning = selectedEpisodeId === null && episodes.length > 0 && projectProgress?.stage === 'script_prepping'
   const projectSplitInProgress = selectedEpisodeId === null && episodes.length === 0 && (
     project?.status === 'script_processing' || projectProgress?.stage === 'episode_splitting'
   )
   const projectSplitTotal = projectProgress?.episode_split?.total ?? 0
   const projectSplitCompleted = projectProgress?.episode_split?.completed ?? 0
-  const projectSplitTitle = projectProgress?.message?.trim()
+  const projectAutoPrepTotal = Math.max(projectProgress?.scene_split?.total ?? 0, episodes.length)
+  const projectAutoPrepCompleted = projectProgress?.scene_split?.completed ?? 0
+  const projectSplitTitle = structuredPhaseLabel
+    || projectProgress?.message?.trim()
     || (projectSplitTotal > 0
       ? `正在生成分集结构（${projectSplitCompleted}/${projectSplitTotal}）`
       : projectTargetEpisodes > 0
         ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
         : '正在拆分剧本并生成分集结构')
-  const projectSplitDescription = projectSplitTotal > 0
+  const projectSplitDescription = projectAutoPrepRunning
+    ? (projectProgress?.message?.trim() || `系统正在逐集润色、整理剧本格式并准备资源提取。当前已完成 ${projectAutoPrepCompleted}/${projectAutoPrepTotal} 集自动准备，后续资源与分镜会自动继续。`)
+    : structuredNextStep
+      ? `${structuredNextStep}${projectProgress?.current_episode && projectProgress?.total_episodes ? ` 当前进度 ${projectProgress.current_episode}/${projectProgress.total_episodes}。` : ''}`
+    : projectSplitTotal > 0
     ? `系统正在分析剧本、提取关键词并生成分集。当前已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿，完成后左侧分集列表会自动出现。`
     : '系统正在分析剧本内容并自动生成分集。生成完成后，左侧会自动出现分集列表，下面的剧本区也会刷新出最新结果。'
-  const projectSplitFootnote = '无需重复点击开始分集，当前页面会自动轮询刷新。分集完成后再继续资源提取、镜头拆分和出图。'
+  const projectSplitFootnote = projectAutoPrepRunning
+    ? '无需手动介入，系统会继续完成剧本润色、资源准备和后续分镜衔接。'
+    : '无需重复点击开始分集，当前页面会自动轮询刷新。分集完成后再继续资源提取、镜头拆分和出图。'
+  const projectAssetEntries = stepperAssetsRaw.filter(
+    (asset: any) => asset?.name !== '__extracting__' && asset?.status !== 'extracting'
+  )
+  const projectAssetCompleted = projectAssetEntries.filter((asset: any) => asset?.status === 'completed').length
+  const projectAssetActive = isExtractingAssets
+    || stepperAssetsRaw.some((asset: any) => asset?.status === 'extracting')
+    || projectAssetEntries.some((asset: any) => ['pending', 'generating', 'paused'].includes(asset?.status))
+  const projectAssetDone = projectAssetEntries.length > 0 && !projectAssetActive
+  const projectSceneReadyCount = episodes.filter((ep) => ep.status === 'scene_ready').length
+  const projectSceneFormatTotal = Math.max(projectProgress?.scene_split?.total ?? 0, episodes.length, projectTargetEpisodes)
+  const projectSceneFormatCompleted = Math.max(projectProgress?.scene_split?.completed ?? 0, projectSceneReadyCount)
+  const projectSceneFormatRunning = projectProgress?.stage === 'scene_splitting'
+    || (project?.status === 'script_processing' && episodes.length > 0)
+    || episodes.some((ep) => ep.status === 'scene_splitting')
+  const projectSceneFormatDone = episodes.length > 0 && projectSceneReadyCount >= episodes.length
+  const projectControlStages = [
+    {
+      key: 'split',
+      label: '剧本解析与自动分集',
+      status: projectSplitInProgress || projectAutoPrepRunning ? 'running' : episodes.length > 0 ? 'done' : 'pending',
+      detail: projectAutoPrepRunning
+        ? (projectProgress?.message?.trim() || `已完成 ${projectAutoPrepCompleted}/${projectAutoPrepTotal} 集自动准备，系统仍在继续处理剩余分集`)
+        : structuredNextStep
+          ? `${structuredNextStep}${projectProgress?.current_episode && projectProgress?.total_episodes ? `（${projectProgress.current_episode}/${projectProgress.total_episodes}）` : ''}`
+        : projectSplitInProgress
+        ? (projectProgress?.message?.trim()
+          || (projectSplitTotal > 0
+            ? `已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿`
+            : '正在分析剧本结构与章节边界'))
+        : episodes.length > 0
+          ? `已生成 ${episodes.length} 集，分集结果已同步到下方列表`
+          : '上传剧本后会自动开始拆分并生成分集结构',
+      progress: projectAutoPrepRunning
+        ? (projectAutoPrepTotal > 0 ? projectAutoPrepCompleted / Math.max(projectAutoPrepTotal, 1) : 0.35)
+        : projectSplitInProgress
+        ? (projectSplitTotal > 0 ? projectSplitCompleted / Math.max(projectSplitTotal, 1) : 0.35)
+        : episodes.length > 0
+          ? 1
+          : 0,
+    },
+    {
+      key: 'assets',
+      label: '资源提取与准备',
+      status: projectAssetActive ? 'running' : projectAssetDone ? 'done' : 'pending',
+      detail: projectAssetActive
+        ? (projectAssetEntries.length > 0
+          ? `已完成 ${projectAssetCompleted}/${projectAssetEntries.length} 项资源，剩余资源仍在处理中`
+          : '正在识别角色、场景、道具并准备后续素材')
+        : projectAssetDone
+          ? `已准备 ${projectAssetEntries.length} 项资源，可继续后续镜头处理`
+          : '分集完成后，资源提取进度会在这里继续显示',
+      progress: projectAssetDone
+        ? 1
+        : projectAssetEntries.length > 0
+          ? projectAssetCompleted / Math.max(projectAssetEntries.length, 1)
+          : projectAssetActive
+            ? 0.2
+            : 0,
+    },
+    {
+      key: 'scene',
+      label: '分镜序列格式化',
+      status: projectSceneFormatRunning ? 'running' : projectSceneFormatDone ? 'done' : 'pending',
+      detail: projectSceneFormatRunning
+        ? (projectProgress?.message?.trim()
+          || (projectSceneFormatTotal > 0
+            ? `已完成 ${projectSceneFormatCompleted}/${projectSceneFormatTotal} 集格式化`
+            : '正在逐集整理分镜序列'))
+        : projectSceneFormatDone
+          ? `已完成 ${projectSceneReadyCount}/${episodes.length} 集格式化，可进入各集工作台继续制作`
+          : '资源准备完成后，分镜序列格式化状态会在这里更新',
+      progress: projectSceneFormatDone
+        ? 1
+        : projectSceneFormatTotal > 0
+          ? projectSceneFormatCompleted / Math.max(projectSceneFormatTotal, 1)
+          : projectSceneFormatRunning
+            ? 0.2
+            : 0,
+    },
+  ] as const
+  const projectControlDoneCount = projectControlStages.filter((stage) => stage.status === 'done').length
+  const projectControlOverallProgress = Math.round(
+    (projectControlStages.reduce((sum, stage) => sum + Math.min(Math.max(stage.progress, 0), 1), 0) / projectControlStages.length) * 100
+  )
+  const projectControlCurrentStage = projectControlStages.find((stage) => stage.status === 'running')
 
   const selectedEpisode = selectedEpisodeId == null
     ? undefined
@@ -432,6 +485,39 @@ export default function ProjectDetailPage() {
     }
   }
 
+  const recoveryAction = (() => {
+    if (!project || (project.status !== 'failed' && project.status !== 'paused')) return null
+    const assetExtractionRunning = stepperAssetsRaw.some((asset: any) => asset?.name === '__extracting__' || asset?.status === 'extracting')
+    if (assetExtractionRunning) return null
+    const hasAssets = stepperAssetsRaw.some((asset: any) => asset?.name !== '__extracting__')
+    const hasStoryboards = stepperStoryboardsRaw.length > 0
+    if (episodes.length === 0) {
+      return {
+        label: '重新开始分集',
+        description: '当前还没有可用分集，建议重新发起分集生成。',
+        onClick: async () => {
+          await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
+          toast({ title: '已重新提交分集任务', description: '系统会重新拆分剧本并继续自动流程。', variant: 'success' })
+        },
+      }
+    }
+    if (!hasAssets) {
+      return {
+        label: '继续资源提取',
+        description: '已保留现有分集，建议从资源提取继续。',
+        onClick: handleExtractProjectAssets,
+      }
+    }
+    if (!hasStoryboards) {
+      return {
+        label: '继续分镜拆分',
+        description: '资源已有结果，建议直接继续分镜拆分。',
+        onClick: handleExtractProjectStoryboards,
+      }
+    }
+    return null
+  })()
+
   const projectQuickActions = [
     {
       icon: <Sparkles className="h-4 w-4 text-emerald-300" />,
@@ -510,32 +596,45 @@ export default function ProjectDetailPage() {
     <div className="space-y-4">
       {/* Pipeline 状态横幅 — 资源提取/分镜/剧本处理中时显示醒目提示 */}
       {(() => {
+        const assetExtractionRunning = stepperAssetsRaw.some(
+          (a: any) => a?.name === '__extracting__' || a?.status === 'extracting'
+        )
         const assetActiveCount = stepperAssetsRaw.filter(
           (a: any) => a?.name !== '__extracting__' && ['pending', 'generating', 'paused'].includes(a?.status)
         ).length
-        const isScriptProcessing = project.status === 'script_processing' || project.progress?.stage === 'episode_splitting'
-        const isAssetExtracting = assetActiveCount > 0 || isExtractingAssets
+        const isScriptProcessing = project.status === 'script_processing'
+          || project.progress?.stage === 'episode_splitting'
+          || project.progress?.stage === 'script_prepping'
+        const isAssetExtracting = assetExtractionRunning || assetActiveCount > 0 || isExtractingAssets
         const isStoryboardRunning = isExtractingStoryboards || (() => {
           return stepperStoryboardsRaw.some((sb: any) => ['pending', 'generating', 'paused'].includes(sb?.status))
         })()
 
-        if (!isScriptProcessing && !isAssetExtracting && !isStoryboardRunning) return null
+        const showRecoveryBanner = project.status === 'failed' || project.status === 'paused'
+        if (!showRecoveryBanner && !isScriptProcessing && !isAssetExtracting && !isStoryboardRunning) return null
 
         const banners: Array<{ icon: React.ReactNode; title: string; desc: string; step: string; color: string }> = []
         if (isScriptProcessing) {
+          const postSplitRunning = !projectSplitInProgress && project.progress?.stage === 'script_prepping' && episodes.length > 0
           banners.push({
             icon: <Loader2 className="h-5 w-5 animate-spin text-blue-300" />,
-            title: 'AI 正在分析剧本并自动拆分分集',
-            desc: '系统正在调用大语言模型解析剧本结构、提取分集大纲，完成后分集列表会自动出现。无需重复操作，请耐心等待。',
-            step: '步骤 1/3',
+            title: postSplitRunning ? 'AI 正在润色剧本并自动衔接资源/分镜' : 'AI 正在分析剧本并自动拆分分集',
+            desc: postSplitRunning
+              ? (project.progress?.message?.trim() || '系统正在逐集润色、审查并套用格式化剧本，完成后会自动继续资源提取与分镜流程。')
+              : '系统正在调用大语言模型解析剧本结构、提取分集大纲，完成后分集列表会自动出现。无需重复操作，请耐心等待。',
+            step: postSplitRunning ? '自动链路' : '步骤 1/3',
             color: 'border-blue-400/30 bg-blue-500/10',
           })
         }
         if (isAssetExtracting) {
           banners.push({
             icon: <Loader2 className="h-5 w-5 animate-spin text-amber-300" />,
-            title: `资源提取进行中（${assetActiveCount} 个处理队列）`,
-            desc: 'AI 大模型正在识别并提取剧本中的角色、场景、道具等资产，提取完毕后将自动衔接分镜拆分流程。',
+            title: assetExtractionRunning
+              ? '资源条目提取中'
+              : `资源图生成中（${assetActiveCount} 个处理队列）`,
+            desc: assetExtractionRunning
+              ? 'AI 正在识别剧本中的角色、场景、道具等资源条目。识别完成后会自动继续分镜拆分，资源图生成将在后台继续进行。'
+              : '资源图正在后台生成中，分镜拆分不再等待所有资源图完成，可继续并行推进。',
             step: '步骤 2/3',
             color: 'border-amber-400/30 bg-amber-500/10',
           })
@@ -552,6 +651,35 @@ export default function ProjectDetailPage() {
 
         return (
           <div className="space-y-2">
+            {showRecoveryBanner ? (
+              <div className="flex items-start gap-4 rounded-2xl border border-red-300/40 bg-gradient-to-r from-red-950/85 to-slate-900/80 px-5 py-4 text-white backdrop-blur-sm">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10">
+                  <AlertTriangle className="h-5 w-5 text-red-200" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-white">{project.status === 'paused' ? '流程已暂停' : '流程已中断'}</span>
+                    <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/70">恢复建议</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-white/75">
+                    {structuredPhaseLabel || projectProgress?.message || '当前自动流程没有完整结束，请从当前可用阶段继续。'}
+                  </p>
+                  <p className="mt-1 text-[11px] text-white/55">
+                    {recoveryAction?.description || structuredNextStep || '建议优先从当前阶段继续推进，避免重复消耗。'}
+                  </p>
+                  {recoveryAction ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void recoveryAction.onClick()}
+                      className="mt-3 border-white/20 bg-white/10 text-white hover:bg-white/20"
+                    >
+                      {recoveryAction.label}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {banners.map((b, idx) => (
               <div
                 key={idx}
@@ -1066,6 +1194,83 @@ export default function ProjectDetailPage() {
                         <p className="mt-2 text-sm leading-6 text-surface-600">
                           在这里统览整个项目的剧本拆分、资源提取、分镜制作与后续成片进度，再决定优先进入哪一集继续处理。
                         </p>
+                        <div className="mt-4 rounded-2xl border border-primary-100 bg-gradient-to-br from-primary-50 via-white to-surface-50 p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="rounded-full border border-primary-200 bg-white px-2.5 py-1 font-medium text-primary-700">
+                                  {projectControlCurrentStage ? `当前进行中 · ${projectControlCurrentStage.label}` : '项目总控进度'}
+                                </span>
+                                <span className="rounded-full border border-surface-200 bg-white px-2.5 py-1 text-surface-500">
+                                  已完成 {projectControlDoneCount}/3 阶段
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm font-medium text-surface-900">
+                                {projectControlCurrentStage
+                                  ? projectControlCurrentStage.detail
+                                  : projectControlDoneCount === projectControlStages.length
+                                    ? '前置准备已全部完成，可以直接进入分集工作台继续资源、分镜和成片流程。'
+                                    : '当前暂无进行中的自动处理任务，后续状态会统一展示在这里。'}
+                              </p>
+                              <p className="mt-1 text-xs leading-5 text-surface-500">
+                                分集、资源提取、分镜序列格式化等自动处理状态会同步汇总在这里，无需来回切换模块确认进度。
+                              </p>
+                            </div>
+                            <div className="min-w-[112px] rounded-2xl border border-primary-100 bg-white px-3 py-2 text-right shadow-sm">
+                              <p className="text-[11px] uppercase tracking-[0.18em] text-surface-400">Progress</p>
+                              <p className="mt-1 text-2xl font-semibold text-surface-900">{projectControlOverallProgress}%</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <div className="h-2 overflow-hidden rounded-full bg-primary-100">
+                              <div
+                                className="h-full rounded-full bg-primary-500 transition-all duration-500"
+                                style={{ width: `${projectControlOverallProgress}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="mt-4 grid gap-3 md:grid-cols-3">
+                            {projectControlStages.map((stage, index) => {
+                              const isRunning = stage.status === 'running'
+                              const isDone = stage.status === 'done'
+                              return (
+                                <div
+                                  key={stage.key}
+                                  className={`rounded-2xl border px-4 py-3 transition ${
+                                    isRunning
+                                      ? 'border-primary-200 bg-primary-50'
+                                      : isDone
+                                        ? 'border-emerald-200 bg-emerald-50/80'
+                                        : 'border-surface-200 bg-white'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <div
+                                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                                        isRunning
+                                          ? 'bg-primary-500 text-white'
+                                          : isDone
+                                            ? 'bg-emerald-500 text-white'
+                                            : 'border border-surface-200 bg-surface-50 text-surface-500'
+                                      }`}
+                                    >
+                                      {isRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-semibold text-surface-900">{stage.label}</p>
+                                      <p className={`text-[11px] ${isRunning ? 'text-primary-600' : isDone ? 'text-emerald-600' : 'text-surface-400'}`}>
+                                        {isRunning ? '处理中' : isDone ? '已完成' : '待开始'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <p className="mt-2 text-xs leading-5 text-surface-600">{stage.detail}</p>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
                       </div>
 
                     </div>

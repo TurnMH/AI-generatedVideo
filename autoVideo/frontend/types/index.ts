@@ -71,6 +71,10 @@ export interface ProjectProgress {
   episode_split?: StageProgress
   scene_split?: StageProgress
   message?: string
+  phase_label?: string
+  next_step?: string
+  current_episode?: number
+  total_episodes?: number
   started_at?: string
   updated_at?: string
   // Legacy fields for backward compat

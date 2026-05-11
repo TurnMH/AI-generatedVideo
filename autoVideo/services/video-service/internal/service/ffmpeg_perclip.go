@@ -163,6 +163,21 @@ func (f *FFmpegService) ConcatLocalNormalizedClips(
 	transition string,
 	transitionDur float64,
 ) (string, error) {
+	transitions := make([]string, maxInt(len(localPaths)-1, 0))
+	durations := make([]float64, len(transitions))
+	for i := range transitions {
+		transitions[i] = transition
+		durations[i] = transitionDur
+	}
+	return f.ConcatLocalNormalizedClipsWithTransitionPlan(ctx, localPaths, transitions, durations)
+}
+
+func (f *FFmpegService) ConcatLocalNormalizedClipsWithTransitionPlan(
+	ctx context.Context,
+	localPaths []string,
+	transitions []string,
+	transitionDurations []float64,
+) (string, error) {
 	if len(localPaths) == 0 {
 		return "", fmt.Errorf("no clips to concat")
 	}
@@ -172,7 +187,7 @@ func (f *FFmpegService) ConcatLocalNormalizedClips(
 	workDir := filepath.Dir(localPaths[0])
 	merged := filepath.Join(workDir, "merged.mp4")
 
-	if transition == "" || transition == "none" {
+	if len(transitions) == 0 {
 		concatFile := filepath.Join(workDir, "concat.txt")
 		var sb strings.Builder
 		for _, p := range localPaths {
@@ -193,11 +208,8 @@ func (f *FFmpegService) ConcatLocalNormalizedClips(
 		return merged, nil
 	}
 
-	// xfade + acrossfade path — same algorithm as ConcatClipsWithTransitions but
+	// xfade + acrossfade path — same algorithm as ConcatClipsWithTransitionPlan but
 	// inputs are already normalized.
-	if transitionDur <= 0 {
-		transitionDur = 0.5
-	}
 	durations := make([]float64, len(localPaths))
 	for i, p := range localPaths {
 		d, err := f.ProbeDuration(ctx, p)
@@ -210,26 +222,7 @@ func (f *FFmpegService) ConcatLocalNormalizedClips(
 	for _, p := range localPaths {
 		inputs = append(inputs, "-i", p)
 	}
-	var fc strings.Builder
-	var offset float64
-	prevV := "[0:v]"
-	prevA := "[0:a]"
-	for i := 1; i < len(localPaths); i++ {
-		offset += durations[i-1] - transitionDur
-		nextV := fmt.Sprintf("[v%d]", i)
-		nextA := fmt.Sprintf("[a%d]", i)
-		if i == len(localPaths)-1 {
-			nextV = "[vout]"
-			nextA = "[aout]"
-		}
-		fmt.Fprintf(&fc, "%s[%d:v]xfade=transition=%s:duration=%.3f:offset=%.3f%s;",
-			prevV, i, transition, transitionDur, offset, nextV)
-		fmt.Fprintf(&fc, "%s[%d:a]acrossfade=d=%.3f%s;",
-			prevA, i, transitionDur, nextA)
-		prevV = nextV
-		prevA = nextA
-	}
-	fcStr := strings.TrimRight(fc.String(), ";")
+	fcStr := buildXfadeFilterComplex(durations, transitions, transitionDurations)
 	args := inputs
 	args = append(args,
 		"-filter_complex", fcStr,

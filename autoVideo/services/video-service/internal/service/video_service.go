@@ -302,6 +302,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	perClipMoods := extractStringSlice(task.RenderConfig, "moods", len(imageURLs))
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, len(imageURLs))
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", len(imageURLs))
+	sceneGroupKeys := []string(task.SceneGroupKeys)
 	assetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, collectUniqueInt64(perClipAssetIDs))
 	// opt-p7: merge Kafka-provided motion descriptions (storyboard camera text) into
 	// per-clip prompts, overriding RenderConfig entries when present.
@@ -326,6 +327,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			resolvedMotionMode,
 			resolvedStylePreset,
 			charDescriptions,
+			sceneGroupKeys,
+			perClipCameras,
+			perClipMoods,
 		); len(refined) > 0 {
 			perClipDescs = refined
 		}
@@ -347,7 +351,6 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 
 	// Create clip records
 	// 如果是串行模式，从 task.SceneGroupKeys 填充每个 clip 的场景分组和组内序号。
-	sceneGroupKeys := []string(task.SceneGroupKeys)
 	sceneSeqCounter := map[string]int{}
 	var clips []*model.VideoClip
 	for i, imgURL := range imageURLs {
@@ -655,10 +658,20 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 
 	// Collect succeeded clip URLs in order (skip failed)
 	var clipURLs []string
+	var composedDialogues []string
+	var composedSceneDescs []string
+	var composedSceneGroupKeys []string
+	var composedCameras []string
+	var composedMoods []string
 	var totalDur float64
 	for _, c := range clips {
 		if c.Status == model.StatusSucceeded && c.ClipURL != "" {
 			clipURLs = append(clipURLs, c.ClipURL)
+			composedDialogues = append(composedDialogues, stringSliceValue(perClipDialogues, c.ClipOrder))
+			composedSceneDescs = append(composedSceneDescs, stringSliceValue(perClipDescs, c.ClipOrder))
+			composedSceneGroupKeys = append(composedSceneGroupKeys, strings.TrimSpace(c.SceneGroupKey))
+			composedCameras = append(composedCameras, stringSliceValue(perClipCameras, c.ClipOrder))
+			composedMoods = append(composedMoods, stringSliceValue(perClipMoods, c.ClipOrder))
 			totalDur += c.DurationSec
 		}
 	}
@@ -676,18 +689,13 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 
 	// Concatenate clips (aspect-ratio-aware)
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageConcating)
-	transition, _ := task.RenderConfig["transition"].(string)
-	transitionDur, _ := task.RenderConfig["transition_duration"].(float64)
-	// Default to dissolve crossfade when user hasn't explicitly set a transition.
-	// "none" opts out; anything else uses xfade.
-	if transition == "" && len(clipURLs) > 1 {
-		transition = "dissolve"
-	}
-	if transition == "none" {
-		transition = ""
-	}
-	if transitionDur <= 0 && transition != "" {
-		transitionDur = 0.5
+	transitionPlan, transitionDurations := resolveTransitionPlan(task.RenderConfig, len(clipURLs), composedSceneGroupKeys, composedSceneDescs, composedCameras, composedMoods)
+	if len(transitionPlan) > 0 {
+		s.logger.Info("video transition plan resolved",
+			zap.Int64("task_id", taskID),
+			zap.Strings("transitions", transitionPlan),
+			zap.Float64s("transition_durations", transitionDurations),
+		)
 	}
 
 	// Manual override: when the generator embeds native audio, skip external
@@ -702,15 +710,15 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// that the legacy "merge-all-audio-then-attach" flow could introduce.
 	mergedPath := ""
 	perClipAudioUsed := false
-	if s.dubbing != nil && allowDubbingAttach && hasAnyNonEmpty(perClipDialogues) && len(perClipDialogues) >= len(clipURLs) {
+	if s.dubbing != nil && allowDubbingAttach && hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) {
 		mergedPath, perClipAudioUsed = s.tryPerClipAudioCompose(
-			ctx, task, clipURLs, perClipDialogues, transition, transitionDur,
+			ctx, task, clipURLs, composedDialogues, transitionPlan, transitionDurations,
 		)
 	}
 
 	if !perClipAudioUsed {
 		var err error
-		mergedPath, err = s.ffmpeg.ConcatClipsWithTransitions(ctx, clipURLs, task.VideoMode, transition, transitionDur)
+		mergedPath, err = s.ffmpeg.ConcatClipsWithTransitionPlan(ctx, clipURLs, task.VideoMode, transitionPlan, transitionDurations)
 		if err != nil {
 			_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
 			s.markFailed(ctx, taskID, err.Error())
@@ -725,7 +733,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	subtitleText := task.SubtitleText
 	// If no explicit subtitle text, build from per-clip dialogues.
 	if subtitleText == "" {
-		subtitleText = joinDialogues(perClipDialogues)
+		subtitleText = joinDialogues(composedDialogues)
 	}
 	subtitleURL := "" // VTT subtitle URL from dubbing task
 	if nativeAudio && !attachDubbing {
@@ -852,10 +860,28 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	}
 
 	var clipURLs []string
+	var composedDialogues []string
+	var composedSceneDescs []string
+	var composedSceneGroupKeys []string
+	var composedCameras []string
+	var composedMoods []string
 	var totalDur float64
+	renderClipCount := len(task.ImageURLs)
+	if renderClipCount == 0 {
+		renderClipCount = len(clips)
+	}
+	perClipDialogues := extractDialogues(task.RenderConfig, renderClipCount)
+	perClipDescs := extractSceneDescriptions(task.RenderConfig, renderClipCount)
+	perClipCameras := extractStringSlice(task.RenderConfig, "camera_movements", renderClipCount)
+	perClipMoods := extractStringSlice(task.RenderConfig, "moods", renderClipCount)
 	for _, c := range clips {
 		if c.Status == model.StatusSucceeded && c.ClipURL != "" {
 			clipURLs = append(clipURLs, c.ClipURL)
+			composedDialogues = append(composedDialogues, stringSliceValue(perClipDialogues, c.ClipOrder))
+			composedSceneDescs = append(composedSceneDescs, stringSliceValue(perClipDescs, c.ClipOrder))
+			composedSceneGroupKeys = append(composedSceneGroupKeys, strings.TrimSpace(c.SceneGroupKey))
+			composedCameras = append(composedCameras, stringSliceValue(perClipCameras, c.ClipOrder))
+			composedMoods = append(composedMoods, stringSliceValue(perClipMoods, c.ClipOrder))
 			totalDur += c.DurationSec
 		}
 	}
@@ -867,18 +893,8 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	_ = s.repo.UpdateTaskStatus(ctx, taskID, model.StatusProcessing, "", "", 0)
 
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageConcating)
-	transition2, _ := task.RenderConfig["transition"].(string)
-	transitionDur2, _ := task.RenderConfig["transition_duration"].(float64)
-	if transition2 == "" && len(clipURLs) > 1 {
-		transition2 = "dissolve"
-	}
-	if transition2 == "none" {
-		transition2 = ""
-	}
-	if transitionDur2 <= 0 && transition2 != "" {
-		transitionDur2 = 0.5
-	}
-	mergedPath, err := s.ffmpeg.ConcatClipsWithTransitions(ctx, clipURLs, task.VideoMode, transition2, transitionDur2)
+	transitionPlan2, transitionDurations2 := resolveTransitionPlan(task.RenderConfig, len(clipURLs), composedSceneGroupKeys, composedSceneDescs, composedCameras, composedMoods)
+	mergedPath, err := s.ffmpeg.ConcatClipsWithTransitionPlan(ctx, clipURLs, task.VideoMode, transitionPlan2, transitionDurations2)
 	if err != nil {
 		_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
 		s.markFailed(ctx, taskID, err.Error())
@@ -895,7 +911,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	subtitleText := task.SubtitleText
 	// If no explicit subtitle text, build from per-clip dialogues stored in render_config.
 	if subtitleText == "" {
-		subtitleText = joinDialogues(extractDialogues(task.RenderConfig, len(clipURLs)))
+		subtitleText = joinDialogues(composedDialogues)
 	}
 	// Manual override: attach_dubbing=true lets users mix external dubbing
 	// even when the video model already embeds native audio.
@@ -1053,10 +1069,27 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	perClipMoods := extractStringSlice(task.RenderConfig, "moods", totalClips)
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, totalClips)
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", totalClips)
+	sceneGroupKeys := []string(task.SceneGroupKeys)
 	charDescriptions := s.fetchCharacterDescriptions(ctx, task.ProjectID)
 	retryAllCharURLs, retryCharByName := s.fetchCharacterImageMap(ctx, task.ProjectID)
 	retryAssetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, collectUniqueInt64(perClipAssetIDs))
 	retryClipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
+	if s.motionPromptSvc != nil {
+		family := videoModelFamily(resolvedModelName)
+		if refined := s.motionPromptSvc.RefineBatch(
+			ctx,
+			perClipDescs,
+			family,
+			task.MotionMode,
+			task.StylePreset,
+			charDescriptions,
+			sceneGroupKeys,
+			perClipCameras,
+			perClipMoods,
+		); len(refined) > 0 {
+			perClipDescs = refined
+		}
+	}
 
 	retryClipCharURLs := perSceneCharacterImages(retryAllCharURLs, retryCharByName, clipScenePersons(perClipSceneChars, clip.ClipOrder))
 	retryPrompt := clipMotionPromptWithHints(
@@ -1862,6 +1895,13 @@ func joinDialogues(dialogues []string) string {
 	return strings.Join(parts, "\n")
 }
 
+func stringSliceValue(items []string, idx int) string {
+	if idx < 0 || idx >= len(items) {
+		return ""
+	}
+	return strings.TrimSpace(items[idx])
+}
+
 // extractSceneCharacters pulls per-clip character name lists from RenderConfig
 // (stored as [][]string under key "scene_characters"). Returns a slice of
 // length n; missing entries are empty slices so the caller can fall back to
@@ -1995,6 +2035,35 @@ func extractDurations(renderConfig model.RenderConfig, n int) []float64 {
 	return result
 }
 
+func extractFloatSlice(renderConfig model.RenderConfig, key string, n int) []float64 {
+	result := make([]float64, n)
+	if len(renderConfig) == 0 {
+		return result
+	}
+	raw, ok := renderConfig[key]
+	if !ok {
+		return result
+	}
+	switch v := raw.(type) {
+	case []float64:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = v[i]
+		}
+	case []interface{}:
+		for i := 0; i < n && i < len(v); i++ {
+			switch fv := v[i].(type) {
+			case float64:
+				result[i] = fv
+			case int:
+				result[i] = float64(fv)
+			case int64:
+				result[i] = float64(fv)
+			}
+		}
+	}
+	return result
+}
+
 // extractStringSlice pulls a per-clip string array from RenderConfig by key.
 func extractStringSlice(renderConfig model.RenderConfig, key string, n int) []string {
 	result := make([]string, n)
@@ -2018,6 +2087,133 @@ func extractStringSlice(renderConfig model.RenderConfig, key string, n int) []st
 		}
 	}
 	return result
+}
+
+func resolveTransitionPlan(renderConfig model.RenderConfig, clipCount int, sceneGroupKeys, perClipDescs, perClipCameras, perClipMoods []string) ([]string, []float64) {
+	cutCount := clipCount - 1
+	if cutCount <= 0 {
+		return nil, nil
+	}
+	fallbackDur := renderConfigFloat(renderConfig, "transition_duration")
+	if fallbackDur <= 0 {
+		fallbackDur = 0.5
+	}
+	semanticTransitions, semanticDurations := buildSemanticTransitionPlan(cutCount, sceneGroupKeys, perClipDescs, perClipCameras, perClipMoods, fallbackDur)
+
+	transition := strings.ToLower(strings.TrimSpace(renderConfigString(renderConfig, "transition")))
+	if transition == "none" {
+		return nil, nil
+	}
+	if transition != "" {
+		transitions := make([]string, cutCount)
+		durations := make([]float64, cutCount)
+		for i := 0; i < cutCount; i++ {
+			transitions[i] = transition
+			durations[i] = fallbackDur
+		}
+		return transitions, durations
+	}
+
+	explicitTransitions := extractStringSlice(renderConfig, "transitions", cutCount)
+	explicitDurations := extractFloatSlice(renderConfig, "transition_durations", cutCount)
+	if hasAnyNonEmpty(explicitTransitions) {
+		transitions := make([]string, cutCount)
+		durations := make([]float64, cutCount)
+		for i := 0; i < cutCount; i++ {
+			if explicit := strings.ToLower(strings.TrimSpace(stringSliceValue(explicitTransitions, i))); explicit != "" {
+				if explicit == "none" {
+					transitions[i] = "fade"
+					durations[i] = 0.08
+					continue
+				}
+				transitions[i] = explicit
+			} else {
+				transitions[i] = semanticTransitions[i]
+			}
+			if i < len(explicitDurations) && explicitDurations[i] > 0 {
+				durations[i] = explicitDurations[i]
+			} else {
+				durations[i] = semanticDurations[i]
+			}
+		}
+		return transitions, durations
+	}
+
+	return semanticTransitions, semanticDurations
+}
+
+func buildSemanticTransitionPlan(cutCount int, sceneGroupKeys, perClipDescs, perClipCameras, perClipMoods []string, fallbackDur float64) ([]string, []float64) {
+	transitions := make([]string, cutCount)
+	durations := make([]float64, cutCount)
+	for i := 0; i < cutCount; i++ {
+		transitions[i], durations[i] = inferSemanticTransition(i, sceneGroupKeys, perClipDescs, perClipCameras, perClipMoods, fallbackDur)
+	}
+	return transitions, durations
+}
+
+func inferSemanticTransition(cutIdx int, sceneGroupKeys, perClipDescs, perClipCameras, perClipMoods []string, fallbackDur float64) (string, float64) {
+	leftScene := stringSliceValue(sceneGroupKeys, cutIdx)
+	rightScene := stringSliceValue(sceneGroupKeys, cutIdx+1)
+	leftDesc := stringSliceValue(perClipDescs, cutIdx)
+	rightDesc := stringSliceValue(perClipDescs, cutIdx+1)
+	leftCamera := stringSliceValue(perClipCameras, cutIdx)
+	rightCamera := stringSliceValue(perClipCameras, cutIdx+1)
+	leftMood := stringSliceValue(perClipMoods, cutIdx)
+	rightMood := stringSliceValue(perClipMoods, cutIdx+1)
+	combined := strings.ToLower(strings.Join([]string{leftDesc, rightDesc, leftCamera, rightCamera, leftMood, rightMood}, " "))
+	sameScene := leftScene != "" && strings.EqualFold(leftScene, rightScene)
+
+	if leftScene != "" || rightScene != "" {
+		if !sameScene {
+			if containsTransitionCue(combined, "dream", "memory", "flashback", "回忆", "梦境", "幻觉", "朦胧") {
+				return "dissolve", maxFloat(0.36, fallbackDur*0.8)
+			}
+			return "fade", maxFloat(0.32, fallbackDur*0.72)
+		}
+	}
+
+	if containsTransitionCue(combined,
+		"run", "running", "rush", "chase", "fight", "impact", "sprint",
+		"冲", "奔跑", "追", "打斗", "挥", "撞", "快速", "急促", "激烈", "紧张", "tense", "dramatic", "epic",
+	) {
+		return directionalWipeTransition(leftCamera, rightCamera, leftDesc, rightDesc), 0.22
+	}
+
+	if containsTransitionCue(combined,
+		"warm", "gentle", "romantic", "calm", "hopeful", "soft",
+		"温暖", "柔和", "浪漫", "平静", "抒情", "柔缓", "希望",
+	) {
+		return "dissolve", 0.28
+	}
+
+	return "fade", maxFloat(0.18, fallbackDur*0.52)
+}
+
+func directionalWipeTransition(values ...string) string {
+	combined := strings.ToLower(strings.Join(values, " "))
+	if containsTransitionCue(combined, "left", "向左", "左移", "左摇", "左跟") {
+		return "wipeleft"
+	}
+	if containsTransitionCue(combined, "right", "向右", "右移", "右摇", "右跟") {
+		return "wiperight"
+	}
+	return "wiperight"
+}
+
+func containsTransitionCue(text string, cues ...string) bool {
+	for _, cue := range cues {
+		if cue != "" && strings.Contains(text, strings.ToLower(cue)) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func extractInt64Matrix(renderConfig model.RenderConfig, key string, n int) [][]int64 {
@@ -2880,6 +3076,25 @@ func renderConfigInt(renderConfig model.RenderConfig, key string) int {
 		n := 0
 		fmt.Sscanf(v, "%d", &n)
 		return n
+	}
+	return 0
+}
+
+func renderConfigFloat(renderConfig model.RenderConfig, key string) float64 {
+	if len(renderConfig) == 0 {
+		return 0
+	}
+	switch v := renderConfig[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		var out float64
+		fmt.Sscanf(v, "%f", &out)
+		return out
 	}
 	return 0
 }

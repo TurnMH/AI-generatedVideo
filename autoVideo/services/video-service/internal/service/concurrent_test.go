@@ -152,6 +152,9 @@ func (r *fakeRepo) UpdateClip(_ context.Context, clip *model.VideoClip) error   
 func (r *fakeRepo) GetClipsByTaskID(_ context.Context, taskID int64) ([]model.VideoClip, error) {
 	return nil, nil
 }
+func (r *fakeRepo) GetClipsByEpisode(_ context.Context, projectID, episodeID int64) ([]model.VideoClip, error) {
+	return nil, nil
+}
 func (r *fakeRepo) DeleteClipsByTaskID(_ context.Context, _ int64) error          { return nil }
 func (r *fakeRepo) UpdateComposeStage(_ context.Context, _ int64, _ string) error { return nil }
 func (r *fakeRepo) FindDubbingAudio(_ context.Context, _ int64, _ *int64) (string, string) {
