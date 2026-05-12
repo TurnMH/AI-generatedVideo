@@ -119,16 +119,42 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Merge service-specific section on top of shared values
+	settings := viper.AllSettings()
 	if sub := viper.Sub("script-service"); sub != nil {
-		viper.MergeConfigMap(sub.AllSettings())
+		settings = deepMergeSettings(settings, sub.AllSettings())
+	}
+
+	resolved := viper.New()
+	if err := resolved.MergeConfigMap(settings); err != nil {
+		return nil, err
 	}
 
 	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
+	if err := resolved.Unmarshal(&cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func deepMergeSettings(base, override map[string]interface{}) map[string]interface{} {
+	merged := make(map[string]interface{}, len(base))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range override {
+		overrideMap, overrideIsMap := value.(map[string]interface{})
+		if !overrideIsMap {
+			merged[key] = value
+			continue
+		}
+		baseMap, baseIsMap := merged[key].(map[string]interface{})
+		if !baseIsMap {
+			merged[key] = deepMergeSettings(map[string]interface{}{}, overrideMap)
+			continue
+		}
+		merged[key] = deepMergeSettings(baseMap, overrideMap)
+	}
+	return merged
 }
 
 func mergeOverrideConfig() error {

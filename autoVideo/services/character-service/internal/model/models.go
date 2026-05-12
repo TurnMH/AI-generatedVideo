@@ -89,6 +89,7 @@ type Skill struct {
 	UseCase     string         `gorm:"size:64;index:idx_skill_project_usecase,priority:2" json:"use_case"` // storyboard|extraction|prompt|writing|storyboard_prep
 	Description string         `gorm:"type:text"                json:"description"`
 	IsActive    bool           `gorm:"default:true;index:idx_skill_project_usecase,priority:3" json:"is_active"`
+	SortOrder   int            `gorm:"default:0"                json:"sort_order"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index"                    json:"-"`

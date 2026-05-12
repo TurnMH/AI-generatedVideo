@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"sync"
+
 	"github.com/autovideo/character-service/internal/model"
 	"gorm.io/gorm"
 )
@@ -17,11 +19,23 @@ type SkillRepository interface {
 }
 
 type skillRepository struct {
-	db *gorm.DB
+	db                 *gorm.DB
+	hasSortOrderOnce   sync.Once
+	hasSortOrderColumn bool
 }
 
 func NewSkillRepository(db *gorm.DB) SkillRepository {
 	return &skillRepository{db: db}
+}
+
+func (r *skillRepository) orderActiveSkills(query *gorm.DB) *gorm.DB {
+	r.hasSortOrderOnce.Do(func() {
+		r.hasSortOrderColumn = r.db.Migrator().HasColumn(&model.Skill{}, "sort_order")
+	})
+	if r.hasSortOrderColumn {
+		return query.Order("sort_order ASC, created_at ASC")
+	}
+	return query.Order("created_at ASC")
 }
 
 func (r *skillRepository) Create(skill *model.Skill) error {
@@ -50,7 +64,7 @@ func (r *skillRepository) ListActiveByUseCase(projectID int64, useCase string) (
 		q = q.Where("use_case = ?", useCase)
 	}
 	var list []*model.Skill
-	if err := q.Order("sort_order ASC, created_at ASC").Find(&list).Error; err != nil {
+	if err := r.orderActiveSkills(q).Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil

@@ -67,6 +67,12 @@ project-service:
     producer_topic: "storyboard.generate.result"
   image:
     base_url: "http://image:8005"
+  character:
+    base_url: "http://character:8004"
+  script:
+    base_url: "http://script:8003"
+  video:
+    base_url: "http://video:8006"
 
 script-service:
   http:

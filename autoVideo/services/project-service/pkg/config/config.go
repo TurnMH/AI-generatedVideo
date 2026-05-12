@@ -123,6 +123,19 @@ func normalizedStringSlice(raw any) []string {
 	}
 }
 
+func resolveServiceBaseURL(v *viper.Viper, canonicalPath string, fallbackPaths ...string) string {
+	if value := strings.TrimSpace(v.GetString(canonicalPath)); value != "" && value != "http://localhost:8004" && value != "http://localhost:8003" {
+		return value
+	}
+	for _, path := range fallbackPaths {
+		value := strings.TrimSpace(v.GetString(path))
+		if value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(v.GetString(canonicalPath))
+}
+
 func mergeOverrideConfig(v *viper.Viper) error {
 	overrideFile := strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE"))
 	if overrideFile == "" {
@@ -302,6 +315,8 @@ func Load(logger *zap.Logger) (*Config, error) {
 	} else if len(sharedKafkaBrokers) > 0 {
 		cfg.Kafka.Brokers = sharedKafkaBrokers
 	}
+	cfg.Character.BaseURL = resolveServiceBaseURL(viper.GetViper(), "character.base_url", "character_service.base_url", "character_service.url")
+	cfg.Script.BaseURL = resolveServiceBaseURL(viper.GetViper(), "script.base_url", "script_service.base_url", "script_service.url")
 	imageWorkers := viper.GetInt("image-service.concurrency.max_workers")
 	maxProviderKeys := 1
 	for _, count := range []int{
