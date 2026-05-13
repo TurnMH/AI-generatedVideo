@@ -155,6 +155,11 @@ type extractedAsset struct {
 	EpisodeIDs  []int64 `json:"-"` // populated during extraction, not from LLM
 }
 
+type extractionChunk struct {
+	Text       string
+	EpisodeIDs []int64
+}
+
 type llmExtractResult struct {
 	Assets []extractedAsset `json:"assets"`
 }
@@ -201,6 +206,33 @@ func mergeExtractedDescription(existing, extracted string) string {
 		}
 		return existing
 	}
+}
+
+func buildEpisodeExtractionChunks(episodes []episodeSummary) []extractionChunk {
+	chunks := make([]extractionChunk, 0, len(episodes))
+	for _, ep := range episodes {
+		content := strings.TrimSpace(ep.Excerpt)
+		if content == "" {
+			content = strings.TrimSpace(ep.Summary)
+		}
+		if content == "" {
+			continue
+		}
+
+		header := fmt.Sprintf("【第%d集: %s】\n", ep.Number, ep.Title)
+		contentLimit := chunkMaxChars - utf8.RuneCountInString(header) - 2
+		if contentLimit <= 0 {
+			contentLimit = chunkMaxChars
+		}
+		for _, segment := range splitTextIntoChunks(content, contentLimit, 500) {
+			text := header + segment + "\n\n"
+			chunks = append(chunks, extractionChunk{
+				Text:       text,
+				EpisodeIDs: []int64{int64(ep.ID)},
+			})
+		}
+	}
+	return chunks
 }
 
 func (s *ExtractService) upsertExtractedAsset(projectID uint64, assetType, name, description string, episodeIDs []int64) (*model.Asset, error) {
@@ -320,55 +352,11 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 		return nil, fmt.Errorf("project %d has no script text", projectID)
 	}
 
-	// 3. Build text chunks for extraction (each chunk tracks which episodes it contains)
-	type extractionChunk struct {
-		Text       string
-		EpisodeIDs []int64
-	}
+	// 3. Build text chunks for extraction (each chunk tracks the exact episode it belongs to)
 	var extractChunks []extractionChunk
 
 	if len(episodeSummaries) > 0 {
-		// Episode-based chunking with episode ID tracking
-		type chunkBuilder struct {
-			text       strings.Builder
-			length     int
-			episodeIDs []int64
-		}
-		var current chunkBuilder
-		var result []extractionChunk
-
-		flushCurrent := func() {
-			if current.text.Len() > 0 {
-				result = append(result, extractionChunk{Text: current.text.String(), EpisodeIDs: current.episodeIDs})
-				current = chunkBuilder{}
-			}
-		}
-
-		for _, ep := range episodeSummaries {
-			content := ep.Excerpt
-			if strings.TrimSpace(content) == "" {
-				content = ep.Summary
-			}
-			if strings.TrimSpace(content) == "" {
-				continue
-			}
-			epText := fmt.Sprintf("【第%d集: %s】\n%s\n\n", ep.Number, ep.Title, content)
-			epRunes := utf8.RuneCountInString(epText)
-
-			if epRunes > chunkMaxChars {
-				flushCurrent()
-				result = append(result, extractionChunk{Text: epText, EpisodeIDs: []int64{int64(ep.ID)}})
-				continue
-			}
-			if current.length+epRunes > chunkMaxChars {
-				flushCurrent()
-			}
-			current.text.WriteString(epText)
-			current.length += epRunes
-			current.episodeIDs = append(current.episodeIDs, int64(ep.ID))
-		}
-		flushCurrent()
-		extractChunks = result
+		extractChunks = buildEpisodeExtractionChunks(episodeSummaries)
 	}
 
 	if len(extractChunks) == 0 {
@@ -479,6 +467,19 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 		zap.Uint64("project_id", projectID),
 		zap.Int("count", len(created)),
 	)
+
+	triggered, err := s.assetSvc.GenerateAll(projectID, nil, "", nil, "", nil, false)
+	if err != nil {
+		s.logger.Warn("auto trigger project asset generation after extraction failed",
+			zap.Uint64("project_id", projectID),
+			zap.Error(err),
+		)
+	} else if triggered > 0 {
+		s.logger.Info("auto triggered project asset generation after extraction",
+			zap.Uint64("project_id", projectID),
+			zap.Int("triggered", triggered),
+		)
+	}
 
 	// Auto-match voices for all project assets after extraction
 	if _, err := s.assetSvc.AutoMatchVoices(projectID); err != nil {
@@ -595,6 +596,21 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 		zap.Uint64("episode_id", episodeID),
 		zap.Int("count", len(created)),
 	)
+
+	triggered, err := s.assetSvc.GenerateAll(projectID, &episodeID, "", nil, "", nil, false)
+	if err != nil {
+		s.logger.Warn("auto trigger episode asset generation after extraction failed",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("episode_id", episodeID),
+			zap.Error(err),
+		)
+	} else if triggered > 0 {
+		s.logger.Info("auto triggered episode asset generation after extraction",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("episode_id", episodeID),
+			zap.Int("triggered", triggered),
+		)
+	}
 
 	// Auto-match voices after episode extraction
 	if _, err := s.assetSvc.AutoMatchVoices(projectID); err != nil {

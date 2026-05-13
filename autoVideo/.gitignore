@@ -3,6 +3,7 @@ node_modules/
 
 # Frontend build output
 .next/
+out/
 *.tsbuildinfo
 
 # Local environment files

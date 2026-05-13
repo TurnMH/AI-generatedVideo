@@ -1,5 +1,5 @@
 'use client'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
 import {
@@ -24,6 +24,7 @@ import { useToast } from '@/components/ui/toast'
 import { normalizeVideoStylePreset } from '@/lib/video-style-config'
 import { SerialSceneGroups } from '@/components/projects/serial/SerialSceneGroups'
 import { cn } from '@/lib/utils'
+import { resolveProjectIdParam } from '@/lib/project-route'
 
 /* ─── style presets ───────────────────────────────────────────── */
 const STYLE_PRESETS = [
@@ -42,7 +43,9 @@ const QUALITY_OPTIONS = [
 export default function SerialGeneratePage() {
   const router = useRouter()
   const params = useParams()
-  const projectId = Number(params.id)
+  const pathname = usePathname()
+  const projectId = resolveProjectIdParam(params.id, pathname, 'video-serial') ?? 0
+  const hasValidProjectId = projectId > 0
   const { toast } = useToast()
   const [showStart, setShowStart] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -52,28 +55,49 @@ export default function SerialGeneratePage() {
   const [storyboardLoading, setStoryboardLoading] = useState(false)
   const [videoLoading, setVideoLoading] = useState(false)
 
+  useEffect(() => {
+    if (!hasValidProjectId) {
+      router.replace('/video-serial')
+    }
+  }, [hasValidProjectId, router])
+
   const { data: projectRaw, isLoading: projectLoading, mutate: mutateProject } = useSWR(
-    ['project', projectId],
+    hasValidProjectId ? ['project', projectId] : null,
     () => projectAPI.get(projectId) as unknown as Promise<{ data: Project }>
   )
   const project = (projectRaw as { data?: Project })?.data
 
+  useEffect(() => {
+    if (!project) return
+    if (project.project_type !== 'video_serial') {
+      router.replace(`/projects/${projectId}/generate`)
+    }
+  }, [project, projectId, router])
+
   const { data: sbStatsRaw, mutate: mutateSbStats } = useSWR(
-    ['sb-stats', projectId],
+    hasValidProjectId ? ['sb-stats', projectId] : null,
     () => storyboardAPI.stats(projectId) as unknown as Promise<{ data?: { total?: number; completed?: number; pending?: number; failed?: number } }>
   )
   const sbStats = (sbStatsRaw as { data?: { total?: number; completed?: number; pending?: number; failed?: number } })?.data ?? {}
 
   const { data: vidStatsRaw, mutate: mutateVidStats } = useSWR(
-    ['vid-stats', projectId],
+    hasValidProjectId ? ['vid-stats', projectId] : null,
     () => videoAPI.stats(projectId) as unknown as Promise<{ data?: { total?: number; succeeded?: number; pending?: number; failed?: number } }>
   )
   const vidStats = (vidStatsRaw as { data?: { total?: number; succeeded?: number; pending?: number; failed?: number } })?.data ?? {}
 
   const { mutate: mutateStoryboards } = useSWR(
-    ['storyboards-for-generate', projectId],
+    hasValidProjectId ? ['storyboards-for-generate', projectId] : null,
     () => storyboardAPI.list(projectId, { page_size: 20 })
   )
+
+  if (!hasValidProjectId) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
 
   useEffect(() => {
     if (!project) return

@@ -195,6 +195,58 @@ func TestResolveChatFreeRouteUsesRuntimeModelMetadata(t *testing.T) {
 	}
 }
 
+func TestResolveChatFreeRoutePrefersEndpointProviderOverEasyartRef(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":[{"model_key":"glm-5","name":"GLM-5","provider":"zhipu","api_endpoint":"https://open.bigmodel.cn/api/paas/v4/chat/completions","api_key_ref":"easyart","is_active":true}]}`))
+	}))
+	defer server.Close()
+
+	svc := NewAssetService(
+		nil, nil, zap.NewNop(),
+		"https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second,
+		"https://claude.example/v1", "easyart-key",
+		"https://qwen.example/v1", "qwen-key",
+		"https://zhipu.example/v1", "zhipu-key",
+		"https://gemini.example/v1", "gemini-key",
+		server.URL,
+	)
+
+	baseURL, apiKey := svc.resolveChatFreeRoute(context.Background(), "glm-5")
+	if baseURL != "https://open.bigmodel.cn/api/paas/v4/chat/completions" {
+		t.Fatalf("resolveChatFreeRoute() baseURL = %q, want runtime endpoint", baseURL)
+	}
+	if apiKey != "zhipu-key" {
+		t.Fatalf("resolveChatFreeRoute() apiKey = %q, want endpoint-matched zhipu key", apiKey)
+	}
+}
+
+func TestResolveChatFreeRoutePrefersGeminiFamilyOverGenericProxyEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"message":"success","data":[{"model_key":"gemini-3.1-pro-preview","name":"gemini-3.1-pro-preview","provider":"google","api_endpoint":"https://poloai.top/v1/chat/completions","api_key_ref":"easyart","is_active":true}]}`))
+	}))
+	defer server.Close()
+
+	svc := NewAssetService(
+		nil, nil, zap.NewNop(),
+		"https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second,
+		"https://claude.example/v1", "easyart-key",
+		"https://qwen.example/v1", "qwen-key",
+		"https://zhipu.example/v1", "zhipu-key",
+		"https://gemini.example/v1", "gemini-key",
+		server.URL,
+	)
+
+	baseURL, apiKey := svc.resolveChatFreeRoute(context.Background(), "gemini-3.1-pro-preview")
+	if baseURL != "https://gemini.example/v1" {
+		t.Fatalf("resolveChatFreeRoute() baseURL = %q, want gemini family endpoint", baseURL)
+	}
+	if apiKey != "gemini-key" {
+		t.Fatalf("resolveChatFreeRoute() apiKey = %q, want gemini family key", apiKey)
+	}
+}
+
 func TestResolveChatFreeRouteFallsBackToFamilyRouting(t *testing.T) {
 	svc := NewAssetService(
 		nil, nil, zap.NewNop(),

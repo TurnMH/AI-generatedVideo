@@ -516,7 +516,7 @@ export default function NewProjectPage() {
 
       const autoStart = form.scriptFile ? '?autoStart=1' : ''
       toast({ title: `${mediaMeta.label}项目已创建`, description: `「${form.title}」创建成功`, variant: 'success' })
-      router.push(mediaKind === 'video' ? `/video/${projectId}${autoStart}` : `${mediaMeta.listHref}?project=${projectId}`)
+      router.push(mediaKind === 'video' ? `/projects/${projectId}${autoStart}` : `${mediaMeta.listHref}?project=${projectId}`)
     } catch {
       toast({ title: '创建失败', description: '请检查输入后重试', variant: 'destructive' })
     } finally {

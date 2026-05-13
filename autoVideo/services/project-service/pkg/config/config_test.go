@@ -53,6 +53,9 @@ func TestLoadUsesKafkaBrokersFromDockerConfig(t *testing.T) {
 	if len(cfg.Kafka.Brokers) != 1 || cfg.Kafka.Brokers[0] != "kafka:29092" {
 		t.Fatalf("cfg.Kafka.Brokers = %v, want [kafka:29092]", cfg.Kafka.Brokers)
 	}
+	if cfg.Character.BaseURL != "http://character:8004" {
+		t.Fatalf("cfg.Character.BaseURL = %q, want http://character:8004", cfg.Character.BaseURL)
+	}
 }
 
 func TestLoadMergesOverrideConfigFile(t *testing.T) {
@@ -84,5 +87,28 @@ func TestLoadMergesOverrideConfigFile(t *testing.T) {
 	}
 	if len(cfg.Kafka.Brokers) != 1 || cfg.Kafka.Brokers[0] != "base:29092" {
 		t.Fatalf("cfg.Kafka.Brokers = %v, want base value to remain", cfg.Kafka.Brokers)
+	}
+}
+
+func TestLoadFallsBackToCharacterServiceURL(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	baseDir := t.TempDir()
+	basePath := filepath.Join(baseDir, "base.yaml")
+
+	base := []byte("project-service:\n  character_service:\n    url: \"http://character:8004\"\n")
+	if err := os.WriteFile(basePath, base, 0o600); err != nil {
+		t.Fatalf("write base config: %v", err)
+	}
+
+	t.Setenv("AUTOVIDEO_CONFIG_FILE", basePath)
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Character.BaseURL != "http://character:8004" {
+		t.Fatalf("cfg.Character.BaseURL = %q, want http://character:8004", cfg.Character.BaseURL)
 	}
 }

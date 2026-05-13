@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import {
   ArrowLeft,
@@ -36,15 +36,19 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/components/ui/toast'
+import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 
 import { STYLE_PRESETS, STYLE_BADGE_CLASS, EMPTY_CHARACTER_FORM as EMPTY_FORM, type CharacterFormState as FormState } from '@/lib/projects/characters/form'
 import { CharacterSkeleton } from '@/components/projects/characters/CharacterSkeleton'
 import { CharacterGroupPanel } from '@/components/projects/characters/CharacterGroupPanel'
+import { resolveProjectIdParam } from '@/lib/project-route'
 
 export default function CharactersPage() {
   const router = useRouter()
   const params = useParams()
-  const projectId = Number(params.id)
+  const pathname = usePathname()
+  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const hasValidProjectId = projectId > 0
   const { toast } = useToast()
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -54,17 +58,31 @@ export default function CharactersPage() {
   const [deleteTarget, setDeleteTarget] = useState<CharacterData | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  React.useEffect(() => {
+    if (!hasValidProjectId) {
+      router.replace('/projects')
+    }
+  }, [hasValidProjectId, router])
+
   const { data: projectRaw } = useSWR(
-    ['project', projectId],
+    hasValidProjectId ? ['project', projectId] : null,
     () => projectAPI.get(projectId) as unknown as Promise<{ data: Project }>
   )
   const project = (projectRaw as { data?: Project })?.data
 
   const { data: charsRaw, mutate: mutateChars, isLoading } = useSWR(
-    ['characters', projectId],
+    hasValidProjectId ? ['characters', projectId] : null,
     () => characterAPI.list(projectId) as unknown as Promise<{ data: CharacterData[] }>
   )
   const characters: CharacterData[] = (charsRaw as { data?: CharacterData[] })?.data ?? []
+
+  if (!hasValidProjectId) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
 
   function openCreate() {
     setEditTarget(null)
@@ -137,7 +155,7 @@ export default function CharactersPage() {
                 variant="ghost"
                 size="icon"
                 className="mt-0.5 shrink-0 rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
-                onClick={() => router.push(`/video/${projectId}`)}
+                onClick={() => router.push(`/projects/${projectId}`)}
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>

@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useMemo, useEffect, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import {
   ArrowLeft,
@@ -41,11 +41,14 @@ import { StorageDrawer } from '@/components/projects/detail/StorageDrawer'
 import { ScriptTab } from '@/components/projects/detail/tabs/ScriptTab'
 import { EpisodeWorkspace } from '@/components/projects/detail/EpisodeWorkspace'
 import { SerialSceneGroups } from '@/components/projects/serial/SerialSceneGroups'
+import { resolveProjectIdParam } from '@/lib/project-route'
 
 export default function SerialProjectDetailPage() {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
-  const projectId = Number(params.id)
+  const projectId = resolveProjectIdParam(params.id, pathname, 'video-serial') ?? 0
+  const hasValidProjectId = projectId > 0
 
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<number | null>(null)
   const [storageOpen, setStorageOpen] = useState(false)
@@ -64,17 +67,38 @@ export default function SerialProjectDetailPage() {
     if (searchParams.get('autoStart') === '1') setAutoStoryboardPending(true)
   }, [searchParams])
 
+  useEffect(() => {
+    if (!hasValidProjectId) {
+      router.replace('/video-serial')
+    }
+  }, [hasValidProjectId, router])
+
   const sharedEpisodeFilterValue = useMemo(
     () => ({ value: sharedEpisodeFilter, setValue: setSharedEpisodeFilter }),
     [sharedEpisodeFilter]
   )
 
   const { data, isLoading, mutate: mutateProject } = useSWR(
-    ['project', projectId],
+    hasValidProjectId ? ['project', projectId] : null,
     () => projectAPI.get(projectId) as unknown as Promise<{ data: Project }>,
     { refreshInterval: 3000 }
   )
   const project = data?.data
+
+  useEffect(() => {
+    if (!project) return
+    if (project.project_type !== 'video_serial') {
+      router.replace(`/projects/${projectId}`)
+    }
+  }, [project, projectId, router])
+
+  if (!hasValidProjectId) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
 
   const { data: episodesData } = useSWR(
     project ? ['stepper-episodes', projectId] : null,

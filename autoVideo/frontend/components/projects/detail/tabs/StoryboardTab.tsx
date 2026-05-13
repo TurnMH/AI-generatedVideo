@@ -252,6 +252,10 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
   const sbPageSize = 50
   const [imageModelAvailability, setImageModelAvailability] = useState<Record<string, boolean>>({})
   const [videoModelAvailability, setVideoModelAvailability] = useState<Record<string, boolean>>({})
+  const [showBatchStoryboardDialog, setShowBatchStoryboardDialog] = useState(false)
+  const [batchStoryboardAction, setBatchStoryboardAction] = useState<{ kind: 'generate' | 'force' | 'retryFailed'; episodeId?: number }>({ kind: 'generate' })
+  const [batchStoryboardModels, setBatchStoryboardModels] = useState<string[]>([])
+  const [batchStoryboardRunning, setBatchStoryboardRunning] = useState(false)
   // ── Shared video model params state (used by storyboard dialog & video tab) ──
   const [videoModelParams, setVideoModelParams] = useState<Record<string, { key: string; label: string; default: string; values: { value: string; label: string }[] }[]>>({})
   const [videoParamSelections, setVideoParamSelections] = useState<Record<string, Record<string, string>>>({})
@@ -578,6 +582,9 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
   const selectedEpisodeVideoSubjectSizeMeta = VIDEO_SUBJECT_SIZE_OPTIONS.find((item) => item.key === selectedEpisodeVideoSubjectSize) ?? VIDEO_SUBJECT_SIZE_OPTIONS[0]
   const selectedEpisodeVideoClarityMeta = VIDEO_CLARITY_OPTIONS.find((item) => item.key === selectedEpisodeVideoClarity) ?? VIDEO_CLARITY_OPTIONS[0]
   const selectedVideoDialogEpisode = videoDialogEpisodeId ? episodes.find((episode) => episode.id === videoDialogEpisodeId) ?? null : null
+  const selectedStoryboardBatchEpisode = batchStoryboardAction.episodeId
+    ? episodes.find((episode) => episode.id === batchStoryboardAction.episodeId) ?? null
+    : null
   const episodeVideoModelStorageKey = `project-video-model-selection:${projectId}`
   const episodeVideoStyleStorageKey = `project-video-style-selection:${projectId}`
   const episodeVideoMotionStorageKey = `project-video-motion-selection:${projectId}`
@@ -837,49 +844,67 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
   }
 
-  const handleForceGenerateEpisode = async (modelKey?: string) => {
+  const handleForceGenerateEpisode = async (modelKey?: string, modelKeys?: string[]) => {
     if (!storyboardAssetsReady) {
       toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
-      return
+      return false
     }
     const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
-    if (!selectedEpisodeId) return
-    if (!window.confirm(`这将清除本集所有已生成的${storyboardImageLabel}并重新生成，确认继续？`)) return
+    if (!selectedEpisodeId) return false
+    if (modelKeys === undefined && !window.confirm(`这将清除本集所有已生成的${storyboardImageLabel}并重新生成，确认继续？`)) return false
     try {
-      const usedModel = modelKey || sbProjectImageModelKey
-      const res = await storyboardAPI.generateAll(projectId, selectedEpisodeId, usedModel, true) as unknown as { data: { triggered: number } }
+      const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelKeys ?? (modelKey ? [modelKey] : undefined))
+      const res = await storyboardAPI.generateAll(
+        projectId,
+        selectedEpisodeId,
+        effectiveModelName,
+        true,
+        selectedModelKeys.length > 1 ? { modelNames: selectedModelKeys } : undefined,
+      ) as unknown as { data: { triggered: number } }
       const n = res?.data?.triggered ?? 0
       toast({
         title: n > 0 ? `当前集重新${storyboardGenerateLabel}已启动，共 ${n} 个` : `没有可重新生成的${storyboardImageLabel}`,
+        description: n > 0 ? description : undefined,
         variant: n > 0 ? 'success' : 'default',
       })
       mutateStats()
       mutateSb()
+      return true
     } catch {
       toast({ title: '重新生成失败', variant: 'destructive' })
+      return false
     }
   }
 
-  const handleGenerateAll = async (modelKey?: string) => {
+  const handleGenerateAll = async (modelKey?: string, modelKeys?: string[]) => {
     if (!storyboardAssetsReady) {
       toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
-      return
+      return false
     }
     try {
       const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
-      const usedModel = modelKey || sbProjectImageModelKey
-      const res = await storyboardAPI.generateAll(projectId, selectedEpisodeId, usedModel) as unknown as { data: { triggered: number } }
+      const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelKeys ?? (modelKey ? [modelKey] : undefined))
+      const res = await storyboardAPI.generateAll(
+        projectId,
+        selectedEpisodeId,
+        effectiveModelName,
+        false,
+        selectedModelKeys.length > 1 ? { modelNames: selectedModelKeys } : undefined,
+      ) as unknown as { data: { triggered: number } }
       const n = res?.data?.triggered ?? 0
       toast({
         title: n > 0
           ? (selectedEpisodeId ? `当前集${storyboardGenerateLabel}已启动，共 ${n} 个` : `批量${storyboardGenerateLabel}已启动，共 ${n} 个`)
           : (selectedEpisodeId ? `当前集没有可生成的${storyboardImageLabel}` : `没有可生成的${storyboardImageLabel}`),
+        description: n > 0 ? description : undefined,
         variant: n > 0 ? 'success' : 'default',
       })
       mutateStats()
       mutateSb()
+      return true
     } catch {
       toast({ title: '批量生成失败', variant: 'destructive' })
+      return false
     }
   }
 
@@ -915,6 +940,36 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     ]).map(buildImageModelOption),
     [sbImageModels]
   )
+  const storyboardDefaultImageModelLabel = SB_MODEL_OPTIONS.find((model) => model.key === sbProjectImageModelKey)?.label || '项目默认模型'
+
+  const openBatchStoryboardDialog = (kind: 'generate' | 'force' | 'retryFailed') => {
+    const defaultModels = sbProjectImageModelKey && SB_MODEL_OPTIONS.some((model) => model.key === sbProjectImageModelKey)
+      ? [sbProjectImageModelKey]
+      : []
+    setBatchStoryboardAction({
+      kind,
+      episodeId: episodeFilter !== 'all' ? Number(episodeFilter) : undefined,
+    })
+    setBatchStoryboardModels(defaultModels)
+    setShowBatchStoryboardDialog(true)
+  }
+
+  const resolveStoryboardModelSelection = (modelKeys?: string[]) => {
+    const selectedModels = SB_MODEL_OPTIONS.filter((model) => modelKeys?.includes(model.key))
+    const selectedModelKeys = selectedModels.map((model) => model.key)
+    const effectiveModelName = selectedModels[0]?.key || sbProjectImageModelKey || undefined
+    const description = selectedModels.length === 0
+      ? (sbProjectImageModelKey ? `使用项目默认模型：${storyboardDefaultImageModelLabel}` : undefined)
+      : selectedModels.length === 1
+        ? `使用模型：${selectedModels[0].label}`
+        : `使用模型：${selectedModels.map((model) => model.label).join('、')}（按${storyboardItemLabel}轮询分配）`
+
+    return {
+      selectedModelKeys,
+      effectiveModelName,
+      description,
+    }
+  }
 
   const formatSbErrorMsg = (msg: string): string => {
     if (!msg) return '生成失败'
@@ -948,26 +1003,55 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
   }
 
-  const handleRetryAllFailed = async (modelName?: string) => {
+  const handleRetryAllFailed = async (modelName?: string, modelNames?: string[]) => {
     if (!storyboardAssetsReady) {
       toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
-      return
+      return false
     }
     try {
       const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
-      const res = await storyboardAPI.retryFailed(projectId, modelName, selectedEpisodeId) as unknown as { data: { retried: number } }
+      const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelNames ?? (modelName ? [modelName] : undefined))
+      const res = await storyboardAPI.retryFailed(
+        projectId,
+        effectiveModelName,
+        selectedEpisodeId,
+        selectedModelKeys.length > 1 ? { modelNames: selectedModelKeys } : undefined,
+      ) as unknown as { data: { retried: number } }
       const n = res?.data?.retried ?? 0
-      const label = modelName ? SB_MODEL_OPTIONS.find(m => m.key === modelName)?.label || modelName : '默认'
       toast({
         title: n > 0
-          ? (selectedEpisodeId ? `当前集已启动 ${n} 个失败${storyboardItemLabel}重试 (${label})` : `批量重试 ${n} 个失败${storyboardItemLabel} (${label})`)
+          ? (selectedEpisodeId ? `当前集已启动 ${n} 个失败${storyboardItemLabel}重试` : `批量重试 ${n} 个失败${storyboardItemLabel}`)
           : (selectedEpisodeId ? `当前集没有失败${storyboardItemLabel}` : `当前没有失败${storyboardItemLabel}`),
+        description: n > 0 ? description : undefined,
         variant: n > 0 ? 'success' : 'default',
       })
       mutateSb()
       mutateStats()
+      return true
     } catch {
       toast({ title: '批量重试失败', variant: 'destructive' })
+      return false
+    }
+  }
+
+  const executeBatchStoryboardAction = async () => {
+    setBatchStoryboardRunning(true)
+    try {
+      const selectedModelKeys = SB_MODEL_OPTIONS
+        .filter((model) => batchStoryboardModels.includes(model.key))
+        .map((model) => model.key)
+
+      const ok = batchStoryboardAction.kind === 'force'
+        ? await handleForceGenerateEpisode(selectedModelKeys[0], selectedModelKeys)
+        : batchStoryboardAction.kind === 'retryFailed'
+          ? await handleRetryAllFailed(selectedModelKeys[0], selectedModelKeys)
+          : await handleGenerateAll(selectedModelKeys[0], selectedModelKeys)
+
+      if (ok) {
+        setShowBatchStoryboardDialog(false)
+      }
+    } finally {
+      setBatchStoryboardRunning(false)
     }
   }
 
@@ -1230,20 +1314,16 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
             </>
           )}
           {stats.failed > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50" title={`选择模型重试所有失败的${storyboardItemLabel}`}>
-                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                  重试失败 ({stats.failed})
-                </Button>
-              </DropdownMenuTrigger>
-              <ImageModelDropdownContent
-                options={SB_MODEL_OPTIONS}
-                availability={imageModelAvailability}
-                onSelect={handleRetryAllFailed}
-                showTags
-              />
-            </DropdownMenu>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-200 text-red-600 hover:bg-red-50"
+              title={`选择一个或多个模型，按${storyboardItemLabel}轮询重试失败任务`}
+              onClick={() => openBatchStoryboardDialog('retryFailed')}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              重试失败 ({stats.failed})
+            </Button>
           )}
           {!hideActionBar && (
             <>
@@ -1256,40 +1336,28 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                   生成中...
                 </Button>
               ) : (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!storyboardAssetsReady}
-                      title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择模型生成本集所有待处理的${storyboardImageLabel}`}
-                    >
-                      <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                      {`生成本集${storyboardImageLabel}`}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <ImageModelDropdownContent
-                    options={SB_MODEL_OPTIONS}
-                    availability={imageModelAvailability}
-                    onSelect={(key) => handleGenerateAll(key)}
-                  />
-                </DropdownMenu>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!storyboardAssetsReady}
+                  title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为本集${storyboardItemLabel}按轮询方式生成`}
+                  onClick={() => openBatchStoryboardDialog('generate')}
+                >
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                  {`生成本集${storyboardImageLabel}`}
+                </Button>
               )}
               {/* 重新生成本集 — 带模型选择 */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="outline" disabled={isActive} title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `重置本集所有${storyboardImageLabel}并重新生成（包括已完成的）`}>
-                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                    重新生成本集
-                  </Button>
-                </DropdownMenuTrigger>
-                <ImageModelDropdownContent
-                  options={SB_MODEL_OPTIONS}
-                  availability={imageModelAvailability}
-                  onSelect={handleForceGenerateEpisode}
-                  label="选择生成模型（含已完成）"
-                />
-              </DropdownMenu>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isActive}
+                title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `重置本集所有${storyboardImageLabel}并重新生成；可多选模型按${storyboardItemLabel}轮询`}
+                onClick={() => openBatchStoryboardDialog('force')}
+              >
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                重新生成本集
+              </Button>
             </>
           )}
           {episodeFilter === 'all' && (
@@ -1299,23 +1367,15 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                 生成中...
               </Button>
             ) : (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    size="sm"
-                    disabled={!storyboardAssetsReady}
-                    title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择模型一键生成所有待处理的${storyboardImageLabel}`}
-                  >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                    {`一键生成${storyboardImageLabel}`}
-                  </Button>
-                </DropdownMenuTrigger>
-                <ImageModelDropdownContent
-                  options={SB_MODEL_OPTIONS}
-                  availability={imageModelAvailability}
-                  onSelect={(key) => handleGenerateAll(key)}
-                />
-              </DropdownMenu>
+              <Button
+                size="sm"
+                disabled={!storyboardAssetsReady}
+                title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为当前范围内待处理${storyboardItemLabel}按轮询方式生成`}
+                onClick={() => openBatchStoryboardDialog('generate')}
+              >
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                {`一键生成${storyboardImageLabel}`}
+              </Button>
             )
           )}
             </>
@@ -1379,6 +1439,133 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
           {storyboardAssetsBlockingReason}
         </div>
       )}
+
+      <Dialog open={showBatchStoryboardDialog} onOpenChange={(open) => { if (!batchStoryboardRunning) setShowBatchStoryboardDialog(open) }}>
+        <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="shrink-0 border-b border-surface-100 px-6 py-4">
+            <DialogTitle>
+              {batchStoryboardAction.kind === 'retryFailed'
+                ? (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 重试失败${storyboardItemLabel}` : `批量重试失败${storyboardItemLabel}`)
+                : batchStoryboardAction.kind === 'force'
+                  ? (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 重新生成${storyboardImageLabel}` : `重新生成${storyboardImageLabel}`)
+                  : (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 生成${storyboardImageLabel}` : `批量生成${storyboardImageLabel}`)}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+            {batchStoryboardAction.kind === 'force' && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+                <p className="text-[12px] leading-5 text-amber-800">
+                  将先清除当前集已完成的{storyboardImageLabel}，再按所选模型重新生成。每条{storyboardItemLabel}仍只会保留一版结果，不会像资源图那样为同一条目产出多张候选图。
+                </p>
+              </div>
+            )}
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-[12px] leading-5 text-sky-800">
+              这里支持选择多个模型共享同一批任务。多个模型会按{storyboardItemLabel}轮询分配，每条{storyboardItemLabel}只使用其中一个模型生成一版结果。
+            </div>
+            <div className="space-y-3">
+              <Label className="text-xs font-medium">生成模型（可多选）</Label>
+              {(
+                [
+                  { label: '🌐 多模态推荐', filter: (m: ImageModelOption) => m.tags.includes('多模态') },
+                  { label: '🎨 高质量文生图', filter: (m: ImageModelOption) => m.tags.includes('高质量') && !m.tags.includes('多模态') },
+                  { label: '⚡ 高速 / 低成本', filter: (m: ImageModelOption) => !m.tags.includes('多模态') && !m.tags.includes('高质量') && !m.tags.includes('本地') },
+                  { label: '🖥️ 本地部署', filter: (m: ImageModelOption) => m.tags.includes('本地') },
+                ] as Array<{ label: string; filter: (m: ImageModelOption) => boolean }>
+              ).map(({ label: sectionLabel, filter }) => {
+                const models = SB_MODEL_OPTIONS.filter(filter)
+                if (models.length === 0) return null
+                return (
+                  <div key={sectionLabel}>
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-surface-400">{sectionLabel}</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {models.map((m) => {
+                        const avail = imageModelAvailability[m.key]
+                        const selected = batchStoryboardModels.includes(m.key)
+                        const broken = !!m.failureReason
+                        return (
+                          <button
+                            key={m.key}
+                            type="button"
+                            title={broken ? `已停用：${m.failureReason}` : undefined}
+                            onClick={() => {
+                              if (avail === false || broken) return
+                              setBatchStoryboardModels((current) => (
+                                selected
+                                  ? current.filter((item) => item !== m.key)
+                                  : [...current, m.key]
+                              ))
+                            }}
+                            className={`flex items-start gap-2 rounded-lg border p-2.5 text-left transition-colors ${
+                              broken
+                                ? 'cursor-not-allowed border-red-200 bg-red-50 opacity-60'
+                                : selected
+                                  ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-400'
+                                  : avail === false
+                                    ? 'border-surface-200 bg-surface-50 opacity-50'
+                                    : 'border-surface-200 bg-white hover:border-surface-300'
+                            }`}
+                          >
+                            <span className="mt-0.5 text-base">{m.icon}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="text-xs font-semibold">{m.label}</span>
+                                {selected && <span className="rounded bg-primary-100 px-1 text-[9px] text-primary-700">已选</span>}
+                                {!broken && m.speed === 'fast' && <span className="rounded bg-green-100 px-1 text-[9px] text-green-700">⚡ 快</span>}
+                                {!broken && m.quality === 'high' && <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700">★ 高质</span>}
+                                {!broken && avail === true && <span className="rounded bg-emerald-100 px-1 text-[9px] text-emerald-700">● 可用</span>}
+                                {!broken && avail === false && <span className="rounded bg-red-100 px-1 text-[9px] text-red-600">● 未配置</span>}
+                                {broken && <span className="rounded bg-red-100 px-1 text-[9px] text-red-600">⚠ 已停用</span>}
+                              </div>
+                              <p className="text-[10px] text-surface-400">{getProviderLabel(m.provider)}</p>
+                              {broken ? (
+                                <p className="mt-0.5 text-[9px] leading-snug text-red-400">{m.failureReason}</p>
+                              ) : (
+                                <>
+                                  <p className="mt-0.5 text-[9px] leading-snug text-surface-500">{m.desc}</p>
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {m.tags.map((tag) => (
+                                      <span key={tag} className="rounded-full bg-surface-100 px-1.5 py-0 text-[9px] text-surface-500">{tag}</span>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              {batchStoryboardModels.length === 0 ? (
+                <p className="text-[11px] text-surface-400">未选择时将使用项目默认图片模型：{storyboardDefaultImageModelLabel}</p>
+              ) : batchStoryboardModels.length === 1 ? (
+                <p className="text-[11px] text-surface-400">已选 1 个模型；当前批次将统一使用该模型。</p>
+              ) : (
+                <p className="text-[11px] text-surface-400">已选 {batchStoryboardModels.length} 个模型；系统会按{storyboardItemLabel}轮询分配，不会为单条{storyboardItemLabel}生成多张候选图。</p>
+              )}
+            </div>
+          </div>
+          <div className="shrink-0 flex justify-end gap-2 border-t border-surface-100 px-6 py-4">
+            <Button variant="outline" onClick={() => setShowBatchStoryboardDialog(false)} disabled={batchStoryboardRunning}>
+              取消
+            </Button>
+            <Button onClick={executeBatchStoryboardAction} disabled={batchStoryboardRunning}>
+              {batchStoryboardRunning ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1.5 h-4 w-4" />
+              )}
+              {batchStoryboardAction.kind === 'retryFailed'
+                ? '开始重试'
+                : batchStoryboardAction.kind === 'force'
+                  ? '确认重新生成'
+                  : '开始生成'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={videoDialogEpisodeId !== null} onOpenChange={(open) => { if (!open) setVideoDialogEpisodeId(null) }}>
         <DialogContent className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">

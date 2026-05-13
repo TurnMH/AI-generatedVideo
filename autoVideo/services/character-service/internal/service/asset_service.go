@@ -1234,6 +1234,52 @@ func (s *AssetService) chatProviderByHints(hints ...string) llmProvider {
 	return llmProvider{}
 }
 
+func (s *AssetService) chatProviderByEndpoint(endpoint string) llmProvider {
+	joined := strings.ToLower(strings.TrimSpace(endpoint))
+	switch {
+	case strings.Contains(joined, "api.easyart.cc"):
+		if s.llmClaude.apiKey != "" {
+			return llmProvider{apiKey: s.llmClaude.apiKey}
+		}
+	case strings.Contains(joined, "poloai.top"), strings.Contains(joined, "ppapi.vip"), strings.Contains(joined, "openxs.top"):
+		if s.llmAPIKey != "" {
+			return llmProvider{apiKey: s.llmAPIKey}
+		}
+	case strings.Contains(joined, "dashscope.aliyuncs.com"):
+		if s.llmQwen.baseURL != "" || s.llmQwen.apiKey != "" {
+			return s.llmQwen
+		}
+	case strings.Contains(joined, "bigmodel.cn"):
+		if s.llmZhipu.baseURL != "" || s.llmZhipu.apiKey != "" {
+			return s.llmZhipu
+		}
+	}
+	return llmProvider{}
+}
+
+func isGenericChatProxyEndpoint(endpoint string) bool {
+	joined := strings.ToLower(strings.TrimSpace(endpoint))
+	switch {
+	case strings.Contains(joined, "poloai.top"), strings.Contains(joined, "ppapi.vip"), strings.Contains(joined, "openxs.top"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isGeminiRuntimeModel(runtimeModel *chatRuntimeModel) bool {
+	if runtimeModel == nil {
+		return false
+	}
+	joined := strings.ToLower(strings.Join([]string{
+		runtimeModel.Provider,
+		runtimeModel.ModelKey,
+		runtimeModel.Name,
+		stringPtrValue(runtimeModel.APIKeyRef),
+	}, " "))
+	return strings.Contains(joined, "gemini") || strings.Contains(joined, "google")
+}
+
 // chatFreeProvider resolves which base_url + api_key to use based on model name prefix.
 func (s *AssetService) chatFreeProvider(modelName string) (baseURL, apiKey string) {
 	if provider := s.chatProviderByHints(modelName); provider.baseURL != "" || provider.apiKey != "" {
@@ -1351,7 +1397,15 @@ func (s *AssetService) resolveChatFreeRoute(ctx context.Context, modelName strin
 		return s.chatFreeProvider(modelName)
 	}
 	fallbackBase, fallbackKey := s.chatFreeProvider(modelName)
-	provider := s.chatProviderByHints(stringPtrValue(runtimeModel.APIKeyRef), runtimeModel.Provider, runtimeModel.ModelKey, runtimeModel.Name)
+	if isGeminiRuntimeModel(runtimeModel) && isGenericChatProxyEndpoint(runtimeModel.APIEndpoint) {
+		if fallbackBase != "" || fallbackKey != "" {
+			return fallbackBase, fallbackKey
+		}
+	}
+	provider := s.chatProviderByEndpoint(runtimeModel.APIEndpoint)
+	if provider.baseURL == "" && provider.apiKey == "" {
+		provider = s.chatProviderByHints(stringPtrValue(runtimeModel.APIKeyRef), runtimeModel.Provider, runtimeModel.ModelKey, runtimeModel.Name)
+	}
 	baseURL = strings.TrimRight(strings.TrimSpace(runtimeModel.APIEndpoint), "/")
 	if provider.apiKey == "" {
 		provider.apiKey = fallbackKey

@@ -366,8 +366,12 @@ function ModelCard({
 // ─── Unavailable Reason Helper ────────────────────────────────────────────────
 
 function getUnavailableReason(model: Model, health?: 'healthy' | 'unhealthy' | 'unknown'): string | null {
-  if (!model.is_active) return '已手动禁用'
+  const failureReason = model.failure_reason?.trim()
+
+  if (!model.is_active) return failureReason || '已手动禁用'
+  if (failureReason) return failureReason
   if (health === 'unhealthy') return '连接异常'
+  if (model.type === 'image') return null
   if (!model.api_endpoint) return '未配置 Endpoint'
   if (!model.api_key_ref) return '未配置 API Key'
   return null
@@ -412,7 +416,7 @@ function ModelTable({
           {models.map((model) => {
             const health = healthMap[model.name]
             const reason = getUnavailableReason(model, health)
-            const isAvailable = model.is_active && health !== 'unhealthy'
+            const isAvailable = reason === null
             const isTesting = testingId === model.id
 
             return (

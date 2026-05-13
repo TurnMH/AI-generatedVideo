@@ -24,7 +24,9 @@ const (
 )
 
 type storyboardGenerationScope struct {
-	EpisodeID *uint64
+	EpisodeID  *uint64
+	ModelName  string
+	ModelNames []string
 }
 
 type StoryboardService struct {
@@ -197,18 +199,83 @@ func cloneUint64Ptr(v *uint64) *uint64 {
 	return &copy
 }
 
-func (s *StoryboardService) setProjectGenerationScope(projectID uint64, episodeID *uint64) {
-	s.generationScopes.Store(projectID, storyboardGenerationScope{EpisodeID: cloneUint64Ptr(episodeID)})
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
-func (s *StoryboardService) resolveProjectGenerationScope(projectID uint64, episodeID *uint64) *uint64 {
-	if episodeID != nil {
-		return cloneUint64Ptr(episodeID)
+
+func normalizeStoryboardModelNames(modelName string, modelNames []string) []string {
+	normalized := make([]string, 0, len(modelNames)+1)
+	seen := make(map[string]struct{}, len(modelNames)+1)
+	appendModel := func(name string) {
+		trimmed := strings.TrimSpace(name)
+		key := trimmed
+		if trimmed != "" {
+			key = strings.ToLower(trimmed)
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, trimmed)
 	}
+	for _, name := range modelNames {
+		appendModel(name)
+	}
+	if len(normalized) == 0 {
+		appendModel(modelName)
+	}
+	if len(normalized) == 0 {
+		normalized = append(normalized, "")
+	}
+	return normalized
+
+}
+
+func cloneStoryboardGenerationScope(scope storyboardGenerationScope) storyboardGenerationScope {
+	return storyboardGenerationScope{
+		EpisodeID:  cloneUint64Ptr(scope.EpisodeID),
+		ModelName:  strings.TrimSpace(scope.ModelName),
+		ModelNames: cloneStringSlice(scope.ModelNames),
+	}
+
+}
+
+func (s *StoryboardService) setProjectGenerationScope(projectID uint64, scope storyboardGenerationScope) {
+	normalized := normalizeStoryboardModelNames(scope.ModelName, scope.ModelNames)
+	storedScope := storyboardGenerationScope{
+		EpisodeID:  cloneUint64Ptr(scope.EpisodeID),
+		ModelNames: cloneStringSlice(normalized),
+	}
+	if len(normalized) > 0 {
+		storedScope.ModelName = normalized[0]
+	}
+	s.generationScopes.Store(projectID, storedScope)
+
+}
+
+func (s *StoryboardService) resolveProjectGenerationScope(projectID uint64, episodeID *uint64, modelName string, modelNames []string) storyboardGenerationScope {
 	if scope, ok := s.getProjectGenerationScope(projectID); ok {
-		return cloneUint64Ptr(scope.EpisodeID)
+		resolved := cloneStoryboardGenerationScope(scope)
+		if episodeID != nil {
+			resolved.EpisodeID = cloneUint64Ptr(episodeID)
+		}
+		if strings.TrimSpace(modelName) != "" || len(modelNames) > 0 {
+			resolved.ModelName = modelName
+			resolved.ModelNames = cloneStringSlice(modelNames)
+		}
+		return resolved
 	}
-	return nil
+	return storyboardGenerationScope{
+		EpisodeID:  cloneUint64Ptr(episodeID),
+		ModelName:  modelName,
+		ModelNames: cloneStringSlice(modelNames),
+	}
 }
 
 func (s *StoryboardService) getProjectGenerationScope(projectID uint64) (storyboardGenerationScope, bool) {
@@ -217,7 +284,10 @@ func (s *StoryboardService) getProjectGenerationScope(projectID uint64) (storybo
 		return storyboardGenerationScope{}, false
 	}
 	scope, ok := value.(storyboardGenerationScope)
-	return scope, ok
+	if !ok {
+		return storyboardGenerationScope{}, false
+	}
+	return cloneStoryboardGenerationScope(scope), true
 }
 
 func (s *StoryboardService) clearProjectGenerationScope(projectID uint64) {
@@ -345,9 +415,10 @@ func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, ve
 }
 
 func (s *StoryboardService) PauseProjectGeneration(projectID uint64, episodeID *uint64) (int, error) {
-	effectiveEpisodeID := s.resolveProjectGenerationScope(projectID, episodeID)
+	scope := s.resolveProjectGenerationScope(projectID, episodeID, "", nil)
+	effectiveEpisodeID := scope.EpisodeID
 	s.setProjectGenerationPaused(projectID, true)
-	s.setProjectGenerationScope(projectID, effectiveEpisodeID)
+	s.setProjectGenerationScope(projectID, scope)
 
 	storyboards, _, err := s.repo.FindByProjectID(projectID, effectiveEpisodeID, "", "", 1, 10000, false)
 	if err != nil {
@@ -369,10 +440,11 @@ func (s *StoryboardService) PauseProjectGeneration(projectID uint64, episodeID *
 }
 
 func (s *StoryboardService) ResumeProjectGeneration(projectID uint64, episodeID *uint64) (int, error) {
-	effectiveEpisodeID := s.resolveProjectGenerationScope(projectID, episodeID)
-	s.setProjectGenerationScope(projectID, effectiveEpisodeID)
+	scope := s.resolveProjectGenerationScope(projectID, episodeID, "", nil)
+	effectiveEpisodeID := scope.EpisodeID
+	s.setProjectGenerationScope(projectID, scope)
 	s.setProjectGenerationPaused(projectID, false)
-	dispatched, err := s.dispatchReadyStoryboards(projectID, effectiveEpisodeID, []string{"paused"}, "")
+	dispatched, err := s.dispatchReadyStoryboards(projectID, scope, []string{"paused"})
 	if err != nil {
 		return 0, err
 	}
@@ -707,7 +779,7 @@ func (s *StoryboardService) Retry(id uint64, modelName string) (*model.Storyboar
 
 // RetryBatch —— 批量重试项目或指定剧集下所有失败分镜的图片生成
 // RetryBatch retries failed storyboards for a project with the specified model.
-func (s *StoryboardService) RetryBatch(projectID uint64, episodeID *uint64, modelName string) (int, error) {
+func (s *StoryboardService) RetryBatch(projectID uint64, episodeID *uint64, modelName string, modelNames []string) (int, error) {
 	if s.isProjectGenerationPaused(projectID) {
 		return 0, fmt.Errorf("project storyboard generation is paused")
 	}
@@ -715,12 +787,14 @@ func (s *StoryboardService) RetryBatch(projectID uint64, episodeID *uint64, mode
 	if err != nil {
 		return 0, err
 	}
+	resolvedModels := normalizeStoryboardModelNames(modelName, modelNames)
 	count := 0
 	for _, sb := range sbs {
 		if sb.Status != "failed" {
 			continue
 		}
-		if err := s.publishStoryboardGeneration(&sb, 0, modelName); err != nil {
+		usedModel := resolvedModels[count%len(resolvedModels)]
+		if err := s.publishStoryboardGeneration(&sb, 0, usedModel); err != nil {
 			continue
 		}
 		count++
@@ -815,7 +889,7 @@ func (s *StoryboardService) CountPendingOrFailed(projectID uint64, episodeID *ui
 	return count, nil
 }
 
-func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, episodeID *uint64, statuses []string, modelName string) (int, error) {
+func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, scope storyboardGenerationScope, statuses []string) (int, error) {
 	inFlight, err := s.repo.CountByProjectAndStatus(projectID, "generating")
 	if err != nil {
 		return 0, err
@@ -826,7 +900,7 @@ func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, episodeID
 		return 0, nil
 	}
 
-	storyboards, err := s.repo.FindByProjectAndStatuses(projectID, episodeID, statuses, available)
+	storyboards, err := s.repo.FindByProjectAndStatuses(projectID, scope.EpisodeID, statuses, available)
 	if err != nil {
 		return 0, err
 	}
@@ -834,12 +908,15 @@ func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, episodeID
 		return 0, nil
 	}
 
+	resolvedModels := normalizeStoryboardModelNames(scope.ModelName, scope.ModelNames)
 	dispatched := 0
 	for i := range storyboards {
-		if err := s.publishStoryboardGeneration(&storyboards[i], 0, modelName); err != nil {
+		usedModel := resolvedModels[dispatched%len(resolvedModels)]
+		if err := s.publishStoryboardGeneration(&storyboards[i], 0, usedModel); err != nil {
 			s.logger.Warn("dispatch storyboard generation skipped",
 				zap.Uint64("storyboard_id", storyboards[i].ID),
 				zap.Uint64("project_id", projectID),
+				zap.String("model_name", usedModel),
 				zap.Error(err),
 			)
 			continue
@@ -855,7 +932,7 @@ func (s *StoryboardService) refillProjectGeneration(projectID uint64) (int, erro
 	if !ok {
 		return 0, nil
 	}
-	dispatched, err := s.dispatchReadyStoryboards(projectID, scope.EpisodeID, []string{"pending"}, "")
+	dispatched, err := s.dispatchReadyStoryboards(projectID, scope, []string{"pending"})
 	if err != nil {
 		return 0, err
 	}
@@ -891,9 +968,10 @@ func (s *StoryboardService) StatusCounts(projectID uint64) (map[string]int64, er
 }
 
 // ResumeStaleStoryboards —— 启动时恢复卡在 generating 状态的分镜
-// ResumeStaleStoryboards resets any "generating" storyboards back to "pending"
-// and re-dispatches pending storyboards via Kafka.
-// Called at startup to recover from crashes.
+// ResumeStaleStoryboards resets any "generating" storyboards back to "pending".
+// It intentionally does not auto-redispatch pending storyboards on startup,
+// because that would re-enqueue old work with an empty generation scope and
+// silently fall back to the default model.
 func (s *StoryboardService) ResumeStaleStoryboards() {
 	reset, err := s.repo.ResetGeneratingToPending()
 	if err != nil {
@@ -902,28 +980,6 @@ func (s *StoryboardService) ResumeStaleStoryboards() {
 	}
 	if reset > 0 {
 		s.logger.Info("reset stale generating storyboards to pending", zap.Int64("count", reset))
-	}
-	projectIDs, err := s.repo.FindProjectIDsByStatuses([]string{"pending"}, 200)
-	if err != nil {
-		s.logger.Error("failed to find pending storyboard projects for startup resume", zap.Error(err))
-		return
-	}
-	for _, projectID := range projectIDs {
-		dispatched, dispatchErr := s.dispatchReadyStoryboards(projectID, nil, []string{"pending"}, "")
-		if dispatchErr != nil {
-			s.logger.Warn("startup storyboard redispatch skipped",
-				zap.Uint64("project_id", projectID),
-				zap.Error(dispatchErr),
-			)
-			continue
-		}
-		if dispatched > 0 {
-			s.setProjectGenerationScope(projectID, nil)
-			s.logger.Info("startup storyboard redispatch complete",
-				zap.Uint64("project_id", projectID),
-				zap.Int("dispatched", dispatched),
-			)
-		}
 	}
 }
 
@@ -949,12 +1005,13 @@ func (s *StoryboardService) StartStaleCleanup(ctx context.Context, interval, sta
 }
 
 // GenerateAll —— 批量触发项目或指定剧集下所有待处理和失败分镜的图片生成
-func (s *StoryboardService) GenerateAll(projectID uint64, episodeID *uint64, modelName string) (int, error) {
+func (s *StoryboardService) GenerateAll(projectID uint64, episodeID *uint64, modelName string, modelNames []string) (int, error) {
 	if s.isProjectGenerationPaused(projectID) {
 		return 0, fmt.Errorf("project storyboard generation is paused")
 	}
-	s.setProjectGenerationScope(projectID, episodeID)
-	count, err := s.dispatchReadyStoryboards(projectID, episodeID, []string{"failed", "pending"}, modelName)
+	scope := s.resolveProjectGenerationScope(projectID, episodeID, modelName, modelNames)
+	s.setProjectGenerationScope(projectID, scope)
+	count, err := s.dispatchReadyStoryboards(projectID, scope, []string{"failed", "pending"})
 	if err != nil {
 		s.clearProjectGenerationScope(projectID)
 		return 0, err

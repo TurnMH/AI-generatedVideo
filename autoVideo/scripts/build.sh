@@ -87,26 +87,9 @@ for entry in "${SERVICE_LIST[@]}"; do
   fi
 done
 
-# ── 前端镜像 ──────────────────────────────────────────────────
-FRONTEND_IMAGE="autovideo/frontend:${TAG}"
-[ -n "$REGISTRY" ] && FRONTEND_IMAGE="${REGISTRY}/autovideo-frontend:${TAG}"
-
-if [ -f "frontend/Dockerfile" ]; then
-  log "构建 frontend → $FRONTEND_IMAGE"
-  if docker build \
-    -t "$FRONTEND_IMAGE" \
-    --build-arg NEXT_PUBLIC_API_URL="$FRONTEND_NEXT_PUBLIC_API_URL" \
-    --build-arg NEXT_PUBLIC_WS_URL="$FRONTEND_NEXT_PUBLIC_WS_URL" \
-    --build-arg API_PROXY_TARGET="$FRONTEND_API_PROXY_TARGET" \
-    frontend 2>&1 | tail -3; then
-    ok "frontend ✓"
-    [ "$PUSH" = true ] && docker push "$FRONTEND_IMAGE"
-  else
-    FAILED+=("frontend")
-  fi
-else
-  log "跳过 frontend（无 Dockerfile，使用 npm run start 部署）"
-fi
+# ── 前端静态导出 ────────────────────────────────────────────────
+log "frontend 已切换为静态部署，跳过 Docker 镜像构建"
+log "如需发布前端，请运行: bash scripts/export-frontend-static.sh --env=${ENV}"
 
 # ── 结果汇总 ──────────────────────────────────────────────────
 echo ""

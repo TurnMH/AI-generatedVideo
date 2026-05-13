@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -28,8 +29,22 @@ func NewHealthService(modelRepo *repository.ModelRepo, logger *zap.Logger) *Heal
 		modelRepo: modelRepo,
 		breakers:  make(map[uint64]*breaker.Breaker),
 		logger:    logger,
-		client:    &http.Client{Timeout: 3 * time.Second},
+		client:    &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func probeTimeoutForModel(m *model.Model) time.Duration {
+	if m.Type == "image" {
+		return 8 * time.Second
+	}
+	return 3 * time.Second
+}
+
+func treatProbeErrorAsUnknown(m *model.Model, err error) bool {
+	if m.Type != "image" || err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // GetBreaker —— 获取指定模型的熔断器，不存在则自动创建
@@ -108,8 +123,11 @@ func (h *HealthService) CheckModel(ctx context.Context, m *model.Model) error {
 	var latencyMs int64
 
 	if m.APIEndpoint != "" {
+		probeCtx, cancel := context.WithTimeout(ctx, probeTimeoutForModel(m))
+		defer cancel()
+
 		start := time.Now()
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, m.APIEndpoint, nil)
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodHead, m.APIEndpoint, nil)
 		if err != nil {
 			status = "unhealthy"
 			h.GetBreaker(m.ID).OnFailure()
@@ -117,8 +135,12 @@ func (h *HealthService) CheckModel(ctx context.Context, m *model.Model) error {
 			resp, err := h.client.Do(req)
 			latencyMs = time.Since(start).Milliseconds()
 			if err != nil {
-				status = "unhealthy"
-				h.GetBreaker(m.ID).OnFailure()
+				if treatProbeErrorAsUnknown(m, err) {
+					status = "unknown"
+				} else {
+					status = "unhealthy"
+					h.GetBreaker(m.ID).OnFailure()
+				}
 			} else {
 				resp.Body.Close()
 				// Treat any non-5xx status as healthy (API gateways often return 401/403 for HEAD).

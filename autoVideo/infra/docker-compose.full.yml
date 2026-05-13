@@ -25,7 +25,7 @@ x-go-service: &go-service
     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
     - REDIS_ADDR=redis:6379
     - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
+    - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:29092}
     - MINIO_ENDPOINT=minio:9000
     - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
     - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -255,7 +255,7 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
-      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:29092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -303,7 +303,7 @@ services:
       - COMFYUI_URL=${COMFYUI_URL:-}
       - STORAGE_BASE_URL=http://storage:8009
       - CHARACTER_BASE_URL=http://character:8004
-      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:29092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -330,7 +330,7 @@ services:
       - WAN_BASE_URL=${WAN_BASE_URL:-https://visual.volcengineapi.com}
       - REPLICATE_API_KEY=${REPLICATE_API_KEY:-}
       - STORAGE_BASE_URL=http://storage:8009
-      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:29092}
       - FFMPEG_TEMP_DIR=/tmp/autovideo
     depends_on:
       postgres:
@@ -352,7 +352,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - REDIS_ADDR=redis:6379
-      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:9092}
+      - KAFKA_BROKERS=${KAFKA_INTERNAL_BROKER:-kafka:29092}
     depends_on:
       postgres:
         condition: service_healthy
@@ -400,27 +400,7 @@ services:
         condition: service_healthy
 
   # ════════════════════════════════════════════════════════════
-  # 前端（生产构建）
-  # ════════════════════════════════════════════════════════════
-
-  frontend:
-    image: autovideo/frontend:${AUTOVIDEO_TAG:-latest}
-    container_name: autovideo-frontend
-    <<: *restart
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-/}
-      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-}
-      - API_PROXY_TARGET=${API_PROXY_TARGET:-http://gateway:8000}
-      - NODE_ENV=production
-    networks:
-      - autoVideo-net
-    depends_on:
-      - gateway
-
-  # ════════════════════════════════════════════════════════════
-  # API Gateway（Go gateway — 替代 nginx）
+  # API Gateway（由宿主机 Nginx 暴露）
   # ════════════════════════════════════════════════════════════
 
   gateway:

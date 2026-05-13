@@ -95,7 +95,11 @@ export default function ProjectsPage() {
       }) as unknown as Promise<{ data: Project[] }>
   )
 
-  const projects: Project[] = (data as { data?: Project[] })?.data ?? []
+  const projectsData = (data as { data?: Project[] | { items?: Project[] } })?.data
+  const projects = useMemo<Project[]>(
+    () => (Array.isArray(projectsData) ? projectsData : (projectsData?.items ?? [])),
+    [projectsData]
+  )
   const videoProjects = useMemo(() => projects.filter((project) => matchesProjectMedia(project, 'video')), [projects])
 
   const sorted = useMemo(() => {
@@ -338,7 +342,7 @@ export default function ProjectsPage() {
               <Card
                 key={project.id}
                 className="flex flex-col overflow-hidden transition-shadow hover:shadow-md cursor-pointer"
-                onClick={() => router.push(`/video/${project.id}`)}
+                onClick={() => router.push(`/projects/${project.id}`)}
               >
                 {/* Cover */}
                 <div className="relative aspect-video bg-gradient-to-br from-primary-100 via-accent-100 to-pink-100">
@@ -373,7 +377,7 @@ export default function ProjectsPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                        <DropdownMenuItem onClick={() => router.push(`/video/${project.id}`)}>
+                        <DropdownMenuItem onClick={() => router.push(`/projects/${project.id}`)}>
                           <ArrowRight className="mr-2 h-4 w-4" /> 查看详情
                         </DropdownMenuItem>
                         {project.status !== 'paused' &&
@@ -457,7 +461,7 @@ export default function ProjectsPage() {
                     className="ml-auto"
                     onClick={(e) => {
                       e.stopPropagation()
-                      router.push(`/video/${project.id}`)
+                      router.push(`/projects/${project.id}`)
                     }}
                   >
                     进入

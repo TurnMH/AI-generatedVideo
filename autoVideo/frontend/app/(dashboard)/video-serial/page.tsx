@@ -95,7 +95,11 @@ export default function VideoSerialPage() {
       }) as unknown as Promise<{ data: Project[] }>
   )
 
-  const projects: Project[] = (data as { data?: Project[] })?.data ?? []
+  const projectsData = (data as { data?: Project[] | { items?: Project[] } })?.data
+  const projects = useMemo<Project[]>(
+    () => (Array.isArray(projectsData) ? projectsData : (projectsData?.items ?? [])),
+    [projectsData]
+  )
   const serialProjects = useMemo(
     () => projects.filter((p) => matchesProjectMedia(p, 'video_serial')),
     [projects]

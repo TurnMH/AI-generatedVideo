@@ -1,7 +1,7 @@
 'use client'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { projectAPI, sceneAPI } from '@/lib/api'
 import type { Episode, Project, Scene } from '@/types'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -10,21 +10,30 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ArrowLeft, Clapperboard, FileText, Image, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { resolveProjectIdParam } from '@/lib/project-route'
 
 export default function StoryboardPage() {
   const router = useRouter()
   const params = useParams()
-  const projectId = Number(params.id)
+  const pathname = usePathname()
+  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const hasValidProjectId = projectId > 0
   const [scenes, setScenes] = useState<Record<number, Scene[]>>({})
 
+  useEffect(() => {
+    if (!hasValidProjectId) {
+      router.replace('/projects')
+    }
+  }, [hasValidProjectId, router])
+
   const { data: projectRaw } = useSWR(
-    ['project', projectId],
+    hasValidProjectId ? ['project', projectId] : null,
     () => projectAPI.get(projectId) as unknown as Promise<{ data: Project }>
   )
   const project = (projectRaw as { data?: Project })?.data
 
   const { data: episodesData, isLoading: epLoading } = useSWR(
-    ['episodes', projectId],
+    hasValidProjectId ? ['episodes', projectId] : null,
     () =>
       projectAPI.listEpisodes(projectId) as unknown as Promise<{
         data: Episode[]
@@ -33,6 +42,14 @@ export default function StoryboardPage() {
 
   const episodes: Episode[] =
     (episodesData as { data?: Episode[] })?.data ?? []
+
+  if (!hasValidProjectId) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
 
   const loadScenes = async (episodeId: number) => {
     if (scenes[episodeId]) return
@@ -65,7 +82,7 @@ export default function StoryboardPage() {
                   variant="ghost"
                   size="icon"
                   className="mt-0.5 shrink-0 rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
-                  onClick={() => router.push(`/video/${projectId}`)}
+                  onClick={() => router.push(`/projects/${projectId}`)}
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
@@ -128,7 +145,7 @@ export default function StoryboardPage() {
                 variant="ghost"
                 size="icon"
                 className="mt-0.5 shrink-0 rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
-                onClick={() => router.push(`/video/${projectId}`)}
+                onClick={() => router.push(`/projects/${projectId}`)}
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>

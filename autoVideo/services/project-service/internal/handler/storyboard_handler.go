@@ -422,8 +422,9 @@ func (h *StoryboardHandler) RetryBatch(c *gin.Context) {
 	}
 
 	var req struct {
-		ModelName string  `json:"model_name"`
-		EpisodeID *uint64 `json:"episode_id"`
+		ModelName  string   `json:"model_name"`
+		ModelNames []string `json:"model_names"`
+		EpisodeID  *uint64  `json:"episode_id"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if err := h.ensureProjectAssetsReady(c, projectID, req.EpisodeID); err != nil {
@@ -443,7 +444,7 @@ func (h *StoryboardHandler) RetryBatch(c *gin.Context) {
 	}
 
 	go func() {
-		_, _ = h.svc.RetryBatch(projectID, req.EpisodeID, req.ModelName)
+		_, _ = h.svc.RetryBatch(projectID, req.EpisodeID, req.ModelName, req.ModelNames)
 	}()
 
 	payload := gin.H{"retried": count}
@@ -463,9 +464,10 @@ func (h *StoryboardHandler) GenerateAll(c *gin.Context) {
 	}
 
 	var req struct {
-		EpisodeID *uint64 `json:"episode_id"`
-		ModelName string  `json:"model_name"`
-		Force     bool    `json:"force"`
+		EpisodeID  *uint64  `json:"episode_id"`
+		ModelName  string   `json:"model_name"`
+		ModelNames []string `json:"model_names"`
+		Force      bool     `json:"force"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if err := h.ensureProjectAssetsReady(c, projectID, req.EpisodeID); err != nil {
@@ -502,7 +504,7 @@ func (h *StoryboardHandler) GenerateAll(c *gin.Context) {
 
 	// Return immediately; generation dispatches in background
 	go func() {
-		if _, err := h.svc.GenerateAll(projectID, req.EpisodeID, req.ModelName); err != nil {
+		if _, err := h.svc.GenerateAll(projectID, req.EpisodeID, req.ModelName, req.ModelNames); err != nil {
 			fields := []zap.Field{zap.Uint64("project_id", projectID), zap.Error(err)}
 			if req.EpisodeID != nil {
 				fields = append(fields, zap.Uint64("episode_id", *req.EpisodeID))
