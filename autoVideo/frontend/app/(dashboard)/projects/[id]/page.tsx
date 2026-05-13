@@ -2,7 +2,7 @@
 'use client'
 
 import React, { useState, useMemo, useEffect, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import useSWR from 'swr'
 import {
   ArrowLeft,
@@ -35,12 +35,15 @@ import { buildProjectOverview } from '@/lib/projects/workflow'
 import { StorageDrawer } from '@/components/projects/detail/StorageDrawer'
 import { ScriptTab } from '@/components/projects/detail/tabs/ScriptTab'
 import { EpisodeWorkspace } from '@/components/projects/detail/EpisodeWorkspace'
+import { resolveProjectIdParam } from '@/lib/project-route'
 
 export default function ProjectDetailPage() {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const projectId = Number(params.id)
+  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const hasValidProjectId = projectId > 0
 
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<number | null>(null)
   const [storageOpen, setStorageOpen] = useState(false)
@@ -59,12 +62,26 @@ export default function ProjectDetailPage() {
     [sharedEpisodeFilter]
   )
 
+  useEffect(() => {
+    if (!hasValidProjectId) {
+      router.replace('/projects')
+    }
+  }, [hasValidProjectId, router])
+
   const { data, isLoading, mutate: mutateProject } = useSWR(
-    ['project', projectId],
+    hasValidProjectId ? ['project', projectId] : null,
     () => projectAPI.get(projectId) as unknown as Promise<{ data: Project }>,
     { refreshInterval: 3000 }
   )
   const project = data?.data
+
+  if (!hasValidProjectId) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
 
   // 如果是串行项目，重定向到专属路由
   useEffect(() => {

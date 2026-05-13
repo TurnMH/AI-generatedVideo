@@ -40,7 +40,7 @@ func TestSetProjectGenerationScopeClonesEpisodeID(t *testing.T) {
 	svc := NewStoryboardService(nil)
 	episodeID := uint64(42)
 
-	svc.setProjectGenerationScope(7, &episodeID)
+	svc.setProjectGenerationScope(7, storyboardGenerationScope{EpisodeID: &episodeID})
 	episodeID = 99
 
 	scope, ok := svc.getProjectGenerationScope(7)

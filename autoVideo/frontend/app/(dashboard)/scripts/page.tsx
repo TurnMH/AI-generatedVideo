@@ -498,7 +498,7 @@ export default function ScriptsPage() {
               使用此剧本创建项目
             </Button>
           ) : item.project_id ? (
-            <Button size="sm" variant="outline" className="w-full" onClick={() => router.push(`/video/${item.project_id}`)}>
+            <Button size="sm" variant="outline" className="w-full" onClick={() => router.push(`/projects/${item.project_id}`)}>
               <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
               查看项目
             </Button>

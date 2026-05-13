@@ -1,12 +1,19 @@
 /** @type {import('next').NextConfig} */
 const apiProxyTarget = (process.env.API_PROXY_TARGET || 'http://localhost:8000').replace(/\/+$/, '')
+const isProdBuild = process.env.NODE_ENV === 'production'
 
 const nextConfig = {
-  output: 'standalone',
+  output: 'export',
+  trailingSlash: true,
   images: {
     domains: ['localhost', 'cdn.autovideo.ai'],
+    unoptimized: true,
   },
   async rewrites() {
+    if (isProdBuild) {
+      return []
+    }
+
     return [
       {
         source: '/api/:path*',

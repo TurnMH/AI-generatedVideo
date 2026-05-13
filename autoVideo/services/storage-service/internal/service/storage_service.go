@@ -125,6 +125,9 @@ func (s *StorageService) GetURL(ctx context.Context, objectKey string, expiry ti
 	if err != nil {
 		return "", fmt.Errorf("repo.GetByObjectKey: %w", err)
 	}
+	if strings.TrimSpace(f.CdnURL) != "" {
+		return f.CdnURL, nil
+	}
 	u, err := s.driver.GetURL(ctx, f.Bucket, objectKey, expiry)
 	if err != nil {
 		return "", fmt.Errorf("driver.GetURL: %w", err)

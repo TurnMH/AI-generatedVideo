@@ -377,15 +377,17 @@ export const storyboardAPI = {
     api.post(`/api/v1/projects/${projectId}/storyboards/${id}/generate`, modelName ? { model_name: modelName } : {}),
   retry: (projectId: number, id: number, modelName?: string) =>
     api.post(`/api/v1/projects/${projectId}/storyboards/${id}/retry`, modelName ? { model_name: modelName } : {}),
-  retryFailed: (projectId: number, modelName?: string, episodeId?: number) =>
+  retryFailed: (projectId: number, modelName?: string, episodeId?: number, options?: { modelNames?: string[] }) =>
     api.post(`/api/v1/projects/${projectId}/storyboards/retry-failed`, {
       ...(modelName ? { model_name: modelName } : {}),
+      ...(options?.modelNames?.length ? { model_names: options.modelNames } : {}),
       ...(episodeId ? { episode_id: episodeId } : {}),
     }),
-  generateAll: (projectId: number, episodeId?: number, modelName?: string, force?: boolean) =>
+  generateAll: (projectId: number, episodeId?: number, modelName?: string, force?: boolean, options?: { modelNames?: string[] }) =>
     api.post(`/api/v1/projects/${projectId}/storyboards/generate-all`, {
       ...(episodeId !== undefined ? { episode_id: episodeId } : {}),
       ...(modelName ? { model_name: modelName } : {}),
+      ...(options?.modelNames?.length ? { model_names: options.modelNames } : {}),
       ...(force ? { force: true } : {}),
     }),
   auditContinuity: (projectId: number, episodeId?: number) =>

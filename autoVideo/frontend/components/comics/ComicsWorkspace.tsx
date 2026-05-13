@@ -246,7 +246,7 @@ export function ComicsWorkspace({ projectId, project }: { projectId: number; pro
   }
 
   const gridClass = readingMode === 'grid' ? 'grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3' : 'grid grid-cols-1 gap-4'
-  const openEpisodeGenerator = () => router.push(`/video/${projectId}`)
+  const openEpisodeGenerator = () => router.push(`/projects/${projectId}`)
 
   if (isLoading) {
     return <div className="space-y-4 py-6">{[1, 2, 3].map((i) => <div key={i} className="h-20 animate-pulse rounded-lg bg-surface-100" />)}</div>

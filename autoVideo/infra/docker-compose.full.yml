@@ -400,27 +400,7 @@ services:
         condition: service_healthy
 
   # ════════════════════════════════════════════════════════════
-  # 前端（生产构建）
-  # ════════════════════════════════════════════════════════════
-
-  frontend:
-    image: autovideo/frontend:${AUTOVIDEO_TAG:-latest}
-    container_name: autovideo-frontend
-    <<: *restart
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-/}
-      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-}
-      - API_PROXY_TARGET=${API_PROXY_TARGET:-http://gateway:8000}
-      - NODE_ENV=production
-    networks:
-      - autoVideo-net
-    depends_on:
-      - gateway
-
-  # ════════════════════════════════════════════════════════════
-  # API Gateway（Go gateway — 替代 nginx）
+  # API Gateway（由宿主机 Nginx 暴露）
   # ════════════════════════════════════════════════════════════
 
   gateway:

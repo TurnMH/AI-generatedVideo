@@ -70,7 +70,7 @@ COMPOSE_INFRA="$COMPOSE_FILE"
 if [ -f "$COMPOSE_FULL" ]; then
   log "停止旧应用服务..."
   docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" \
-    stop auth project script character image video task model storage frontend \
+    stop auth project script character image video task model storage \
     2>/dev/null || true
 fi
 
@@ -120,7 +120,7 @@ if [ -f "$COMPOSE_FULL" ]; then
   rebuild_project_image
 
   log "启动全量服务..."
-  AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d
+  AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d --remove-orphans
 
   log "强制刷新 project 容器以应用最新镜像..."
   AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d --no-deps --force-recreate project
@@ -134,6 +134,14 @@ if [ -f "$COMPOSE_FULL" ]; then
     sleep 2
   done
   ok "API Gateway ✓ → http://localhost:8000"
+
+  log "发布前端静态文件..."
+  bash "$ROOT/scripts/export-frontend-static.sh" --env="$ENV"
+
+  if docker ps -a --format '{{.Names}}' | grep -Fxq autovideo-frontend; then
+    log "移除旧的 frontend 容器..."
+    docker rm -f autovideo-frontend >/dev/null 2>&1 || true
+  fi
 else
   warn "未找到 $COMPOSE_FULL，仅启动了基础设施"
   warn "请先运行 bash scripts/build.sh 并生成 docker-compose.full.yml"
@@ -150,6 +158,6 @@ echo ""
 docker compose -f "${COMPOSE_FULL:-$COMPOSE_INFRA}" --env-file "$ENV_FILE" ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || \
 docker compose -f "$COMPOSE_INFRA" ps
 echo ""
-ok "前端:    http://$(hostname -I | awk '{print $1}'):3000"
+ok "前端:    https://www.ai-generatedvideo.cloud"
 ok "Gateway: http://$(hostname -I | awk '{print $1}'):8000"
 ok "MinIO:   http://$(hostname -I | awk '{print $1}'):9001"
