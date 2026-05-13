@@ -753,7 +753,7 @@ export default function ImagesPage() {
           <div className="absolute left-3 top-3 z-10 flex items-center gap-2" data-no-pan>
             {activeSession && (
               <div className="max-w-sm truncate rounded-lg border border-surface-200 bg-white/90 px-3 py-1.5 text-xs text-surface-600 shadow-sm backdrop-blur-sm">
-                <span className="font-medium">"{activeSession.prompt}"</span>
+                <span className="font-medium">&quot;{activeSession.prompt}&quot;</span>
                 <span className="ml-2 text-surface-400">{format(new Date(activeSession.createdAt), 'MM-dd HH:mm')}</span>
               </div>
             )}

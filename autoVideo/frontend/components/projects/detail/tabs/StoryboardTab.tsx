@@ -844,6 +844,90 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
   }
 
+  const runStoryboardBatchJobs = async (jobs: Array<() => Promise<unknown>>, concurrency = 4) => {
+    let cursor = 0
+    let success = 0
+    let failed = 0
+
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        const current = jobs[cursor]
+        cursor += 1
+        try {
+          await current()
+          success += 1
+        } catch {
+          failed += 1
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, jobs.length) }, () => worker())
+    )
+
+    return { success, failed }
+  }
+
+  const getMultiCandidateStoryboardTargets = async (
+    kind: 'generate' | 'force' | 'retryFailed',
+    episodeId?: number,
+  ) => {
+    const allStoryboards = ((await storyboardAPI.listAll(projectId, {
+      ...(episodeId !== undefined ? { episode_id: episodeId } : {}),
+    })) as { data?: Storyboard[] }).data ?? []
+
+    return allStoryboards.filter((sb) => {
+      if (isSerial && sb.scene_group_key && !sb.is_scene_first_clip) {
+        return false
+      }
+
+      if (kind === 'force') return true
+      if (kind === 'retryFailed') return sb.status === 'failed'
+      return sb.status === 'pending' || sb.status === 'failed'
+    })
+  }
+
+  const handleGenerateSameStoryboardWithAllModels = async (
+    kind: 'generate' | 'force' | 'retryFailed',
+    modelKeys: string[],
+  ) => {
+    const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
+    if (kind === 'force' && !selectedEpisodeId) return false
+
+    const selectedModels = SB_MODEL_OPTIONS.filter((model) => modelKeys.includes(model.key))
+    const targets = await getMultiCandidateStoryboardTargets(kind, selectedEpisodeId)
+
+    if (targets.length === 0) {
+      toast({
+        title: kind === 'retryFailed'
+          ? (selectedEpisodeId ? `当前集没有失败${storyboardItemLabel}` : `当前没有失败${storyboardItemLabel}`)
+          : kind === 'force'
+            ? `没有可重新生成的${storyboardImageLabel}`
+            : (selectedEpisodeId ? `当前集没有可生成的${storyboardImageLabel}` : `没有可生成的${storyboardImageLabel}`),
+        variant: 'default',
+      })
+      return false
+    }
+
+    const jobs = targets.flatMap((sb) => selectedModels.map((model) => () => storyboardAPI.generate(projectId, sb.id, model.key)))
+    const { success, failed } = await runStoryboardBatchJobs(jobs)
+    const modelHint = `模型：${selectedModels.map((model) => model.label).join('、')}`
+    const versionHint = `每条${storyboardItemLabel}都会为所选模型各生成一版，完成后可在列表中切换版本。`
+
+    toast({
+      title: success > 0 ? `已提交 ${success} 个${storyboardImageLabel}候选图任务` : (kind === 'retryFailed' ? '批量重试失败' : '批量生成失败'),
+      description: success > 0
+        ? `${modelHint}。${versionHint}${failed > 0 ? ` 另有 ${failed} 个任务提交失败。` : ''}`
+        : undefined,
+      variant: success > 0 ? (failed > 0 ? 'default' : 'success') : 'destructive',
+    })
+
+    mutateSb()
+    mutateStats()
+    return success > 0
+  }
+
   const handleForceGenerateEpisode = async (modelKey?: string, modelKeys?: string[]) => {
     if (!storyboardAssetsReady) {
       toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
@@ -854,6 +938,9 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     if (modelKeys === undefined && !window.confirm(`这将清除本集所有已生成的${storyboardImageLabel}并重新生成，确认继续？`)) return false
     try {
       const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelKeys ?? (modelKey ? [modelKey] : undefined))
+      if (selectedModelKeys.length > 1) {
+        return await handleGenerateSameStoryboardWithAllModels('force', selectedModelKeys)
+      }
       const res = await storyboardAPI.generateAll(
         projectId,
         selectedEpisodeId,
@@ -884,6 +971,9 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     try {
       const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
       const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelKeys ?? (modelKey ? [modelKey] : undefined))
+      if (selectedModelKeys.length > 1) {
+        return await handleGenerateSameStoryboardWithAllModels('generate', selectedModelKeys)
+      }
       const res = await storyboardAPI.generateAll(
         projectId,
         selectedEpisodeId,
@@ -962,7 +1052,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
       ? (sbProjectImageModelKey ? `使用项目默认模型：${storyboardDefaultImageModelLabel}` : undefined)
       : selectedModels.length === 1
         ? `使用模型：${selectedModels[0].label}`
-        : `使用模型：${selectedModels.map((model) => model.label).join('、')}（按${storyboardItemLabel}轮询分配）`
+        : `使用模型：${selectedModels.map((model) => model.label).join('、')}；每条${storyboardItemLabel}会生成多版候选供你选择`
 
     return {
       selectedModelKeys,
@@ -1011,6 +1101,9 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     try {
       const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
       const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelNames ?? (modelName ? [modelName] : undefined))
+      if (selectedModelKeys.length > 1) {
+        return await handleGenerateSameStoryboardWithAllModels('retryFailed', selectedModelKeys)
+      }
       const res = await storyboardAPI.retryFailed(
         projectId,
         effectiveModelName,
@@ -1318,7 +1411,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               size="sm"
               variant="outline"
               className="border-red-200 text-red-600 hover:bg-red-50"
-              title={`选择一个或多个模型，按${storyboardItemLabel}轮询重试失败任务`}
+              title={`选择一个或多个模型，为同一条${storyboardItemLabel}生成多版候选后再挑选`}
               onClick={() => openBatchStoryboardDialog('retryFailed')}
             >
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -1340,7 +1433,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                   size="sm"
                   variant="outline"
                   disabled={!storyboardAssetsReady}
-                  title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为本集${storyboardItemLabel}按轮询方式生成`}
+                  title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为本集同一条${storyboardItemLabel}生成多版候选后再挑选`}
                   onClick={() => openBatchStoryboardDialog('generate')}
                 >
                   <Sparkles className="mr-1.5 h-3.5 w-3.5" />
@@ -1352,7 +1445,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                 size="sm"
                 variant="outline"
                 disabled={isActive}
-                title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `重置本集所有${storyboardImageLabel}并重新生成；可多选模型按${storyboardItemLabel}轮询`}
+                title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `重置本集所有${storyboardImageLabel}并重新生成；多选模型时会为同一条${storyboardItemLabel}追加多版候选`}
                 onClick={() => openBatchStoryboardDialog('force')}
               >
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -1370,7 +1463,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               <Button
                 size="sm"
                 disabled={!storyboardAssetsReady}
-                title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为当前范围内待处理${storyboardItemLabel}按轮询方式生成`}
+                title={!storyboardAssetsReady ? storyboardAssetsBlockingReason || '请先完成资源图生成' : `选择一个或多个模型，为当前范围内同一条${storyboardItemLabel}生成多版候选后再挑选`}
                 onClick={() => openBatchStoryboardDialog('generate')}
               >
                 <Sparkles className="mr-1.5 h-3.5 w-3.5" />
@@ -1456,12 +1549,12 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
                 <p className="text-[12px] leading-5 text-amber-800">
-                  将先清除当前集已完成的{storyboardImageLabel}，再按所选模型重新生成。每条{storyboardItemLabel}仍只会保留一版结果，不会像资源图那样为同一条目产出多张候选图。
+                  单模型重新生成仍会按原流程覆盖刷新；如果同时选择多个模型，系统会为同一条{storyboardItemLabel}追加多版候选图，保留当前结果供你稍后挑选。
                 </p>
               </div>
             )}
             <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-[12px] leading-5 text-sky-800">
-              这里支持选择多个模型共享同一批任务。多个模型会按{storyboardItemLabel}轮询分配，每条{storyboardItemLabel}只使用其中一个模型生成一版结果。
+              这里支持同时选择多个模型。选择多个模型时，同一条{storyboardItemLabel}会为每个模型各生成一版候选图，完成后你可以在列表里切换版本并保留最满意的一张。
             </div>
             <div className="space-y-3">
               <Label className="text-xs font-medium">生成模型（可多选）</Label>
@@ -1543,7 +1636,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               ) : batchStoryboardModels.length === 1 ? (
                 <p className="text-[11px] text-surface-400">已选 1 个模型；当前批次将统一使用该模型。</p>
               ) : (
-                <p className="text-[11px] text-surface-400">已选 {batchStoryboardModels.length} 个模型；系统会按{storyboardItemLabel}轮询分配，不会为单条{storyboardItemLabel}生成多张候选图。</p>
+                <p className="text-[11px] text-surface-400">已选 {batchStoryboardModels.length} 个模型；同一条{storyboardItemLabel}会为每个模型各生成一版候选图，后续可在列表里切换版本。</p>
               )}
             </div>
           </div>
@@ -1868,12 +1961,15 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               )}
               {sb.versions && sb.versions.length > 1 && (
                 <div className="mb-2">
-                  <Select defaultValue={String(sb.current_version)} onValueChange={(v) => handleSwitchVersion(sb.id, Number(v))}>
+                  <Select
+                    value={String(sb.versions.find((ver) => ver.is_current)?.id ?? sb.versions.find((ver) => ver.version_number === sb.current_version)?.id ?? sb.versions[0]?.id ?? '')}
+                    onValueChange={(v) => handleSwitchVersion(sb.id, Number(v))}
+                  >
                     <SelectTrigger className="h-7 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {sb.versions.slice(0, 4).map((ver) => (
+                      {sb.versions.map((ver) => (
                         <SelectItem key={ver.id} value={String(ver.id)}>V{ver.version_number}{ver.is_current ? ' (当前)' : ''}</SelectItem>
                       ))}
                     </SelectContent>

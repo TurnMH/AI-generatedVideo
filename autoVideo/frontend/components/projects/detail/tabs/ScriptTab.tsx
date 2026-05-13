@@ -2101,7 +2101,7 @@ export function ScriptTab({
                         </div>
                       </>
                     ) : (
-                      <p className="text-[11px] text-amber-600">点击"转剧本格式"将小说原文转化为标准剧本格式（场景标题、动作描述、台词等）。</p>
+                      <p className="text-[11px] text-amber-600">点击&quot;转剧本格式&quot;将小说原文转化为标准剧本格式（场景标题、动作描述、台词等）。</p>
                     )}
                   </div>
 
@@ -2173,7 +2173,7 @@ export function ScriptTab({
                         )}
                       </div>
                     ) : (
-                      <p className="text-[11px] text-green-600">点击"AI 审查"分析本集剧本的完整度、一致性、台词质量及情节衔接。</p>
+                      <p className="text-[11px] text-green-600">点击&quot;AI 审查&quot;分析本集剧本的完整度、一致性、台词质量及情节衔接。</p>
                     )}
                   </div>
                 </>

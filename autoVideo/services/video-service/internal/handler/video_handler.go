@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/autovideo/video-service/internal/model"
@@ -18,6 +19,39 @@ import (
 )
 
 const videoRenderConfigVersion = 1
+
+func validateSerialScenePayload(imageURLs []string, sceneGroupKeys []string, serialScene bool) error {
+	if !serialScene {
+		return nil
+	}
+	if len(imageURLs) == 0 {
+		return fmt.Errorf("serial_scene requires at least one clip")
+	}
+	if len(sceneGroupKeys) != len(imageURLs) {
+		return fmt.Errorf("serial_scene requires scene_group_keys for every clip")
+	}
+
+	seenGroups := make(map[string]struct{}, len(sceneGroupKeys))
+	for idx, rawURL := range imageURLs {
+		trimmedURL := strings.TrimSpace(rawURL)
+		groupKey := strings.TrimSpace(sceneGroupKeys[idx])
+		if groupKey == "" {
+			if trimmedURL == "" {
+				return fmt.Errorf("serial_scene clip %d must provide a first-frame image when scene_group_key is empty", idx+1)
+			}
+			continue
+		}
+		if _, seen := seenGroups[groupKey]; seen {
+			continue
+		}
+		if trimmedURL == "" {
+			return fmt.Errorf("serial_scene group %q is missing its first-frame image", groupKey)
+		}
+		seenGroups[groupKey] = struct{}{}
+	}
+
+	return nil
+}
 
 func normalizeRenderConfig(rc model.RenderConfig) model.RenderConfig {
 	if rc == nil {
@@ -355,6 +389,10 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if err := validateSerialScenePayload(req.ImageURLs, req.SceneGroupKeys, req.SerialScene); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
 	userID := mustUserID(c)
 
@@ -555,6 +593,12 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	for _, ep := range req.Episodes {
+		if err := validateSerialScenePayload(ep.ImageURLs, ep.SceneGroupKeys, req.SerialScene); err != nil {
+			response.BadRequest(c, fmt.Sprintf("episode %d: %s", ep.EpisodeID, err.Error()))
+			return
+		}
 	}
 
 	userID := mustUserID(c)

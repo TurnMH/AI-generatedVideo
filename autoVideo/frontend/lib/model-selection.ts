@@ -1,3 +1,4 @@
+import { modelAPI } from '@/lib/api'
 import type { Model } from '@/types'
 
 type ModelHealth = 'healthy' | 'unhealthy' | 'unknown'
@@ -23,4 +24,25 @@ export function pickPreferredModel(
     if (left.priority !== right.priority) return left.priority - right.priority
     return left.name.localeCompare(right.name, 'zh-CN')
   })[0]
+}
+
+export async function fetchModelIdentity(modelId?: number): Promise<{
+  modelKey?: string
+  modelLabel?: string
+}> {
+  if (!modelId) return {}
+
+  try {
+    const res = await modelAPI.get(modelId) as unknown as { data?: Model }
+    const model = res?.data
+    const modelKey = typeof model?.model_key === 'string' ? model.model_key.trim() : ''
+    const modelLabel = typeof model?.name === 'string' ? model.name.trim() : ''
+
+    return {
+      modelKey: modelKey || undefined,
+      modelLabel: modelLabel || undefined,
+    }
+  } catch {
+    return {}
+  }
 }
