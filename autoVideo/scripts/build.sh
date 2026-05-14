@@ -15,6 +15,7 @@ PUSH=false
 TAG="$DEFAULT_TAG"
 REGISTRY="$DEFAULT_REGISTRY"
 ENV="$DEFAULT_ENV"
+PLATFORM=""
 
 for arg in "$@"; do
   case $arg in
@@ -22,6 +23,7 @@ for arg in "$@"; do
     --tag=*)        TAG="${arg#*=}" ;;
     --registry=*)   REGISTRY="${arg#*=}" ;;
     --env=*)        ENV="${arg#*=}" ;;
+    --platform=*)   PLATFORM="${arg#*=}" ;;
   esac
 done
 
@@ -30,6 +32,8 @@ ok()   { echo -e "\033[1;32m[ok]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || err "需要 Docker"
+[ -n "$PLATFORM" ] && docker buildx version >/dev/null 2>&1 || true
+[ -n "$PLATFORM" ] && docker buildx version >/dev/null 2>&1 || err "指定 --platform 时需要 Docker buildx"
 
 ENV_FILE="infra/.env.${ENV}"
 if [ ! -f "$ENV_FILE" ] && [ -f "infra/.env" ]; then
@@ -75,7 +79,13 @@ for entry in "${SERVICE_LIST[@]}"; do
   [ -n "$REGISTRY" ] && IMAGE="${REGISTRY}/autovideo-${name}:${TAG}"
 
   log "构建 $name → $IMAGE"
-  if docker build -t "$IMAGE" "$dir" --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>&1 | tail -3; then
+  if [ -n "$PLATFORM" ]; then
+    BUILD_CMD=(docker buildx build --platform "$PLATFORM" --load -t "$IMAGE" "$dir" --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  else
+    BUILD_CMD=(docker build -t "$IMAGE" "$dir" --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+  fi
+
+  if "${BUILD_CMD[@]}" 2>&1 | tail -3; then
     ok "$name ✓"
     if [ "$PUSH" = true ]; then
       log "推送 $IMAGE..."

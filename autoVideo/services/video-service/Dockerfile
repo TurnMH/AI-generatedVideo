@@ -1,15 +1,17 @@
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 ENV GOPROXY=https://goproxy.cn,direct \
 	GOSUMDB=sum.golang.google.cn
 
 WORKDIR /app
+ARG TARGETOS
+ARG TARGETARCH
 
 # Download dependencies first (cached layer)
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o video-service ./cmd
+RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" go build -trimpath -ldflags="-s -w" -o video-service ./cmd
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.19

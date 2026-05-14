@@ -6,7 +6,7 @@ cd "$ROOT"
 source "$ROOT/scripts/config.sh"
 
 ENV="$DEFAULT_ENV"
-TARGET_DIR="${FRONTEND_STATIC_DIR:-/var/www/ai-generatedvideo.cloud}"
+TARGET_DIR="${FRONTEND_STATIC_DIR:-/home/autoVideo/web}"
 SKIP_INSTALL=false
 
 for arg in "$@"; do

@@ -158,6 +158,6 @@ echo ""
 docker compose -f "${COMPOSE_FULL:-$COMPOSE_INFRA}" --env-file "$ENV_FILE" ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || \
 docker compose -f "$COMPOSE_INFRA" ps
 echo ""
-ok "前端:    https://www.ai-generatedvideo.cloud"
+ok "前端:    https://10003.klyhtest.com"
 ok "Gateway: http://$(hostname -I | awk '{print $1}'):8000"
 ok "MinIO:   http://$(hostname -I | awk '{print $1}'):9001"

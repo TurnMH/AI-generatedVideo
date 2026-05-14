@@ -1,5 +1,5 @@
 # ── Build stage ─────────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 
 ENV GOPROXY=https://goproxy.cn,direct \
     GOSUMDB=sum.golang.google.cn
@@ -8,13 +8,15 @@ RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghu
     && apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /app
+ARG TARGETOS
+ARG TARGETARCH
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
     go build -ldflags="-w -s" -o /app/project-service ./cmd
 
 FROM alpine:3.20 AS healthcheck-tools

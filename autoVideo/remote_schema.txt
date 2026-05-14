@@ -1,0 +1,32 @@
+     column_name      |        data_type         
+----------------------+--------------------------
+ api_endpoint         | text
+ api_key_ref          | character varying
+ capability_tags      | ARRAY
+ config               | jsonb
+ consistency_method   | character varying
+ context_window       | bigint
+ cost_per_unit        | numeric
+ created_at           | timestamp with time zone
+ description          | text
+ failure_reason       | text
+ id                   | bigint
+ input_price          | numeric
+ is_active            | boolean
+ is_default           | boolean
+ max_resolution       | character varying
+ model_key            | character varying
+ name                 | character varying
+ output_price         | numeric
+ priority             | bigint
+ provider             | character varying
+ sort_order           | bigint
+ speed_rating         | character varying
+ supported_ratios     | ARRAY
+ supports_consistency | boolean
+ type                 | character varying
+ unit                 | character varying
+ updated_at           | timestamp with time zone
+ video_mode           | character varying
+(28 rows)
+
