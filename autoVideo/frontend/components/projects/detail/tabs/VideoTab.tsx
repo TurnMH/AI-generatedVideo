@@ -344,6 +344,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const [videoModelNativeAudio, setVideoModelNativeAudio] = useState<Record<string, boolean>>({})
   const [videoModelParams, setVideoModelParams] = useState<Record<string, { key: string; label: string; default: string; values: { value: string; label: string }[] }[]>>({})
   const [videoParamSelections, setVideoParamSelections] = useState<Record<string, Record<string, string>>>({})
+  const [videoModelStatusLoaded, setVideoModelStatusLoaded] = useState(false)
   // Transition effect for video tab generation
   const [vtTransition, setVtTransition] = useState('dissolve')
   const [vtTransitionDuration, setVtTransitionDuration] = useState('0.5')
@@ -387,7 +388,10 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       const avail: Record<string, boolean> = {}
       const audio: Record<string, boolean> = {}
       const params: Record<string, { key: string; label: string; default: string; values: { value: string; label: string }[] }[]> = {}
-      res.data.models.forEach((m) => {
+      const models = (res as { models?: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[]; data?: { models?: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] } })?.models
+        ?? (res as { data?: { models?: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] } })?.data?.models
+        ?? []
+      models.forEach((m) => {
         avail[m.key] = m.available
         if (m.native_audio) audio[m.key] = true
         if (m.params && m.params.length > 0) params[m.key] = m.params
@@ -396,6 +400,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       setVideoModelNativeAudio(audio)
       setVideoModelParams(params)
     }).catch((e) => { console.warn('[videoAPI.modelStatus]', e) })
+      .finally(() => { setVideoModelStatusLoaded(true) })
   }, [])
 
   const { data: vtModelsData } = useSWR(
@@ -415,6 +420,12 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       (m) => m.audioSupport === 'native' || videoModelNativeAudio[m.key] === true
     )
   }, [vtVideoModelOptions, vtFilterAudioOnly, videoModelNativeAudio])
+  const availableVideoModelKeys = useMemo(
+    () => vtVideoModelOptions.filter((model) => videoModelAvailability[model.key] === true).map((model) => model.key),
+    [vtVideoModelOptions, videoModelAvailability]
+  )
+  const hasAvailableVideoGenerator = availableVideoModelKeys.length > 0
+  const isSelectedVideoModelAvailable = videoModelAvailability[selectedVideoModel] === true
   const VIDEO_STYLE_FAVORITES_STORAGE_KEY = 'project-video-style-favorites'
   const videoModelSelectionStorageKey = `project-video-model-selection:${projectId}`
   const videoMotionSelectionStorageKey = `project-video-motion-selection:${projectId}`
@@ -746,6 +757,22 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const [generatingVideoEpisodeIds, setGeneratingVideoEpisodeIds] = useState<Set<number>>(new Set())
 
   const handleGenerateEpisode = async (episodeId: number) => {
+    if (videoModelStatusLoaded && !hasAvailableVideoGenerator) {
+      toast({
+        title: '当前服务器未配置可用视频通道',
+        description: '请先补齐 video-service 的模型密钥配置，再发起视频生成。',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (videoModelStatusLoaded && !isSelectedVideoModelAvailable) {
+      toast({
+        title: `当前模型 ${selectedVideoModelMeta.label} 未接入`,
+        description: '请切换到已接入模型，或先完成服务端视频通道配置。',
+        variant: 'destructive',
+      })
+      return
+    }
     const episode = episodeMap.get(episodeId)
     const completedSbs = ((await storyboardAPI.listAll(projectId, { episode_id: episodeId, status: 'completed' })) as { data?: Storyboard[] }).data ?? []
     // 串行模式：非首帧分镜无 image_url（由视频服务用前一片段末帧填充），但仍需包含在 clips 列表里以触发串行链。
@@ -868,6 +895,22 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   }
 
   const handleGenerateAll = async () => {
+    if (videoModelStatusLoaded && !hasAvailableVideoGenerator) {
+      toast({
+        title: '当前服务器未配置可用视频通道',
+        description: '请先补齐 video-service 的模型密钥配置，再发起视频生成。',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (videoModelStatusLoaded && !isSelectedVideoModelAvailable) {
+      toast({
+        title: `当前模型 ${selectedVideoModelMeta.label} 未接入`,
+        description: '请切换到已接入模型，或先完成服务端视频通道配置。',
+        variant: 'destructive',
+      })
+      return
+    }
     const completedSb = ((await storyboardAPI.listAll(projectId, { status: 'completed' })) as { data?: Storyboard[] }).data ?? []
     // 串行模式：非首帧分镜（image_url 为空但有 scene_group_key）也需要包含，
     // 视频服务会用前一片段末帧作为其首帧。
@@ -1183,6 +1226,16 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                 </Select>
               </div>
             </div>
+            {videoModelStatusLoaded && !hasAvailableVideoGenerator && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-700">
+                当前服务器还没有接入任何可用的视频生成器，暂时无法发起视频生成。请先补齐服务端视频模型密钥配置。
+              </div>
+            )}
+            {videoModelStatusLoaded && hasAvailableVideoGenerator && !isSelectedVideoModelAvailable && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-700">
+                当前选中的模型尚未接入服务端。请切换到状态为“可用”的视频模型后再生成。
+              </div>
+            )}
             {/* Model-specific params (duration, aspect_ratio, etc.) */}
             {(videoModelParams[selectedVideoModel] ?? []).length > 0 && (
               <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-3">
@@ -1251,7 +1304,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setVtDialogEpisodeId(null)}>取消</Button>
               <Button onClick={handleVtDialogConfirm}
-                disabled={vtDialogEpisodeId !== null && vtDialogEpisodeId > 0 && generatingVideoEpisodeIds.has(vtDialogEpisodeId)}>
+                disabled={(vtDialogEpisodeId !== null && vtDialogEpisodeId > 0 && generatingVideoEpisodeIds.has(vtDialogEpisodeId)) || (videoModelStatusLoaded && (!hasAvailableVideoGenerator || !isSelectedVideoModelAvailable))}>
                 {vtDialogEpisodeId !== null && vtDialogEpisodeId > 0 && generatingVideoEpisodeIds.has(vtDialogEpisodeId)
                   ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                   : <Video className="mr-1.5 h-4 w-4" />}

@@ -1,8 +1,12 @@
 'use client'
 
 import { Suspense, useState, useEffect, useRef } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { BookOpen, Clapperboard, ImageIcon, Lock, Mail, Video } from 'lucide-react'
+import {
+  Lock,
+  Mail,
+} from 'lucide-react'
 import { authAPI } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
 import { Button } from '@/components/ui/button'
@@ -10,13 +14,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import {
-  EntryCard,
+  BrandLockup,
   EntryCopyright,
-  EntryFeatureStrip,
   EntryFooterLink,
   EntryPageLayout,
-  MarketingShowcase,
-  type MarketingItem,
 } from '@/components/marketing/entry-ui'
 
 interface FormState {
@@ -28,33 +29,6 @@ interface FieldErrors {
   email?: string
   password?: string
 }
-
-const creativeItems: MarketingItem[] = [
-  {
-    title: '图片灵感',
-    description: '高质感封面、海报、角色形象，一站式生成与优化',
-    icon: ImageIcon,
-    accent: 'from-cyan-400/30 via-sky-500/20 to-transparent',
-  },
-  {
-    title: '视频表达',
-    description: '脚本、分镜、视频成片流转更顺滑，创作链路更完整',
-    icon: Video,
-    accent: 'from-violet-400/30 via-fuchsia-500/20 to-transparent',
-  },
-  {
-    title: '小说世界观',
-    description: '从文字设定到剧情演绎，把故事快速转为内容资产',
-    icon: BookOpen,
-    accent: 'from-amber-300/30 via-orange-500/20 to-transparent',
-  },
-  {
-    title: '漫画分镜感',
-    description: '章节节奏、画面情绪、人物表现更有“胶圈”氛围',
-    icon: Clapperboard,
-    accent: 'from-pink-400/30 via-rose-500/20 to-transparent',
-  },
-]
 
 function validate(values: FormState): FieldErrors {
   const errors: FieldErrors = {}
@@ -125,129 +99,126 @@ function LoginPageContent() {
 
   return (
     <EntryPageLayout animatedBackground>
-      <div className="flex min-h-screen items-center">
-        <div className="grid w-full gap-8 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
-          <MarketingShowcase
-            badge="更时尚的 AI 创作入口"
-            title={
-              <>
-                把
-                <span className="bg-gradient-to-r from-cyan-300 via-violet-300 to-pink-300 bg-clip-text text-transparent">
-                  图片、视频、小说、漫画
-                </span>
-                创作汇聚到一个工作台
-              </>
-            }
-            description="登录后即可进入统一创作空间，快速在视觉、剧情、分镜和内容生产之间切换，让创意更具潮流感与完成度。"
-            items={creativeItems}
-            footer={
-              <div className="flex items-center gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur-xl">
-                <div className="flex -space-x-2">
-                  <div className="h-10 w-10 rounded-full border border-white/10 bg-cyan-400/30" />
-                  <div className="h-10 w-10 rounded-full border border-white/10 bg-violet-400/30" />
-                  <div className="h-10 w-10 rounded-full border border-white/10 bg-pink-400/30" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-white">灵感正在并行流动</p>
-                  <p className="text-sm text-surface-400">
-                    从故事文本到视觉成片，让每个创作模块更有表达力。
-                  </p>
+      <div className="flex min-h-screen flex-col">
+        <header className="flex items-center justify-between gap-4 py-3 md:py-5">
+          <BrandLockup />
+          <div className="flex items-center gap-2">
+            <Link
+              href="/"
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 backdrop-blur-xl transition hover:border-white/20 hover:bg-white/10"
+            >
+              返回首页
+            </Link>
+            <Link
+              href="/register"
+              className="rounded-full border border-cyan-200/15 bg-[linear-gradient(135deg,rgba(34,211,238,0.18),rgba(245,158,11,0.12))] px-4 py-2 text-sm font-medium text-white transition hover:-translate-y-0.5 hover:bg-[linear-gradient(135deg,rgba(34,211,238,0.22),rgba(245,158,11,0.16))]"
+            >
+              创建账户
+            </Link>
+          </div>
+        </header>
+
+        <div className="flex flex-1 items-center py-6 lg:py-8 xl:py-10">
+          <div className="mx-auto w-full max-w-xl">
+            <section>
+              <div className="relative overflow-hidden rounded-[40px] border border-cyan-200/15 bg-slate-950/78 p-6 shadow-[0_30px_100px_rgba(2,6,23,0.48)] backdrop-blur-2xl sm:p-8 lg:p-10">
+                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.14),transparent_22%,transparent_72%,rgba(255,255,255,0.05))]" />
+                <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-80" />
+                <div className="pointer-events-none absolute -right-12 top-10 h-40 w-40 rounded-full bg-cyan-300/14 blur-3xl" />
+                <div className="pointer-events-none absolute -left-6 bottom-8 h-28 w-28 rounded-full bg-amber-300/12 blur-3xl" />
+
+                <div className="relative">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Access Gate</p>
+                    <h2 className="mt-3 text-3xl font-semibold text-white sm:text-[2.2rem]">欢迎回到 AI Stream Media</h2>
+                    <p className="mt-3 max-w-lg text-sm leading-6 text-slate-300">
+                      输入账号信息并继续你的项目工作流。
+                    </p>
+                  </div>
+
+                  {justRegistered && (
+                    <div className="mt-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+                      注册成功，请登录
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmit} noValidate className="mt-6 space-y-5">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="email" className="text-slate-200">邮箱</Label>
+                      <div className="group relative">
+                        <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300 transition-colors group-focus-within:text-cyan-200" />
+                        <Input
+                          id="email"
+                          name="email"
+                          type="email"
+                          autoComplete="email"
+                          placeholder="you@example.com"
+                          value={form.email}
+                          onChange={handleChange}
+                          error={!!errors.email}
+                          style={{ backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
+                          className="h-12 rounded-2xl border-white/10 pl-10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] placeholder:text-slate-500 focus-visible:border-cyan-300/70 focus-visible:ring-2 focus-visible:ring-cyan-300/20 [&:-webkit-autofill]:shadow-[0_0_0_1000px_rgba(15,23,42,0.75)_inset] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
+                        />
+                      </div>
+                      {errors.email && <p className="text-xs text-red-400">{errors.email}</p>}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="password" className="text-slate-200">密码</Label>
+                      <div className="group relative">
+                        <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300 transition-colors group-focus-within:text-amber-200" />
+                        <Input
+                          id="password"
+                          name="password"
+                          type="password"
+                          autoComplete="current-password"
+                          placeholder="••••••••"
+                          value={form.password}
+                          onChange={handleChange}
+                          error={!!errors.password}
+                          style={{ backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
+                          className="h-12 rounded-2xl border-white/10 pl-10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] placeholder:text-slate-500 focus-visible:border-amber-300/70 focus-visible:ring-2 focus-visible:ring-amber-300/20 [&:-webkit-autofill]:shadow-[0_0_0_1000px_rgba(15,23,42,0.75)_inset] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
+                        />
+                      </div>
+                      {errors.password && <p className="text-xs text-red-400">{errors.password}</p>}
+                    </div>
+
+                    {serverError && (
+                      <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                        {serverError}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Button
+                        type="submit"
+                        className="h-13 w-full rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(34,211,238,0.96),rgba(45,212,191,0.92),rgba(245,158,11,0.9))] text-base font-semibold shadow-[0_20px_52px_rgba(8,145,178,0.34)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_26px_58px_rgba(245,158,11,0.24)] hover:brightness-110 active:translate-y-0"
+                        disabled={loading}
+                      >
+                        {loading ? (
+                          <span className="flex items-center gap-2">
+                            <LoadingSpinner size="sm" />
+                            登录中…
+                          </span>
+                        ) : (
+                          '进入 AI Stream Media'
+                        )}
+                      </Button>
+                      {slowNetwork && (
+                        <p className="text-center text-xs text-amber-300/80">
+                          网络较慢，请耐心等待…
+                        </p>
+                      )}
+                    </div>
+                  </form>
+
+                  <EntryFooterLink prefix="还没有账户？" href="/register" label="注册" />
                 </div>
               </div>
-            }
-          />
 
-          <section className="mx-auto w-full max-w-md">
-            <EntryCard
-              title="欢迎回来"
-              subtitle="继续你的灵感流转、项目推进与多模态内容生产。"
-              tags={['图片', '视频', '小说', '漫画']}
-            >
-              {justRegistered && (
-                <div className="mb-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-                  注册成功，请登录
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} noValidate className="space-y-5">
-                <div className="space-y-1.5">
-                  <Label htmlFor="email" className="text-surface-200">邮箱</Label>
-                  <div className="group relative">
-                    <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300 transition-colors group-focus-within:text-cyan-200" />
-                    <Input
-                      id="email"
-                      name="email"
-                      type="email"
-                      autoComplete="email"
-                      placeholder="you@example.com"
-                      value={form.email}
-                      onChange={handleChange}
-                      error={!!errors.email}
-                      style={{ backgroundColor: 'rgba(15, 23, 42, 0.75)' }}
-                      className="border-white/10 backdrop-blur-none pl-10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] placeholder:text-slate-500 focus-visible:border-cyan-300/70 focus-visible:ring-2 focus-visible:ring-violet-400/30 [&:-webkit-autofill]:shadow-[0_0_0_1000px_rgba(15,23,42,0.75)_inset] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
-                    />
-                  </div>
-                  {errors.email && <p className="text-xs text-red-400">{errors.email}</p>}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="password" className="text-surface-200">密码</Label>
-                  <div className="group relative">
-                    <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300 transition-colors group-focus-within:text-violet-200" />
-                    <Input
-                      id="password"
-                      name="password"
-                      type="password"
-                      autoComplete="current-password"
-                      placeholder="••••••••"
-                      value={form.password}
-                      onChange={handleChange}
-                      error={!!errors.password}
-                      style={{ backgroundColor: 'rgba(15, 23, 42, 0.75)' }}
-                      className="border-white/10 backdrop-blur-none pl-10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] placeholder:text-slate-500 focus-visible:border-cyan-300/70 focus-visible:ring-2 focus-visible:ring-violet-400/30 [&:-webkit-autofill]:shadow-[0_0_0_1000px_rgba(15,23,42,0.75)_inset] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
-                    />
-                  </div>
-                  {errors.password && <p className="text-xs text-red-400">{errors.password}</p>}
-                </div>
-
-                {serverError && (
-                  <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                    {serverError}
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <Button
-                    type="submit"
-                    className="h-11 w-full border border-white/10 bg-[linear-gradient(135deg,rgba(56,189,248,0.95),rgba(139,92,246,0.95),rgba(236,72,153,0.92))] shadow-[0_12px_40px_rgba(14,165,233,0.28)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_18px_46px_rgba(168,85,247,0.32)] hover:brightness-110 active:translate-y-0"
-                    disabled={loading}
-                  >
-                    {loading ? (
-                      <span className="flex items-center gap-2">
-                        <LoadingSpinner size="sm" />
-                        登录中…
-                      </span>
-                    ) : (
-                      '进入创作台'
-                    )}
-                  </Button>
-                  {slowNetwork && (
-                    <p className="text-center text-xs text-amber-300/80">
-                      网络较慢，请耐心等待…
-                    </p>
-                  )}
-                </div>
-
-                <EntryFeatureStrip
-                  items={['快速进入项目台', '统一管理图片/视频', '延续你的剧情与分镜']}
-                />
-              </form>
-
-              <EntryFooterLink prefix="还没有账户？" href="/register" label="注册" />
-            </EntryCard>
-
-            <EntryCopyright />
-          </section>
+              <EntryCopyright />
+            </section>
+          </div>
         </div>
       </div>
     </EntryPageLayout>
@@ -258,10 +229,10 @@ function LoginPageFallback() {
   return (
     <EntryPageLayout animatedBackground className="px-4">
       <div className="flex min-h-screen items-center justify-center">
-        <div className="relative z-10 flex w-full max-w-md justify-center rounded-[32px] border border-white/10 bg-white/[0.08] p-8 shadow-2xl backdrop-blur-2xl">
-          <div className="flex items-center gap-2 text-sm text-surface-300">
+        <div className="relative z-10 flex w-full max-w-lg justify-center rounded-[36px] border border-white/10 bg-slate-950/40 p-10 shadow-[0_24px_80px_rgba(2,6,23,0.38)] backdrop-blur-2xl">
+          <div className="flex items-center gap-2 text-sm text-slate-300">
             <LoadingSpinner size="sm" />
-            页面加载中…
+            登录舱准备中…
           </div>
         </div>
       </div>

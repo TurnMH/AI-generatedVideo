@@ -111,15 +111,15 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="sidebar-panel flex h-screen w-64 flex-col shadow-xl">
+    <aside className="sidebar-panel flex h-screen w-64 flex-col border-r border-white/[0.06] shadow-[0_24px_60px_rgba(2,6,23,0.38)]">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-white/[0.06] px-5">
-        <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 shadow-glow-sm">
+        <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 via-teal-400 to-amber-400 shadow-glow-sm">
           <Video className="h-4.5 w-4.5 text-white" />
           <Sparkles className="absolute -right-1 -top-1 h-3 w-3 text-amber-400 animate-pulse" />
         </div>
-        <span className="text-base font-bold text-white tracking-wide">AutoVideo</span>
-        <span className="ml-auto rounded-full bg-primary-500/20 px-2 py-0.5 text-[10px] font-medium text-primary-300">Pro</span>
+        <span className="text-base font-bold tracking-wide text-white">AI Stream Media</span>
+        <span className="ml-auto rounded-full bg-cyan-400/12 px-2 py-0.5 text-[10px] font-medium text-cyan-200">Studio</span>
       </div>
 
       {/* Navigation */}
@@ -149,19 +149,19 @@ export function Sidebar() {
                             className={cn(
                               'group flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-200',
                               childActive
-                                ? 'bg-gradient-to-r from-primary-600/30 to-accent-600/20 text-white font-medium shadow-inner-glow'
+                                ? 'bg-gradient-to-r from-cyan-400/18 to-amber-400/14 text-white font-medium shadow-inner-glow'
                                 : 'text-surface-400 hover:bg-white/[0.06] hover:text-surface-200'
                             )}
                           >
                             <ChildIcon className={cn(
                               'h-4 w-4 transition-colors',
-                              childActive ? 'text-primary-400' : 'text-surface-500 group-hover:text-surface-300'
+                              childActive ? 'text-cyan-300' : 'text-surface-500 group-hover:text-surface-300'
                             )} />
                             {child.label}
                             {childActive && (
                               <div className="ml-auto flex items-center gap-1">
-                                <span className="h-1.5 w-1.5 rounded-full bg-primary-400 animate-pulse" />
-                                <ChevronRight className="h-3.5 w-3.5 text-primary-400" />
+                                <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+                                <ChevronRight className="h-3.5 w-3.5 text-cyan-300" />
                               </div>
                             )}
                           </Link>
@@ -181,24 +181,24 @@ export function Sidebar() {
                   className={cn(
                     'group flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-all duration-200',
                     isActive
-                      ? 'bg-gradient-to-r from-primary-600/30 to-accent-600/20 text-white font-medium shadow-inner-glow'
+                      ? 'bg-gradient-to-r from-cyan-400/18 to-amber-400/14 text-white font-medium shadow-inner-glow'
                       : 'text-surface-400 hover:bg-white/[0.06] hover:text-surface-200'
                   )}
                 >
                   <Icon className={cn(
                     'h-4 w-4 transition-colors',
-                    isActive ? 'text-primary-400' : 'text-surface-500 group-hover:text-surface-300'
+                    isActive ? 'text-cyan-300' : 'text-surface-500 group-hover:text-surface-300'
                   )} />
                   {item.label}
                   {'badge' in item && item.badge && !isActive && (
-                    <span className="ml-1 rounded-full bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300">
+                    <span className="ml-1 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
                       {item.badge}
                     </span>
                   )}
                   {isActive && (
                     <div className="ml-auto flex items-center gap-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-primary-400 animate-pulse" />
-                      <ChevronRight className="h-3.5 w-3.5 text-primary-400" />
+                      <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+                      <ChevronRight className="h-3.5 w-3.5 text-cyan-300" />
                     </div>
                   )}
                 </Link>
@@ -211,7 +211,7 @@ export function Sidebar() {
       {/* User */}
       <div className="border-t border-white/[0.06] p-3">
         <div className="flex items-center gap-3 rounded-lg px-2.5 py-2.5 transition-colors hover:bg-white/[0.04]">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-primary-500 to-accent-500 text-sm font-bold text-white ring-2 ring-primary-500/30">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 to-amber-400 text-sm font-bold text-white ring-2 ring-cyan-400/20">
             {user?.username?.[0]?.toUpperCase() ?? 'U'}
           </div>
           <div className="min-w-0 flex-1">

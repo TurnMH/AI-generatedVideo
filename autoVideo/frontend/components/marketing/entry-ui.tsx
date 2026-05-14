@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { Sparkles, Video, type LucideIcon } from 'lucide-react'
+import { SceneBackground } from '@/components/layout/scene-background'
 
 export interface MarketingItem {
   title: string
@@ -96,53 +97,12 @@ export function EntryPageLayout({
   animatedBackground = false,
 }: EntryPageLayoutProps) {
   return (
-    <main className={`relative min-h-screen overflow-hidden bg-[#060816] text-white ${className}`}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(168,85,247,0.16),_transparent_26%),radial-gradient(circle_at_bottom,_rgba(244,114,182,0.14),_transparent_30%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_34%,_rgba(3,7,18,0.3)_72%,_rgba(2,6,23,0.7)_100%)]" />
-        <div className="absolute left-[8%] top-12 h-44 w-44 rounded-full bg-cyan-400/20 blur-[110px]" />
-        <div className="absolute right-[12%] top-[14%] h-64 w-64 rounded-full bg-violet-500/20 blur-[130px]" />
-        <div className="absolute bottom-6 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-pink-500/15 blur-[140px]" />
-        {animatedBackground ? (
-          <>
-            <div className="absolute inset-[-20%] animate-pulse opacity-60 bg-[radial-gradient(circle_at_20%_20%,_rgba(34,211,238,0.18),_transparent_22%),radial-gradient(circle_at_80%_24%,_rgba(168,85,247,0.18),_transparent_24%),radial-gradient(circle_at_50%_72%,_rgba(244,114,182,0.14),_transparent_26%)] blur-[30px]" />
-            <div className="absolute inset-0 opacity-[0.14] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:42px_42px] [mask-image:radial-gradient(circle_at_center,black,transparent_75%)]" />
-            <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(rgba(255,255,255,0.9)_0.8px,transparent_0.8px)] [background-size:26px_26px] [mask-image:radial-gradient(circle_at_center,black,transparent_82%)]" />
-            <div className="absolute -left-[10%] top-[12%] h-40 w-[32rem] animate-pulse rounded-full bg-cyan-300/10 blur-3xl [transform:rotate(-18deg)]" />
-            <div className="absolute right-[-10%] top-[44%] h-44 w-[28rem] animate-pulse rounded-full bg-fuchsia-400/10 blur-3xl [transform:rotate(20deg)]" style={{ animationDelay: '1.2s' }} />
-            <div className="absolute left-[6%] top-[16%] h-24 w-24 animate-pulse rounded-full bg-cyan-300/20 blur-2xl" />
-            <div className="absolute right-[10%] top-[22%] h-20 w-20 animate-pulse rounded-full bg-violet-300/20 blur-2xl" style={{ animationDelay: '0.8s' }} />
-            <div className="absolute bottom-[18%] left-[16%] h-16 w-16 animate-pulse rounded-full bg-pink-300/20 blur-2xl" style={{ animationDelay: '1.6s' }} />
-            <div className="absolute bottom-[10%] right-[20%] h-28 w-28 animate-pulse rounded-full bg-sky-300/15 blur-3xl" style={{ animationDelay: '2.4s' }} />
-            {ENTRY_STAR_PARTICLES.map((particle, index) => (
-              <span
-                key={`${particle.left}-${particle.top}-${index}`}
-                className={`absolute animate-pulse rounded-full shadow-[0_0_18px_rgba(255,255,255,0.35)] ${particle.size} ${particle.opacity}`}
-                style={{ left: particle.left, top: particle.top, animationDelay: particle.delay }}
-              />
-            ))}
-            {ENTRY_CROSS_STARS.map((star, index) => (
-              <span
-                key={`${star.left}-${star.top}-${index}`}
-                className={`absolute flex animate-pulse items-center justify-center ${star.size} ${star.opacity}`}
-                style={{ left: star.left, top: star.top, animationDelay: star.delay }}
-              >
-                <span className="absolute h-full w-px bg-current" />
-                <span className="absolute h-px w-full bg-current" />
-              </span>
-            ))}
-            {ENTRY_METEORS.map((meteor, index) => (
-              <span
-                key={`${meteor.left}-${meteor.top}-${index}`}
-                className={`absolute ${meteor.width} h-px rotate-[-28deg] animate-pulse bg-gradient-to-r from-white/0 via-white/80 to-cyan-200/0 opacity-60 blur-[0.5px]`}
-                style={{ left: meteor.left, top: meteor.top, animationDelay: meteor.delay, animationDuration: '8s' }}
-              >
-                <span className="absolute right-6 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-white/80 shadow-[0_0_14px_rgba(255,255,255,0.6)]" />
-              </span>
-            ))}
-          </>
-        ) : null}
-      </div>
+    <main className={`relative min-h-screen overflow-hidden bg-[#05070d] text-white ${className}`}>
+      <SceneBackground variant="auth" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(3,7,18,0.16),rgba(3,7,18,0.4)_48%,rgba(3,7,18,0.72)_100%)]" />
+      {animatedBackground ? (
+        <div className="pointer-events-none absolute inset-0 opacity-[0.12] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px)] [background-size:42px_42px] [mask-image:radial-gradient(circle_at_center,black,transparent_78%)]" />
+      ) : null}
 
       <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-8 sm:px-6 lg:px-8">
         {children}
@@ -163,14 +123,14 @@ export function EntryHeader({ actions }: EntryHeaderProps) {
 export function BrandLockup() {
   return (
     <div className="flex items-center gap-3">
-      <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 via-violet-500 to-pink-500 shadow-glow">
-        <span className="pointer-events-none absolute inset-[-5px] rounded-[20px] bg-gradient-to-br from-cyan-400/30 via-violet-400/25 to-pink-400/30 blur-md" />
+      <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 via-teal-400 to-accent-400 shadow-glow">
+        <span className="pointer-events-none absolute inset-[-5px] rounded-[20px] bg-gradient-to-br from-cyan-300/28 via-emerald-300/22 to-amber-300/28 blur-md" />
         <Video className="h-5 w-5 text-white" />
         <Sparkles className="absolute -right-1 -top-1 h-3 w-3 text-amber-300" />
       </div>
       <div>
-        <p className="text-lg font-semibold tracking-wide">AutoVideo</p>
-        <p className="text-xs text-surface-400">AI 创作工作台</p>
+        <p className="text-lg font-semibold tracking-wide text-white">AI Stream Media</p>
+        <p className="text-xs text-slate-300">智能流媒体创作中枢</p>
       </div>
     </div>
   )
@@ -229,21 +189,21 @@ export function MarketingShowcase({
 
 export function EntryCard({ title, subtitle, tags, children }: EntryCardProps) {
   return (
-    <div className="group relative overflow-hidden rounded-[32px] border border-white/10 bg-white/[0.08] p-6 shadow-2xl backdrop-blur-2xl sm:p-8">
+    <div className="group relative overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/38 p-6 shadow-2xl backdrop-blur-2xl sm:p-8">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.14),transparent_22%,transparent_68%,rgba(255,255,255,0.08))]" />
       <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-70" />
       <div className="pointer-events-none absolute -left-1/3 top-[-18%] h-40 w-[72%] rotate-[18deg] bg-gradient-to-r from-transparent via-white/22 to-transparent blur-2xl transition-transform duration-1000 group-hover:translate-x-[42%]" />
       <div className="pointer-events-none absolute right-6 top-6 h-20 w-20 rounded-full bg-cyan-300/10 blur-2xl" />
-      <div className="pointer-events-none absolute bottom-8 left-8 h-16 w-16 rounded-full bg-violet-300/10 blur-2xl" />
+      <div className="pointer-events-none absolute bottom-8 left-8 h-16 w-16 rounded-full bg-amber-300/10 blur-2xl" />
 
       <div className="relative mb-8 flex items-center gap-4">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 via-violet-500 to-pink-500 shadow-glow">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-400 via-teal-400 to-accent-400 shadow-glow">
           <Video className="h-7 w-7 text-white" />
         </div>
         <div>
-          <p className="text-sm uppercase tracking-[0.2em] text-surface-400">AutoVideo</p>
+          <p className="text-sm uppercase tracking-[0.2em] text-slate-400">AI Stream Media</p>
           <h2 className="text-2xl font-semibold text-white">{title}</h2>
-          {subtitle ? <p className="mt-1 text-sm text-surface-400">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1 text-sm text-slate-300">{subtitle}</p> : null}
         </div>
       </div>
 
@@ -320,7 +280,7 @@ export function EntryFooterLink({
 export function EntryCopyright() {
   return (
     <p className="mt-4 text-center text-xs text-surface-600">
-      AutoVideo &copy; {new Date().getFullYear()}
+      AI Stream Media &copy; {new Date().getFullYear()}
     </p>
   )
 }

@@ -4,8 +4,8 @@ import { ToastContextProvider } from '@/components/ui/toast'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 export const metadata: Metadata = {
-  title: 'AutoVideo — AI 视频生成平台',
-  description: '智能 AI 视频生成工作台',
+  title: 'AI Stream Media — 智能流媒体创作平台',
+  description: '面向视频、图像与故事内容的 AI 流媒体创作中枢',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

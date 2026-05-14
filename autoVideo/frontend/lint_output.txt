@@ -1,0 +1,124 @@
+
+> autovideo-frontend@0.1.0 lint
+> NEXT_TELEMETRY_DISABLED=1 next lint
+
+
+./app/(dashboard)/chat/page.tsx
+277:19  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/images/page.tsx
+197:7  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+251:13  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+306:13  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+833:21  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+861:21  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/projects/[id]/storyboard/page-client.tsx
+111:19  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+174:17  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+
+./app/(dashboard)/projects/new/page.tsx
+164:9  Warning: The 'imageModels' logical expression could make the dependencies of useEffect Hook (at line 379) change on every render. To fix this, wrap the initialization of 'imageModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+165:9  Warning: The 'videoModels' logical expression could make the dependencies of useEffect Hook (at line 379) change on every render. To fix this, wrap the initialization of 'videoModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+166:9  Warning: The 'ttsModels' logical expression could make the dependencies of useEffect Hook (at line 379) change on every render. To fix this, wrap the initialization of 'ttsModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+178:13  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+774:21  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/projects/page.tsx
+68:10  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+350:21  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/scripts/page.tsx
+446:13  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/settings/models/page.tsx
+1172:9  Warning: The 'allModels' conditional could make the dependencies of useMemo Hook (at line 1195) change on every render. To fix this, wrap the initialization of 'allModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+1178:9  Warning: The 'healthMap' logical expression could make the dependencies of useMemo Hook (at line 1195) change on every render. To fix this, wrap the initialization of 'healthMap' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+1179:9  Warning: The 'systemKeys' conditional could make the dependencies of useMemo Hook (at line 1195) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'systemKeys' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+1182:9  Warning: The 'userKeys' conditional could make the dependencies of useMemo Hook (at line 1195) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'userKeys' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+1348:5  Warning: React Hook useCallback has a missing dependency: 'findExistingCatalogModel'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+1387:6  Warning: React Hook useCallback has a missing dependency: 'findExistingCatalogModel'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./app/(dashboard)/tools/docs/page.tsx
+402:9  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/tools/image/page.tsx
+235:9  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+358:11  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+446:17  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+526:17  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./app/(dashboard)/video-serial/page.tsx
+68:10  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+323:21  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/comics/ComicsWorkspace.tsx
+375:48  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+403:128  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/characters/CharacterGroupPanel.tsx
+232:31  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/detail/EpisodeWorkspace.tsx
+46:9  Warning: The 'episodeAssets' logical expression could make the dependencies of useMemo Hook (at line 77) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'episodeAssets' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+58:9  Warning: The 'episodeStoryboards' logical expression could make the dependencies of useMemo Hook (at line 95) change on every render. To fix this, wrap the initialization of 'episodeStoryboards' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+58:9  Warning: The 'episodeStoryboards' logical expression could make the dependencies of useMemo Hook (at line 111) change on every render. To fix this, wrap the initialization of 'episodeStoryboards' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./components/projects/detail/tabs/AssetsTab.tsx
+252:9  Warning: The 'episodes' logical expression could make the dependencies of useMemo Hook (at line 329) change on every render. To fix this, wrap the initialization of 'episodes' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+283:9  Warning: The 'imageModels' logical expression could make the dependencies of useMemo Hook (at line 827) change on every render. To fix this, wrap the initialization of 'imageModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+783:6  Warning: React Hook React.useEffect has a missing dependency: 'selectedAsset'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+1005:19  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+1355:23  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+1400:35  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+1600:33  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+1609:33  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+1656:35  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/detail/tabs/ComicsTab.tsx
+488:31  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/detail/tabs/DubbingTab.tsx
+225:9  Warning: The 'dubbingTaskList' logical expression could make the dependencies of useMemo Hook (at line 249) change on every render. To fix this, wrap the initialization of 'dubbingTaskList' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+
+./components/projects/detail/tabs/ScriptTab.tsx
+230:9  Warning: The 'extractAssetsRaw' logical expression could make the dependencies of useEffect Hook (at line 495) change on every render. To fix this, wrap the initialization of 'extractAssetsRaw' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+338:9  Warning: The 'episodes' logical expression could make the dependencies of useMemo Hook (at line 341) change on every render. To fix this, wrap the initialization of 'episodes' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+456:6  Warning: React Hook React.useCallback has a missing dependency: 'projectImageModelKey'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+533:6  Warning: React Hook React.useEffect has missing dependencies: 'mutateEpisodes' and 'toast'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+1670:29  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+
+./components/projects/detail/tabs/StoryboardTab.tsx
+220:9  Warning: The 'sbImageModels' logical expression could make the dependencies of useMemo Hook (at line 1031) change on every render. To fix this, wrap the initialization of 'sbImageModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+226:9  Warning: The 'sbVideoModels' logical expression could make the dependencies of useMemo Hook (at line 230) change on every render. To fix this, wrap the initialization of 'sbVideoModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+226:9  Warning: The 'sbVideoModels' logical expression could make the dependencies of useMemo Hook (at line 541) change on every render. To fix this, wrap the initialization of 'sbVideoModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+400:6  Warning: React Hook React.useEffect has a missing dependency: 'selectedSb'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+621:6  Warning: React Hook useEffect has a missing dependency: 'syncEpisodeVideoSelections'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+1930:17  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+2101:25  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+2249:39  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+2503:33  Warning: Image elements must have an alt prop, either with meaningful text, or an empty string for decorative images.  jsx-a11y/alt-text
+2537:44  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/detail/tabs/VideoTab.tsx
+246:9  Warning: The 'storyboards' conditional could make the dependencies of useMemo Hook (at line 493) change on every render. To fix this, wrap the initialization of 'storyboards' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+246:9  Warning: The 'storyboards' conditional could make the dependencies of useMemo Hook (at line 516) change on every render. To fix this, wrap the initialization of 'storyboards' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+253:9  Warning: The 'episodes' logical expression could make the dependencies of useMemo Hook (at line 493) change on every render. To fix this, wrap the initialization of 'episodes' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+253:9  Warning: The 'episodes' logical expression could make the dependencies of useMemo Hook (at line 516) change on every render. To fix this, wrap the initialization of 'episodes' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+254:9  Warning: The 'episodeMap' object construction makes the dependencies of useMemo Hook (at line 304) change on every render. To fix this, wrap the initialization of 'episodeMap' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+405:9  Warning: The 'vtVideoModels' logical expression could make the dependencies of useMemo Hook (at line 408) change on every render. To fix this, wrap the initialization of 'vtVideoModels' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+628:6  Warning: React Hook useEffect has a missing dependency: 'vtVideoModelOptions'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+669:6  Warning: React Hook useEffect has missing dependencies: 'project.storyboard_config' and 'projectId'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+2229:42  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+2516:27  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+2522:27  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/projects/serial/SerialSceneGroups.tsx
+33:9  Warning: The 'storyboards' logical expression could make the dependencies of useMemo Hook (at line 52) change on every render. Move it inside the useMemo callback. Alternatively, wrap the initialization of 'storyboards' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+115:31  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+133:31  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+./components/skills/ProductionSkillsPanel.tsx
+52:6  Warning: React Hook useCallback has a missing dependency: 'toast'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/basic-features/eslint#disabling-rules
