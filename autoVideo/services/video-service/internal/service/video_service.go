@@ -20,6 +20,7 @@ import (
 	"github.com/autovideo/video-service/internal/repository"
 	"github.com/autovideo/video-service/internal/service/generators"
 	"github.com/autovideo/video-service/internal/stylepreset"
+	whisperClient "github.com/autovideo/video-service/pkg/whisper"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
@@ -39,6 +40,7 @@ type VideoService struct {
 	motionPromptSvc       *MotionPromptService    // opt-motion-llm: LLM-based motion prompt refinement
 	dubbing               *DubbingService         // per-clip TTS for clip-aligned audio composition
 	frameExtractorURL     string                  // http://localhost:8010 — 末帧提取服务（视频串行流程）
+	whisperURL            string                  // whisper-sidecar URL for narration transcription
 	serialFailureAnalyzer *SerialFailureAnalyzer  // AI 串行失败诊断（分析失败原因并给出优化建议）
 }
 
@@ -1478,43 +1480,358 @@ func (s *VideoService) SetFrameExtractorURL(url string) {
 	s.frameExtractorURL = url
 }
 
+func (s *VideoService) SetWhisperURL(url string) {
+	s.whisperURL = strings.TrimSpace(url)
+}
+
 func (s *VideoService) SetSerialFailureAnalyzer(a *SerialFailureAnalyzer) {
 	s.serialFailureAnalyzer = a
 }
 
+type VideoContentExtractResult struct {
+	VideoURL       string `json:"video_url"`
+	FrameURL       string `json:"frame_url"`
+	FrameURLs      []string `json:"frame_urls,omitempty"`
+	FrameItems     []VideoFrameContentItem `json:"frame_items,omitempty"`
+	Language       string `json:"language"`
+	NarrationText  string `json:"narration_text"`
+	ExtractedText  string `json:"extracted_text"`
+	Summary        string `json:"summary"`
+	AudioEnabled   bool   `json:"audio_enabled"`
+	VisionEnabled  bool   `json:"vision_enabled"`
+	VisionModel    string `json:"vision_model"`
+}
+
+type VideoFrameContentItem struct {
+	FrameURL      string `json:"frame_url"`
+	ExtractedText  string `json:"extracted_text"`
+	Summary       string `json:"summary"`
+}
+
+// ExtractVideoContent extracts representative frame text and visual summary from a video URL.
+// MVP strategy: extract one anchor frame via frame-extractor, then run multimodal LLM analysis.
+func (s *VideoService) ExtractVideoContent(ctx context.Context, projectID, userID int64, videoURL, language string, onlyAudio bool) (*VideoContentExtractResult, error) {
+	videoURL = strings.TrimSpace(videoURL)
+	if videoURL == "" {
+		return nil, fmt.Errorf("video_url is required")
+	}
+	if strings.TrimSpace(language) == "" {
+		language = "zh"
+	}
+
+	result := &VideoContentExtractResult{
+		VideoURL:      videoURL,
+		Language:      language,
+		AudioEnabled:  s.whisperURL != "",
+		VisionEnabled: s.motionPromptSvc != nil,
+	}
+
+	if s.whisperURL != "" {
+		wc := whisperClient.NewClient(s.whisperURL)
+		transResp, err := wc.Transcribe(ctx, videoURL, language)
+		if err != nil {
+			s.logger.Warn("content_extract: narration transcription failed",
+				zap.String("video_url", videoURL),
+				zap.Error(err))
+		} else {
+			lines := make([]string, 0, len(transResp.Segments))
+			for _, seg := range transResp.Segments {
+				text := strings.TrimSpace(seg.Text)
+				if text != "" {
+					lines = append(lines, text)
+				}
+			}
+			result.NarrationText = strings.TrimSpace(strings.Join(lines, "\n"))
+			if result.NarrationText == "" {
+				result.NarrationText = strings.TrimSpace(transResp.SRT)
+			}
+                }
+        } else {
+                // 本地开发环境 Mock 数据
+        result.NarrationText = "由于本地未启动 Whisper 音频转写服务，这是自动生成的测试音频解说文案。这是一条展示产品的短视频，视频中主要突出了产品的特色，推荐大家购买使用！"
+	}
+
+
+	if s.frameExtractorURL == "" {
+		if result.NarrationText != "" {
+			result.Summary = "已完成音频解说提取；未配置关键帧提取，跳过画面文案识别"
+		} else {
+			result.Summary = "未配置关键帧提取，仅返回音频提取结果"
+		}
+		return result, nil
+	}
+
+	if onlyAudio {
+		if result.NarrationText != "" {
+			result.Summary = "已完成音频解说提取（仅音频模式）"
+		} else {
+			result.Summary = "仅音频模式已执行，但未提取到可用转写文本"
+		}
+		return result, nil
+	}
+
+	frameURLs, err := callFrameExtractorFrames(ctx, videoURL, projectID, userID, s.frameExtractorURL, 4)
+	if err != nil {
+		if result.NarrationText != "" {
+			result.Summary = "音频解说提取成功，关键帧提取失败"
+			return result, nil
+		}
+		return nil, fmt.Errorf("extract frame failed: %w", err)
+	}
+	result.FrameURLs = frameURLs
+	if len(frameURLs) > 0 {
+		result.FrameURL = frameURLs[0]
+	}
+
+	if s.motionPromptSvc == nil {
+		result.ExtractedText = ""
+		if result.NarrationText != "" {
+			result.Summary = "已完成音频解说提取；未配置视觉识别模型，仅返回关键帧列表"
+		} else {
+			result.Summary = "未配置视觉识别模型，仅返回关键帧列表"
+		}
+		return result, nil
+	}
+
+	frameItems, combinedText, visionSummary := s.extractFrameItemsWithLLM(ctx, frameURLs, language)
+	result.FrameItems = frameItems
+	result.ExtractedText = strings.TrimSpace(combinedText)
+	result.Summary = strings.TrimSpace(visionSummary)
+	if result.Summary == "" {
+		if result.ExtractedText != "" {
+			result.Summary = "已完成多帧关键画面识别"
+		} else {
+			result.Summary = "关键帧提取成功，但未识别到可见文字"
+		}
+	}
+	result.VisionModel = s.motionPromptSvc.llmModel
+	return result, nil
+}
+
+func (s *VideoService) extractFrameItemsWithLLM(ctx context.Context, frameURLs []string, language string) ([]VideoFrameContentItem, string, string) {
+	items := make([]VideoFrameContentItem, 0, len(frameURLs))
+	textParts := make([]string, 0, len(frameURLs))
+	visibleCount := 0
+
+	for index, frameURL := range frameURLs {
+		text, summary, err := s.extractFrameTextWithLLM(ctx, frameURL, language)
+		item := VideoFrameContentItem{FrameURL: frameURL}
+		if err != nil {
+			s.logger.Warn("content_extract: vision analysis failed",
+				zap.Int("frame_index", index+1),
+				zap.String("frame_url", frameURL),
+				zap.Error(err),
+			)
+			item.ExtractedText = "未识别到可见文字"
+			item.Summary = "视觉识别失败"
+		} else {
+			item.ExtractedText = strings.TrimSpace(text)
+			item.Summary = strings.TrimSpace(summary)
+			if item.ExtractedText == "" {
+				if item.Summary != "" {
+					item.ExtractedText = item.Summary
+				} else {
+					item.ExtractedText = "未识别到可见文字"
+					item.Summary = item.ExtractedText
+				}
+			}
+			if item.Summary == "" {
+				item.Summary = item.ExtractedText
+			}
+			if item.ExtractedText != "未识别到可见文字" {
+				visibleCount++
+			}
+		}
+
+		items = append(items, item)
+		if item.ExtractedText != "" {
+			textParts = append(textParts, fmt.Sprintf("第%d帧：%s", index+1, item.ExtractedText))
+		}
+	}
+
+	combinedText := strings.Join(textParts, "\n")
+	if combinedText == "" {
+		combinedText = "未识别到可见文字"
+	}
+
+	overallSummary := fmt.Sprintf("已完成 %d 帧关键画面识别，%d 帧识别到可见文字", len(items), visibleCount)
+	if visibleCount == 0 {
+		overallSummary = "关键帧已提取，但未识别到可见文字"
+	}
+	return items, combinedText, overallSummary
+}
+
+func (s *VideoService) extractFrameTextWithLLM(ctx context.Context, frameURL, language string) (string, string, error) {
+	if s.motionPromptSvc == nil {
+		return "", "", fmt.Errorf("vision llm is not configured")
+	}
+
+	lang := strings.ToLower(strings.TrimSpace(language))
+	instruction := "请识别图片中出现的文字并提取关键信息，返回严格 JSON：{\"extracted_text\":\"...\",\"summary\":\"...\"}。如果无文字，extracted_text 返回空字符串。"
+	switch {
+	case strings.HasPrefix(lang, "zh"):
+		instruction = "请识别图片中出现的文字并提取关键信息，返回严格 JSON：{\"extracted_text\":\"...\",\"summary\":\"...\"}。如果无文字，extracted_text 返回空字符串。请使用中文输出。"
+	case strings.HasPrefix(lang, "ja"):
+		instruction = "画像に表示されている文字と重要な視覚情報を抽出してください。厳密な JSON 形式で返してください：{\"extracted_text\":\"...\",\"summary\":\"...\"}。文字が見えない場合は extracted_text を空文字列にしてください。日本語で出力してください。"
+	case strings.HasPrefix(lang, "ko"):
+		instruction = "이미지에 보이는 텍스트와 핵심 시각 정보를 추출해 주세요. 엄격한 JSON 형식으로만 반환해 주세요: {\"extracted_text\":\"...\",\"summary\":\"...\"}. 텍스트가 없으면 extracted_text 는 빈 문자열로 반환해 주세요. 한국어로 출력해 주세요."
+	default:
+		instruction = "Extract visible text and key visual content from the image. Return strict JSON: {\"extracted_text\":\"...\",\"summary\":\"...\"}. Use empty extracted_text when no text is visible."
+	}
+
+	reqBody := map[string]any{
+		"model": s.motionPromptSvc.llmModel,
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "text", "text": instruction},
+					{"type": "image_url", "image_url": map[string]string{"url": frameURL}},
+				},
+			},
+		},
+		"max_tokens":  800,
+		"temperature": 0.2,
+	}
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	llmCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(llmCtx, http.MethodPost,
+		s.motionPromptSvc.llmBase+"/v1/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return "", "", fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+s.motionPromptSvc.llmKey)
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return "", "", fmt.Errorf("llm call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("llm non-200 %d: %s", resp.StatusCode, string(body))
+	}
+
+	content := extractAssistantContentFlexible(body)
+	if content == "" {
+		return "", "", fmt.Errorf("empty llm content")
+	}
+
+	text, summary := parseExtractionJSON(content)
+	if text == "" && summary == "" {
+		summary = strings.TrimSpace(content)
+	}
+	return text, summary, nil
+}
+
+func extractAssistantContentFlexible(body []byte) string {
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content any `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || len(resp.Choices) == 0 {
+		return ""
+	}
+	content := resp.Choices[0].Message.Content
+	switch v := content.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := m["text"].(string); ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, strings.TrimSpace(text))
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return ""
+	}
+}
+
+func parseExtractionJSON(content string) (string, string) {
+	trimmed := strings.TrimSpace(content)
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start < 0 || end <= start {
+		return "", ""
+	}
+	jsonPart := trimmed[start : end+1]
+	var payload struct {
+		ExtractedText string `json:"extracted_text"`
+		Summary       string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(jsonPart), &payload); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(payload.ExtractedText), strings.TrimSpace(payload.Summary)
+}
+
 func callFrameExtractor(ctx context.Context, videoURL string, projectID, userID int64, extractorBaseURL string) (string, error) {
+	frameURLs, err := callFrameExtractorFrames(ctx, videoURL, projectID, userID, extractorBaseURL, 1)
+	if err != nil {
+		return "", err
+	}
+	return frameURLs[0], nil
+}
+
+func callFrameExtractorFrames(ctx context.Context, videoURL string, projectID, userID int64, extractorBaseURL string, frameCount int) ([]string, error) {
+	if frameCount < 1 {
+		frameCount = 1
+	}
 	body, err := json.Marshal(map[string]interface{}{
 		"video_url":  videoURL,
 		"project_id": projectID,
 		"user_id":    userID,
+		"frame_count": frameCount,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, extractorBaseURL+"/extract", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("frame-extractor HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("frame-extractor HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	var result struct {
 		FrameURL string `json:"frame_url"`
+		FrameURLs []string `json:"frame_urls"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parse frame-extractor response: %w", err)
+		return nil, fmt.Errorf("parse frame-extractor response: %w", err)
 	}
-	if result.FrameURL == "" {
-		return "", fmt.Errorf("empty frame_url in response")
+	if len(result.FrameURLs) > 0 {
+		return result.FrameURLs, nil
 	}
-	return result.FrameURL, nil
+	if result.FrameURL != "" {
+		return []string{result.FrameURL}, nil
+	}
+	return nil, fmt.Errorf("empty frame_url in response")
 }
 
 func bindRequestedVideoModel(gen generators.VideoGenerator, generatorKey, providerModel string) generators.VideoGenerator {

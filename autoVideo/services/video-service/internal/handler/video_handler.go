@@ -93,6 +93,12 @@ type generateReq struct {
 	ClipDurationSec   float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
 }
 
+type extractVideoContentReq struct {
+	VideoURL string `json:"video_url" binding:"required"`
+	Language string `json:"language"`
+	OnlyAudio bool `json:"only_audio"`
+}
+
 // Generate —— 处理视频生成请求，创建任务并分发到 Kafka，返回 task_id
 // Generate godoc
 // POST /api/v1/videos/generate
@@ -149,6 +155,38 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	}
 
 	response.OK(c, gin.H{"task_id": task.ID})
+}
+
+// ExtractVideoContent handles POST /api/v1/projects/:pid/videos/content-extract
+// MVP: extract one key frame from video and run visual text/content extraction.
+func (h *VideoHandler) ExtractVideoContent(c *gin.Context) {
+	pid, err := pathInt64(c, "pid")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+
+	var req extractVideoContentReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	userID := mustUserID(c)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
+	defer cancel()
+
+	result, err := h.svc.ExtractVideoContent(ctx, pid, userID, req.VideoURL, req.Language, req.OnlyAudio)
+	if err != nil {
+		h.logger.Error("extract video content failed",
+			zap.Int64("project_id", pid),
+			zap.String("video_url", req.VideoURL),
+			zap.Error(err))
+		response.Fail(c, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.OK(c, result)
 }
 
 // GetTask —— 根据 ID 查询单个视频任务详情，返回任务 JSON

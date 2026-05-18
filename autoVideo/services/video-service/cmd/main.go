@@ -188,6 +188,10 @@ func main() {
 		videoSvc.SetFrameExtractorURL(cfg.FrameExtractor.BaseURL)
 		logger.Info("frame_extractor: enabled", zap.String("url", cfg.FrameExtractor.BaseURL))
 	}
+	if cfg.Whisper.URL != "" {
+		videoSvc.SetWhisperURL(cfg.Whisper.URL)
+		logger.Info("whisper: enabled", zap.String("url", cfg.Whisper.URL))
+	}
 
 	// opt-motion-llm: wire LLM motion prompt refiner when configured.
 	// Falls back to sora2 channel if llm_key is unset but sora2_key is present.
@@ -319,6 +323,7 @@ func main() {
 			pVideos.DELETE("/runtime-data", videoHandler.DeleteProjectData)
 			pVideos.POST("/generate", videoHandler.GenerateProjectVideo)
 			pVideos.POST("/generate-batch", videoHandler.GenerateProjectVideosBatch)
+			pVideos.POST("/content-extract", videoHandler.ExtractVideoContent)
 			pVideos.POST("/generate-variants", videoHandler.GenerateVariants) // feat-6
 			pVideos.POST("/retry-failed", videoHandler.RetryAllFailed)
 			pVideos.POST("/:vid/pause", videoHandler.PauseVideo)
