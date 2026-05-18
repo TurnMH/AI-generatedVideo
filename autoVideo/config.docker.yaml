@@ -130,6 +130,8 @@ video-service:
     base_url: "http://storage:8009"
   frame_extractor:
     base_url: "http://frame-extractor:8010"
+  whisper:
+    url: "http://whisper-sidecar:8010"
 
 task-service:
   http:

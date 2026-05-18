@@ -310,6 +310,40 @@ services:
       kafka:
         condition: service_healthy
 
+  frame-extractor:
+    image: autovideo/frame-extractor:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-frame-extractor
+    <<: *go-service
+    ports:
+      - "8010:8010"
+    volumes:
+      - ..:/app/autovideo-config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8010/health >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  whisper-sidecar:
+    image: autovideo/whisper-sidecar:${AUTOVIDEO_TAG:-latest}
+    container_name: autovideo-whisper-sidecar
+    <<: *restart
+    ports:
+      - "8093:8010"
+    environment:
+      PORT: 8010
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - autoVideo-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8010/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   video:
     image: autovideo/video:${AUTOVIDEO_TAG:-latest}
     container_name: autovideo-video
@@ -336,6 +370,10 @@ services:
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      frame-extractor:
+        condition: service_healthy
+      whisper-sidecar:
         condition: service_healthy
 
   task:

@@ -99,6 +99,15 @@ export default function SerialProjectDetailPage() {
     { refreshInterval: 5000 }
   )
   const episodes = useMemo(() => episodesData?.data ?? [], [episodesData])
+  const hasUsableScriptContent = useMemo(() => {
+    const projectScriptText = project?.script_text?.trim() ?? ''
+    if (projectScriptText) return true
+    return episodes.some((episode) => Boolean(
+      episode.optimized_text?.trim() ||
+      episode.script_excerpt?.trim() ||
+      episode.summary?.trim()
+    ))
+  }, [episodes, project?.script_text])
 
   // 自动管线：有 autoStart 或 ScriptTab 触发了分镜自动排队后，等分集出现就自动打开第一集
   useEffect(() => {
@@ -314,6 +323,14 @@ export default function SerialProjectDetailPage() {
   }
 
   const handleExtractProjectAssets = async () => {
+    if (!hasUsableScriptContent) {
+      toast({
+        title: '项目资源提取暂不可用',
+        description: '当前项目还没有可用剧本内容，请先上传剧本，或先完成分集/优化后再提取资源。',
+        variant: 'destructive',
+      })
+      return
+    }
     setIsExtractingAssets(true)
     try {
       await assetAPI.extract(projectId)
@@ -327,6 +344,14 @@ export default function SerialProjectDetailPage() {
   }
 
   const handleExtractProjectStoryboards = () => {
+    if (!hasUsableScriptContent) {
+      toast({
+        title: '项目分镜提取暂不可用',
+        description: '当前项目还没有可用剧本内容，请先完成剧本录入或优化后再提取分镜。',
+        variant: 'destructive',
+      })
+      return
+    }
     setIsExtractingStoryboards(true)
     ;(projectAPI.extractStoryboards(projectId) as Promise<unknown>)
       .then(() => {
@@ -408,8 +433,8 @@ export default function SerialProjectDetailPage() {
   })()
 
   const projectQuickActions = [
-    { icon: <Sparkles className="h-4 w-4 text-emerald-300" />, title: '项目资源提取', desc: '从剧本中识别并提取全部角色、场景、道具，为后续分镜制作提供素材库。', label: '开始提取', onClick: handleExtractProjectAssets, loading: isExtractingAssets, disabled: isExtractingAssets || episodes.length === 0 },
-    { icon: <LayoutGrid className="h-4 w-4 text-violet-300" />, title: '镜头拆分与场景分组', desc: '按项目维度统一拆分镜头条目，并为串行视频生成准备场景分组。', label: '开始拆分', onClick: handleExtractProjectStoryboards, loading: isExtractingStoryboards, disabled: isExtractingStoryboards || episodes.length === 0 },
+    { icon: <Sparkles className="h-4 w-4 text-emerald-300" />, title: '项目资源提取', desc: '从剧本中识别并提取全部角色、场景、道具，为后续分镜制作提供素材库。', label: '开始提取', onClick: handleExtractProjectAssets, loading: isExtractingAssets, disabled: isExtractingAssets || episodes.length === 0 || !hasUsableScriptContent },
+    { icon: <LayoutGrid className="h-4 w-4 text-violet-300" />, title: '镜头拆分与场景分组', desc: '按项目维度统一拆分镜头条目，并为串行视频生成准备场景分组。', label: '开始拆分', onClick: handleExtractProjectStoryboards, loading: isExtractingStoryboards, disabled: isExtractingStoryboards || episodes.length === 0 || !hasUsableScriptContent },
     { icon: <ImageIcon className="h-4 w-4 text-amber-300" />, title: '分镜图片生成', desc: '为项目内全部分镜批量生成图片，根据提示词自动渲染每个镜头的画面。', label: '开始生成', onClick: handleGenerateProjectImages, loading: isGeneratingProjectImages, disabled: isGeneratingProjectImages || projectOverview.stats.storyboardTotal === 0 },
     { icon: <Volume2 className="h-4 w-4 text-blue-300" />, title: '配音合成', desc: '根据角色台词自动生成语音，支持多角色配音与情感语调调节。', label: '进入配音', onClick: () => openProjectStageFromOverview('dubbing'), loading: false, disabled: episodes.length === 0 },
     { icon: <FileText className="h-4 w-4 text-cyan-300" />, title: '字幕生成', desc: '自动生成时间轴字幕，支持多语言翻译与字幕样式自定义。', label: '进入字幕', onClick: () => openProjectStageFromOverview('dubbing'), loading: false, disabled: episodes.length === 0 },

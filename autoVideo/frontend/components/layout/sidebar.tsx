@@ -22,6 +22,7 @@ import {
   FileText,
   Film,
   Eye,
+  Megaphone,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/lib/store/auth'
@@ -42,6 +43,12 @@ const navItems = [
     label: '快速生成',
     href: '/quick',
     icon: Wand2,
+    badge: 'NEW',
+  },
+  {
+    label: '视频广告生成',
+    href: '/ad-video',
+    icon: Megaphone,
     badge: 'NEW',
   },
   {

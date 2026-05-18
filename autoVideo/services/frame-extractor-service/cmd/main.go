@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -110,6 +111,7 @@ func main() {
 			VideoURL  string `json:"video_url" binding:"required"`
 			ProjectID uint64 `json:"project_id"`
 			UserID    uint64 `json:"user_id"`
+			FrameCount int   `json:"frame_count"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -119,7 +121,12 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		frameURL, err := extractLastFrame(ctx, req.VideoURL, req.ProjectID, req.UserID, cfg.StorageBaseURL, cfg.StorageBucket, log)
+		frameCount := req.FrameCount
+		if frameCount <= 0 {
+			frameCount = 4
+		}
+
+		frameURLs, err := extractRepresentativeFrames(ctx, req.VideoURL, req.ProjectID, req.UserID, frameCount, cfg.StorageBaseURL, cfg.StorageBucket, log)
 		if err != nil {
 			log.Error("frame extraction failed",
 				zap.String("video_url", req.VideoURL),
@@ -128,7 +135,11 @@ func main() {
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"frame_url": frameURL})
+		resp := gin.H{"frame_urls": frameURLs}
+		if len(frameURLs) > 0 {
+			resp["frame_url"] = frameURLs[0]
+		}
+		c.JSON(http.StatusOK, resp)
 	})
 
 	srv := &http.Server{
@@ -153,89 +164,149 @@ func main() {
 	log.Info("frame-extractor-service stopped")
 }
 
-// extractLastFrame downloads the video, extracts the last frame with ffmpeg,
+// extractRepresentativeFrame downloads the video, extracts a representative frame with ffmpeg,
 // uploads it to storage-service, and returns the public URL.
-func extractLastFrame(
+func extractRepresentativeFrame(
 	ctx context.Context,
 	videoURL string,
 	projectID, userID uint64,
 	storageBaseURL, bucket string,
 	log *zap.Logger,
 ) (string, error) {
-	// 1. Create temp directory
+	frameURLs, err := extractRepresentativeFrames(ctx, videoURL, projectID, userID, 1, storageBaseURL, bucket, log)
+	if err != nil {
+		return "", err
+	}
+	return frameURLs[0], nil
+}
+
+// extractRepresentativeFrames downloads the video, extracts several representative frames,
+// uploads them to storage-service, and returns the public URLs in video order.
+func extractRepresentativeFrames(
+	ctx context.Context,
+	videoURL string,
+	projectID, userID uint64,
+	frameCount int,
+	storageBaseURL, bucket string,
+	log *zap.Logger,
+) ([]string, error) {
+	if frameCount < 1 {
+		frameCount = 1
+	}
+	if frameCount > 5 {
+		frameCount = 5
+	}
+
 	tmpDir, err := os.MkdirTemp("", "frame-extractor-*")
 	if err != nil {
-		return "", fmt.Errorf("create temp dir: %w", err)
+		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	videoPath := filepath.Join(tmpDir, "input.mp4")
-	framePath := filepath.Join(tmpDir, "last_frame.jpg")
-
-	// 2. Download the video
 	if err := downloadFile(ctx, videoURL, videoPath); err != nil {
-		return "", fmt.Errorf("download video: %w", err)
+		return nil, fmt.Errorf("download video: %w", err)
 	}
 
-	// 3. Get video duration using ffprobe
 	duration, err := getVideoDuration(ctx, videoPath)
 	if err != nil {
-		log.Warn("could not get video duration, seeking from end", zap.Error(err))
+		log.Warn("could not get video duration, sampling from early timestamps", zap.Error(err))
 		duration = -1
 	}
 
-	// 4. Extract last frame using ffmpeg
-	// Strategy: seek to near the end (-sseof -0.5 seeks 0.5s from end), grab 1 frame
-	var args []string
-	if duration > 0 {
-		// Seek to 0.5s before the end
-		seekTime := duration - 0.5
-		if seekTime < 0 {
-			seekTime = 0
+	timestamps := buildFrameTimestamps(duration, frameCount)
+	frameURLs := make([]string, 0, len(timestamps))
+
+	for index, timestamp := range timestamps {
+		framePath := filepath.Join(tmpDir, fmt.Sprintf("frame_%02d.jpg", index+1))
+		if err := extractFrameAtTime(ctx, videoPath, timestamp, framePath); err != nil {
+			log.Warn("frame extraction skipped",
+				zap.String("video_url", videoURL),
+				zap.Int("frame_index", index+1),
+				zap.Float64("timestamp_sec", timestamp),
+				zap.Error(err),
+			)
+			continue
 		}
-		args = []string{
-			"-ss", fmt.Sprintf("%.3f", seekTime),
-			"-i", videoPath,
-			"-vframes", "1",
-			"-q:v", "2",
-			"-y",
-			framePath,
+
+		if _, err := os.Stat(framePath); err != nil {
+			log.Warn("frame file not created",
+				zap.String("video_url", videoURL),
+				zap.Int("frame_index", index+1),
+				zap.Float64("timestamp_sec", timestamp),
+				zap.Error(err),
+			)
+			continue
 		}
-	} else {
-		// Fallback: use -sseof (seek from end)
-		args = []string{
-			"-sseof", "-1",
-			"-i", videoPath,
-			"-vframes", "1",
-			"-q:v", "2",
-			"-update", "1",
-			"-y",
-			framePath,
+
+		frameURL, err := uploadFrameToStorage(ctx, framePath, projectID, userID, storageBaseURL, bucket)
+		if err != nil {
+			log.Warn("frame upload skipped",
+				zap.String("video_url", videoURL),
+				zap.Int("frame_index", index+1),
+				zap.Float64("timestamp_sec", timestamp),
+				zap.Error(err),
+			)
+			continue
 		}
+
+		frameURLs = append(frameURLs, frameURL)
+	}
+
+	if len(frameURLs) == 0 {
+		return nil, fmt.Errorf("no frame urls extracted")
+	}
+
+	log.Info("representative frames extracted",
+		zap.String("video_url", videoURL),
+		zap.Int("frame_count", len(frameURLs)),
+	)
+	return frameURLs, nil
+}
+
+func extractFrameAtTime(ctx context.Context, videoPath string, timestamp float64, framePath string) error {
+	args := []string{
+		"-ss", fmt.Sprintf("%.3f", timestamp),
+		"-i", videoPath,
+		"-vframes", "1",
+		"-q:v", "2",
+		"-y",
+		framePath,
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg extract frame: %w; stderr: %s", err, stderr.String())
+		return fmt.Errorf("ffmpeg extract frame: %w; stderr: %s", err, stderr.String())
+	}
+	return nil
+}
+
+func buildFrameTimestamps(duration float64, frameCount int) []float64 {
+	if frameCount <= 1 {
+		if duration > 0 {
+			return []float64{duration * 0.5}
+		}
+		return []float64{1}
 	}
 
-	if _, err := os.Stat(framePath); err != nil {
-		return "", fmt.Errorf("frame file not created: %w", err)
+	timestamps := make([]float64, 0, frameCount)
+	if duration <= 0 {
+		for index := 0; index < frameCount; index++ {
+			timestamps = append(timestamps, 1+float64(index*2))
+		}
+		return timestamps
 	}
 
-	// 5. Upload to storage-service
-	frameURL, err := uploadFrameToStorage(ctx, framePath, projectID, userID, storageBaseURL, bucket)
-	if err != nil {
-		return "", fmt.Errorf("upload frame: %w", err)
+	startFraction := 0.15
+	endFraction := 0.85
+	step := (endFraction - startFraction) / float64(frameCount-1)
+	for index := 0; index < frameCount; index++ {
+		fraction := startFraction + step*float64(index)
+		timestamps = append(timestamps, duration*fraction)
 	}
-
-	log.Info("last frame extracted",
-		zap.String("video_url", videoURL),
-		zap.String("frame_url", frameURL),
-	)
-	return frameURL, nil
+	return timestamps
 }
 
 // downloadFile downloads a URL to a local file path.
@@ -326,25 +397,27 @@ func uploadFrameToStorage(ctx context.Context, framePath string, projectID, user
 		return "", fmt.Errorf("storage upload HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse URL from response: {"data":{"url":"..."}} or {"url":"..."}
-	urlStr := extractJSONString(string(body), "url")
-	if urlStr == "" {
-		return "", fmt.Errorf("no url in storage response: %s", string(body))
+	var parsed struct {
+		URL string `json:"url"`
+		Data struct {
+			URL     string `json:"url"`
+			CDNURL  string `json:"cdn_url"`
+			ObjectKey string `json:"object_key"`
+		} `json:"data"`
 	}
-	return urlStr, nil
-}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("parse storage response: %w", err)
+	}
 
-// extractJSONString is a minimal JSON string extractor for a single key.
-func extractJSONString(jsonStr, key string) string {
-	needle := `"` + key + `":"`
-	idx := strings.Index(jsonStr, needle)
-	if idx < 0 {
-		return ""
+	if parsed.URL != "" {
+		return parsed.URL, nil
 	}
-	start := idx + len(needle)
-	end := strings.Index(jsonStr[start:], `"`)
-	if end < 0 {
-		return ""
+	if parsed.Data.CDNURL != "" {
+		return parsed.Data.CDNURL, nil
 	}
-	return jsonStr[start : start+end]
+	if parsed.Data.URL != "" {
+		return parsed.Data.URL, nil
+	}
+
+	return "", fmt.Errorf("no url in storage response: %s", string(body))
 }

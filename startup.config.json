@@ -4,7 +4,27 @@
   "pm2Config": "ecosystem.config.js",
   "sharedConfig": "autoVideo/config.local.yaml",
   "gatewayConfig": "autoVideo/services/gateway-service/config.local.yaml",
-  "ports": [3000, 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009, 9001, 9002, 9004, 9007, 9008, 9009],
+  "ports": [
+    3000,
+    8000,
+    8001,
+    8002,
+    8003,
+    8004,
+    8005,
+    8006,
+    8007,
+    8008,
+    8009,
+    8010,
+    8093,
+    9001,
+    9002,
+    9004,
+    9007,
+    9008,
+    9009
+  ],
   "apps": [
     {
       "name": "gateway-service",
@@ -13,7 +33,9 @@
       "cwd": "autoVideo/services/gateway-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "auth-service",
@@ -22,7 +44,9 @@
       "cwd": "autoVideo/services/auth-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "project-service",
@@ -31,7 +55,9 @@
       "cwd": "autoVideo/services/project-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "script-service",
@@ -40,7 +66,9 @@
       "cwd": "autoVideo/services/script-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "character-service",
@@ -49,7 +77,9 @@
       "cwd": "autoVideo/services/character-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "image-service",
@@ -58,7 +88,9 @@
       "cwd": "autoVideo/services/image-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "video-service",
@@ -80,7 +112,9 @@
       "cwd": "autoVideo/services/task-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "model-service",
@@ -89,7 +123,9 @@
       "cwd": "autoVideo/services/model-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "storage-service",
@@ -98,7 +134,9 @@
       "cwd": "autoVideo/services/storage-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "frame-extractor-service",
@@ -107,7 +145,9 @@
       "cwd": "autoVideo/services/frame-extractor-service",
       "watch": false,
       "autorestart": true,
-      "env": { "GOFLAGS": "-mod=mod" }
+      "env": {
+        "GOFLAGS": "-mod=mod"
+      }
     },
     {
       "name": "clip-service",
@@ -119,6 +159,19 @@
       "env": {
         "CLIP_SERVICE_PORT": "8092",
         "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "whisper-sidecar",
+      "script": "autoVideo/services/whisper-sidecar/.venv/bin/python",
+      "args": "main.py",
+      "cwd": "autoVideo/services/whisper-sidecar",
+      "watch": false,
+      "autorestart": true,
+      "env": {
+        "PORT": "8093",
+        "PYTHONUNBUFFERED": "1",
+        "WHISPER_MODEL_SIZE": "small"
       }
     },
     {

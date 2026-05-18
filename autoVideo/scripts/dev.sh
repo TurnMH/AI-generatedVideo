@@ -125,7 +125,7 @@ else
     elif [ "$svc_name" = "whisper-sidecar" ]; then
       # Python 服务单独处理
       if [ -f "$svc/main.py" ]; then
-        (cd "$svc" && python main.py 2>&1 | sed "s/^/[$svc_name] /") &
+        (cd "$svc" && WHISPER_MODEL_SIZE="${WHISPER_MODEL_SIZE:-small}" PORT=8093 python main.py 2>&1 | sed "s/^/[$svc_name] /") &
       fi
     else
       (cd "$svc" && go run ./cmd/main.go 2>&1 | sed "s/^/[$svc_name] /") &

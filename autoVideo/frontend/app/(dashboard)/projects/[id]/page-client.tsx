@@ -88,6 +88,15 @@ export default function ProjectDetailPage() {
     { refreshInterval: 5000 }
   )
   const episodes = useMemo(() => episodesData?.data ?? [], [episodesData])
+  const hasUsableScriptContent = useMemo(() => {
+    const projectScriptText = project?.script_text?.trim() ?? ''
+    if (projectScriptText) return true
+    return episodes.some((episode) => Boolean(
+      episode.optimized_text?.trim() ||
+      episode.script_excerpt?.trim() ||
+      episode.summary?.trim()
+    ))
+  }, [episodes, project?.script_text])
 
   // 自动管线：有 autoStart 或 ScriptTab 触发了分镜自动排队后，等分集出现就自动打开第一集
   useEffect(() => {
@@ -431,6 +440,14 @@ export default function ProjectDetailPage() {
   }
 
   const handleExtractProjectAssets = async () => {
+    if (!hasUsableScriptContent) {
+      toast({
+        title: '项目资源提取暂不可用',
+        description: '当前项目还没有可用剧本内容，请先上传剧本，或先完成分集/优化后再提取资源。',
+        variant: 'destructive',
+      })
+      return
+    }
     setIsExtractingAssets(true)
     try {
       await assetAPI.extract(projectId)
@@ -452,6 +469,14 @@ export default function ProjectDetailPage() {
   }
 
   const handleExtractProjectStoryboards = () => {
+    if (!hasUsableScriptContent) {
+      toast({
+        title: '项目分镜提取暂不可用',
+        description: '当前项目还没有可用剧本内容，请先完成剧本录入或优化后再提取分镜。',
+        variant: 'destructive',
+      })
+      return
+    }
     setIsExtractingStoryboards(true)
     ;(projectAPI.extractStoryboards(projectId) as Promise<unknown>)
       .then(() => {
@@ -552,7 +577,7 @@ export default function ProjectDetailPage() {
       label: '开始提取',
       onClick: handleExtractProjectAssets,
       loading: isExtractingAssets,
-      disabled: isExtractingAssets || episodes.length === 0,
+      disabled: isExtractingAssets || episodes.length === 0 || !hasUsableScriptContent,
     },
     {
       icon: <LayoutGrid className="h-4 w-4 text-violet-300" />,
@@ -561,7 +586,7 @@ export default function ProjectDetailPage() {
       label: '开始拆分',
       onClick: handleExtractProjectStoryboards,
       loading: isExtractingStoryboards,
-      disabled: isExtractingStoryboards || episodes.length === 0,
+      disabled: isExtractingStoryboards || episodes.length === 0 || !hasUsableScriptContent,
     },
     {
       icon: <ImageIcon className="h-4 w-4 text-amber-300" />,

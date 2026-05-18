@@ -113,13 +113,16 @@ def transcribe(req: TranscribeRequest):
 
     audio_path = _download_audio(req.audio_url)
     try:
-        segments_iter, info = model.transcribe(
-            audio_path,
-            language=req.language if req.language else None,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-        )
+        kwargs = {
+            "language": req.language if req.language else None,
+            "beam_size": 5,
+            "vad_filter": True,
+            "vad_parameters": dict(min_silence_duration_ms=500),
+        }
+        if req.language == "zh" or (not req.language):
+            kwargs["initial_prompt"] = "以下是普通话的句子，请用简体中文输出。"
+            
+        segments_iter, info = model.transcribe(audio_path, **kwargs)
         segments = list(segments_iter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")

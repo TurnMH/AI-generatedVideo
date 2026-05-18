@@ -70,7 +70,7 @@ COMPOSE_INFRA="$COMPOSE_FILE"
 if [ -f "$COMPOSE_FULL" ]; then
   log "停止旧应用服务..."
   docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" \
-    stop auth project script character image video task model storage \
+    stop auth project script character image frame-extractor video whisper-sidecar task model storage \
     2>/dev/null || true
 fi
 

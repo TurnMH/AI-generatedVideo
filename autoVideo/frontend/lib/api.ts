@@ -20,6 +20,13 @@ function buildURL(baseURL: string, path: string) {
   return `${baseURL}${path}`
 }
 
+function getDirectGatewayBaseURL() {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8000'
+  }
+  return `${window.location.protocol}//${window.location.hostname}:8000`
+}
+
 const BASE_URL = normalizeBaseURL(process.env.NEXT_PUBLIC_API_URL)
 const SCRIPT_BASE_URL = normalizeBaseURL(process.env.NEXT_PUBLIC_SCRIPT_API_URL) || BASE_URL
 
@@ -77,6 +84,20 @@ function applyInterceptors(client: typeof api) {
 
 applyInterceptors(api)
 applyInterceptors(scriptApi)
+
+function getCurrentUserIdFromToken(): number {
+  if (typeof window === 'undefined') return 0
+  try {
+    const token = localStorage.getItem('access_token')
+    if (!token) return 0
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    const raw = payload.user_id || payload.sub
+    const userId = Number(raw)
+    return Number.isFinite(userId) && userId > 0 ? userId : 0
+  } catch {
+    return 0
+  }
+}
 
 export const authAPI = {
   login: (email: string, password: string) =>
@@ -417,6 +438,41 @@ export const storyboardAPI = {
 export const storageAPI = {
   getDetails: (projectId: number) =>
     api.get(`/api/v1/projects/${projectId}/storage`),
+  upload: (
+    projectId: number,
+    file: File,
+    opts?: {
+      bucket?: string
+      category?: string
+      userId?: number
+      onProgress?: (percent: number) => void
+    }
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('bucket', opts?.bucket || 'videos')
+    form.append('category', opts?.category || 'other')
+    form.append('project_id', String(projectId))
+    form.append('user_id', String(opts?.userId || getCurrentUserIdFromToken()))
+    return api.post<{
+      code: number
+      data: {
+        cdn_url: string
+        object_key: string
+        file_size: number
+        file_id: number
+      }
+    }>('/api/v1/storage/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000,
+      onUploadProgress: (evt) => {
+        const total = Number(evt.total || 0)
+        if (!opts?.onProgress || total <= 0) return
+        const percent = Math.max(0, Math.min(100, Math.round((evt.loaded / total) * 100)))
+        opts.onProgress(percent)
+      },
+    })
+  },
   deleteFiles: (projectId: number, fileIds: number[]) =>
     api.delete(`/api/v1/projects/${projectId}/storage/files`, { data: { file_ids: fileIds } }),
   cleanHistory: (projectId: number) =>
@@ -468,6 +524,27 @@ export const videoAPI = {
     api.get(`/api/v1/projects/${projectId}/episodes/${episodeId}/videos/shots-metadata`),
   triggerClipPipeline: (projectId: number, episodeId: number, scriptText: string) =>
     api.post(`/api/v1/projects/${projectId}/episodes/${episodeId}/videos/clip-trigger`, { script_text: scriptText }),
+  extractContent: (projectId: number, payload: { video_url: string; language?: string; only_audio?: boolean }) =>
+    api.post<{
+      code: number
+      data: {
+        video_url: string
+        frame_url: string
+        language: string
+        narration_text: string
+        extracted_text: string
+        summary: string
+        audio_enabled: boolean
+        vision_enabled: boolean
+        vision_model: string
+      }
+    }>(
+      process.env.NODE_ENV === 'production'
+        ? `/api/v1/projects/${projectId}/videos/content-extract`
+        : `${getDirectGatewayBaseURL()}/api/v1/projects/${projectId}/videos/content-extract`,
+      payload,
+      { timeout: 300000 },
+    ),
 }
 
 export interface VideoRenderConfig extends Record<string, unknown> {

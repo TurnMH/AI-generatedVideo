@@ -178,6 +178,41 @@
 
 `POST /api/v1/projects/:pid/subtitle/generate`
 
+### 视频内容提取（MVP）
+
+`POST /api/v1/projects/:pid/videos/content-extract`
+
+请求体示例：
+
+```json
+{
+  "video_url": "https://cdn.example.com/sample.mp4",
+  "language": "zh",
+  "only_audio": true
+}
+```
+
+返回示例：
+
+```json
+{
+  "video_url": "https://cdn.example.com/sample.mp4",
+  "frame_url": "https://cdn.example.com/sample-last-frame.jpg",
+  "language": "zh",
+  "narration_text": "视频音轨转写出的文案",
+  "extracted_text": "画面中识别到的文字",
+  "summary": "画面内容摘要",
+  "audio_enabled": true,
+  "vision_enabled": true,
+  "vision_model": "gpt-4.1-mini"
+}
+```
+
+说明：
+
+- `language` 可选，常用值 `zh` / `en` / `ja`。
+- `only_audio=true` 时仅执行音频解说转文案，跳过关键帧视觉识别。
+
 ---
 
 ## 任务与进度

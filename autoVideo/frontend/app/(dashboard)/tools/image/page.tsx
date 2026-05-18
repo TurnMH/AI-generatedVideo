@@ -1,7 +1,7 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { Upload, Download, ImageIcon, Info, Cpu, RefreshCw, RotateCw } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { Upload, Download, ImageIcon, Info, Cpu, RefreshCw, RotateCw, Crop as CropIcon, Move } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Slider } from '@/components/ui/slider'
@@ -18,6 +18,29 @@ type ImageInfo = {
   width: number
   height: number
   dataUrl: string
+}
+
+type CropRect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type CropHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se'
+
+type CropInteraction = {
+  handle: CropHandle
+  startX: number
+  startY: number
+  startCrop: CropRect
+}
+
+const MIN_CROP_SIZE = 24
+
+function clamp(value: number, min: number, max: number) {
+  if (max < min) return min
+  return Math.min(Math.max(value, min), max)
 }
 
 // ─── Format compatibility matrix ──────────────────────────────────────────────
@@ -66,6 +89,15 @@ function loadImageInfo(file: File): Promise<ImageInfo> {
   })
 }
 
+function loadHtmlImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('图片加载失败'))
+    img.src = dataUrl
+  })
+}
+
 function convertImage(
   info: ImageInfo,
   format: OutputFormat,
@@ -106,6 +138,110 @@ function convertImage(
 
 function extOf(format: OutputFormat): string {
   return { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[format]
+}
+
+function createDefaultCrop(info: ImageInfo): CropRect {
+  const safeMin = Math.max(1, Math.min(MIN_CROP_SIZE, info.width, info.height))
+  const width = Math.max(safeMin, Math.round(info.width * 0.8))
+  const height = Math.max(safeMin, Math.round(info.height * 0.8))
+  return {
+    x: Math.max(0, Math.round((info.width - width) / 2)),
+    y: Math.max(0, Math.round((info.height - height) / 2)),
+    width: Math.min(width, info.width),
+    height: Math.min(height, info.height),
+  }
+}
+
+function normalizeCropRect(rect: CropRect, info: ImageInfo): CropRect {
+  const safeMin = Math.max(1, Math.min(MIN_CROP_SIZE, info.width, info.height))
+  const width = clamp(Math.round(rect.width), safeMin, info.width)
+  const height = clamp(Math.round(rect.height), safeMin, info.height)
+  const x = clamp(Math.round(rect.x), 0, Math.max(0, info.width - width))
+  const y = clamp(Math.round(rect.y), 0, Math.max(0, info.height - height))
+  return { x, y, width, height }
+}
+
+function moveCropRect(startCrop: CropRect, deltaX: number, deltaY: number, info: ImageInfo): CropRect {
+  return normalizeCropRect(
+    {
+      ...startCrop,
+      x: startCrop.x + deltaX,
+      y: startCrop.y + deltaY,
+    },
+    info,
+  )
+}
+
+function resizeCropRect(startCrop: CropRect, handle: Exclude<CropHandle, 'move'>, deltaX: number, deltaY: number, info: ImageInfo): CropRect {
+  const left = startCrop.x
+  const top = startCrop.y
+  const right = startCrop.x + startCrop.width
+  const bottom = startCrop.y + startCrop.height
+  const safeMin = Math.max(1, Math.min(MIN_CROP_SIZE, info.width, info.height))
+
+  let nextLeft = left
+  let nextTop = top
+  let nextRight = right
+  let nextBottom = bottom
+
+  if (handle === 'nw') {
+    nextLeft = clamp(left + deltaX, 0, right - safeMin)
+    nextTop = clamp(top + deltaY, 0, bottom - safeMin)
+  }
+  if (handle === 'ne') {
+    nextRight = clamp(right + deltaX, left + safeMin, info.width)
+    nextTop = clamp(top + deltaY, 0, bottom - safeMin)
+  }
+  if (handle === 'sw') {
+    nextLeft = clamp(left + deltaX, 0, right - safeMin)
+    nextBottom = clamp(bottom + deltaY, top + safeMin, info.height)
+  }
+  if (handle === 'se') {
+    nextRight = clamp(right + deltaX, left + safeMin, info.width)
+    nextBottom = clamp(bottom + deltaY, top + safeMin, info.height)
+  }
+
+  return normalizeCropRect(
+    {
+      x: nextLeft,
+      y: nextTop,
+      width: nextRight - nextLeft,
+      height: nextBottom - nextTop,
+    },
+    info,
+  )
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, format: OutputFormat, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('裁剪失败'))
+          return
+        }
+        resolve(blob)
+      },
+      format,
+      format === 'image/png' ? undefined : quality / 100,
+    )
+  })
+}
+
+function calculateContainBox(stageWidth: number, stageHeight: number, imageWidth: number, imageHeight: number) {
+  if (stageWidth <= 0 || stageHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+    return null
+  }
+  const scale = Math.min(stageWidth / imageWidth, stageHeight / imageHeight)
+  const width = imageWidth * scale
+  const height = imageHeight * scale
+  return {
+    width,
+    height,
+    left: (stageWidth - width) / 2,
+    top: (stageHeight - height) / 2,
+    scale,
+  }
 }
 
 // ─── Drop zone ────────────────────────────────────────────────────────────────
@@ -362,6 +498,316 @@ function TransformTool({ info }: { info: ImageInfo }) {
   )
 }
 
+// ─── Crop Tool ────────────────────────────────────────────────────────────────
+
+function CropTool({ info, onFile }: { info: ImageInfo | null; onFile: (file: File) => void }) {
+  const stageRef = useRef<HTMLDivElement>(null)
+  const previewUrlRef = useRef('')
+  const [crop, setCrop] = useState<CropRect | null>(info ? createDefaultCrop(info) : null)
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  const [interaction, setInteraction] = useState<CropInteraction | null>(null)
+  const [cropFormat, setCropFormat] = useState<OutputFormat>('image/png')
+  const [cropQuality, setCropQuality] = useState(92)
+  const [exporting, setExporting] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [resultSize, setResultSize] = useState(0)
+  const [cropError, setCropError] = useState('')
+
+  useEffect(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = ''
+    }
+    setPreviewUrl('')
+    setResultSize(0)
+    setCropError('')
+    setInteraction(null)
+    setCrop(info ? createDefaultCrop(info) : null)
+  }, [info?.name, info?.size])
+
+  useEffect(() => () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = ''
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!info) return
+    const element = stageRef.current
+    if (!element) return
+
+    const updateSize = () => {
+      setStageSize({ width: element.clientWidth, height: element.clientHeight })
+    }
+
+    updateSize()
+
+    if (typeof ResizeObserver === 'undefined') {
+      const handleResize = () => updateSize()
+      window.addEventListener('resize', handleResize)
+      return () => window.removeEventListener('resize', handleResize)
+    }
+
+    const observer = new ResizeObserver(updateSize)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [info])
+
+  const imageBox = useMemo(() => {
+    if (!info) return null
+    return calculateContainBox(stageSize.width, stageSize.height, info.width, info.height)
+  }, [info, stageSize.width, stageSize.height])
+
+  useEffect(() => {
+    if (!interaction || !info || !imageBox) return
+
+    const handleMove = (event: PointerEvent) => {
+      const deltaX = (event.clientX - interaction.startX) / imageBox.scale
+      const deltaY = (event.clientY - interaction.startY) / imageBox.scale
+      setCrop(interaction.handle === 'move'
+        ? moveCropRect(interaction.startCrop, deltaX, deltaY, info)
+        : resizeCropRect(interaction.startCrop, interaction.handle, deltaX, deltaY, info))
+    }
+
+    const handleEnd = () => setInteraction(null)
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleEnd)
+    window.addEventListener('pointercancel', handleEnd)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleEnd)
+      window.removeEventListener('pointercancel', handleEnd)
+    }
+  }, [interaction, imageBox, info])
+
+  const cropStyle = useMemo(() => {
+    if (!crop || !imageBox) return null
+    return {
+      left: imageBox.left + crop.x * imageBox.scale,
+      top: imageBox.top + crop.y * imageBox.scale,
+      width: crop.width * imageBox.scale,
+      height: crop.height * imageBox.scale,
+    }
+  }, [crop, imageBox])
+
+  function startInteraction(handle: CropHandle, event: ReactPointerEvent<HTMLDivElement>) {
+    if (!info || !crop || !imageBox) return
+    event.preventDefault()
+    event.stopPropagation()
+    setCropError('')
+    setInteraction({
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
+      startCrop: crop,
+    })
+  }
+
+  async function exportCrop() {
+    if (!info || !crop) return
+    setExporting(true)
+    setCropError('')
+    try {
+      const img = await loadHtmlImage(info.dataUrl)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(crop.width))
+      canvas.height = Math.max(1, Math.round(crop.height))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('画布初始化失败')
+      if (cropFormat === 'image/jpeg') {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+      }
+      ctx.drawImage(img, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height)
+      const blob = await canvasToBlob(canvas, cropFormat, cropQuality)
+      const nextUrl = URL.createObjectURL(blob)
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = nextUrl
+      setPreviewUrl(nextUrl)
+      setResultSize(blob.size)
+
+      const downloadName = info.name.replace(/\.[^.]+$/, '') + `_cropped.${extOf(cropFormat)}`
+      const anchor = document.createElement('a')
+      anchor.href = nextUrl
+      anchor.download = downloadName
+      anchor.click()
+    } catch (error: any) {
+      setCropError(error?.message || '裁剪导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  function resetCrop() {
+    if (!info) return
+    setCrop(createDefaultCrop(info))
+    setCropError('')
+  }
+
+  if (!info) {
+    return (
+      <div className="space-y-4">
+        <DropZone onFile={onFile} />
+        <div className="rounded-xl border border-dashed border-surface-200 bg-white p-5 text-sm text-surface-500 shadow-sm">
+          先上传一张图片，然后就可以在画布里拖动裁剪框，或者拖拽四个角点调整范围。
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_320px]">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between rounded-xl border border-surface-200 bg-white px-4 py-3 shadow-sm">
+            <div>
+              <p className="text-sm font-semibold text-surface-800">在线裁剪画布</p>
+              <p className="text-xs text-surface-500">拖动裁剪框移动，拖动角点缩放</p>
+            </div>
+            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-mono text-slate-600">
+              {crop ? `${crop.width} × ${crop.height}px` : '未初始化'}
+            </div>
+          </div>
+
+          <div
+            ref={stageRef}
+            className="relative h-[460px] overflow-hidden rounded-2xl border border-surface-200 bg-slate-950 shadow-sm"
+          >
+            {imageBox && crop && cropStyle && (
+              <>
+                <img
+                  src={info.dataUrl}
+                  alt="crop preview"
+                  draggable={false}
+                  className="absolute select-none object-fill"
+                  style={{
+                    width: imageBox.width,
+                    height: imageBox.height,
+                    left: imageBox.left,
+                    top: imageBox.top,
+                  }}
+                />
+
+                <div
+                  className="absolute rounded-lg border-2 border-cyan-300 bg-cyan-400/10 shadow-[0_0_0_9999px_rgba(2,6,23,0.58)]"
+                  style={cropStyle}
+                  onPointerDown={(event) => startInteraction('move', event)}
+                >
+                  <div className="absolute inset-0 pointer-events-none border border-white/30">
+                    <div className="absolute left-1/3 top-0 h-full w-px bg-white/20" />
+                    <div className="absolute left-2/3 top-0 h-full w-px bg-white/20" />
+                    <div className="absolute top-1/3 left-0 w-full h-px bg-white/20" />
+                    <div className="absolute top-2/3 left-0 w-full h-px bg-white/20" />
+                  </div>
+
+                  <div className="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-slate-950/70 px-2 py-1 text-[10px] font-medium text-white backdrop-blur">
+                    <CropIcon className="h-3 w-3" />
+                    拖动编辑
+                  </div>
+
+                  {([
+                    ['nw', '-left-2 -top-2 cursor-nwse-resize'],
+                    ['ne', '-right-2 -top-2 cursor-nesw-resize'],
+                    ['sw', '-left-2 -bottom-2 cursor-nesw-resize'],
+                    ['se', '-right-2 -bottom-2 cursor-nwse-resize'],
+                  ] as const).map(([handle, position]) => (
+                    <button
+                      key={handle}
+                      type="button"
+                      className={`absolute ${position} h-4 w-4 rounded-full border border-white bg-cyan-400 shadow-sm transition-transform hover:scale-110`}
+                      onPointerDown={(event) => startInteraction(handle, event)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {!imageBox && (
+              <div className="flex h-full items-center justify-center text-sm text-slate-300">
+                图片加载中...
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-3 rounded-2xl border border-surface-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center gap-2">
+            <Move className="h-4 w-4 text-cyan-600" />
+            <p className="text-sm font-semibold text-surface-800">裁剪设置</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs text-surface-500">
+            <div className="rounded-lg bg-surface-50 px-3 py-2">
+              <div>起点</div>
+              <div className="font-mono text-surface-700">{crop ? `${crop.x}, ${crop.y}` : '--'}</div>
+            </div>
+            <div className="rounded-lg bg-surface-50 px-3 py-2">
+              <div>尺寸</div>
+              <div className="font-mono text-surface-700">{crop ? `${crop.width} × ${crop.height}` : '--'}</div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-surface-700">输出格式</p>
+            <Select value={cropFormat} onValueChange={(value) => setCropFormat(value as OutputFormat)}>
+              <SelectTrigger>
+                <SelectValue placeholder="选择格式" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="image/png">PNG</SelectItem>
+                <SelectItem value="image/jpeg">JPG</SelectItem>
+                <SelectItem value="image/webp">WebP</SelectItem>
+              </SelectContent>
+            </Select>
+            {cropFormat !== 'image/png' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-surface-500">
+                  <span>压缩质量</span>
+                  <span className="font-mono text-cyan-700">{cropQuality}%</span>
+                </div>
+                <Slider min={20} max={100} step={1} value={[cropQuality]} onValueChange={([value]) => setCropQuality(value)} />
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" className="gap-1.5" onClick={exportCrop} disabled={exporting || !crop}>
+              {exporting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <CropIcon className="h-3.5 w-3.5" />}
+              {exporting ? '导出中…' : '导出并下载'}
+            </Button>
+            <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={resetCrop}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              重置裁剪框
+            </Button>
+          </div>
+
+          {cropError && (
+            <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+              {cropError}
+            </div>
+          )}
+
+          {previewUrl && (
+            <div className="space-y-2 rounded-xl bg-surface-50 p-3">
+              <div className="flex items-center justify-between text-xs text-surface-500">
+                <span>导出结果</span>
+                <span className="font-mono">{formatBytes(resultSize)}</span>
+              </div>
+              <img src={previewUrl} alt="cropped preview" className="max-h-48 w-full rounded-lg object-contain bg-white" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-dashed border-surface-200 bg-white px-4 py-3 text-xs text-surface-500 shadow-sm">
+        提示：先按住裁剪框中间拖动，再拖四角调整大小。导出会直接下载当前裁剪结果。
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ImageToolsPage() {
@@ -419,7 +865,7 @@ export default function ImageToolsPage() {
         </div>
         <div>
           <h1 className="text-lg font-bold text-surface-900">图片工具</h1>
-          <p className="text-sm text-surface-500">格式转换 · 滤镜调整 · 裁剪变换 · 图片信息 · 兼容性</p>
+          <p className="text-sm text-surface-500">格式转换 · 滤镜调整 · 裁剪编辑 · 图片信息 · 兼容性</p>
         </div>
       </div>
 
@@ -428,6 +874,7 @@ export default function ImageToolsPage() {
           <TabsList className="flex w-max min-w-full">
             <TabsTrigger value="convert">格式转换</TabsTrigger>
             <TabsTrigger value="adjust">滤镜调整</TabsTrigger>
+            <TabsTrigger value="crop">裁剪编辑</TabsTrigger>
             <TabsTrigger value="transform">裁剪变换</TabsTrigger>
             <TabsTrigger value="info">图片信息</TabsTrigger>
             <TabsTrigger value="compat">格式兼容性</TabsTrigger>
@@ -607,6 +1054,11 @@ export default function ImageToolsPage() {
           {info
             ? <TransformTool info={info} key={info.name + info.size} />
             : <p className="mt-4 py-10 text-center text-sm text-surface-400">请先在「格式转换」或「图片信息」标签上传图片</p>}
+        </TabsContent>
+
+        {/* ── Crop ── */}
+        <TabsContent value="crop" className="pt-3">
+          <CropTool info={info} onFile={handleFile} key={info ? info.name + info.size : 'crop-empty'} />
         </TabsContent>
       </Tabs>
     </div>
