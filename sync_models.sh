@@ -6,7 +6,7 @@
 set -e
 
 REMOTE_USER="ubuntu"
-REMOTE_HOST="118.89.83.96"
+REMOTE_HOST="47.236.188.141"
 REMOTE_PASS="asdf#234@!"
 SSHPASS="/opt/homebrew/bin/sshpass"
 SSH_OPTS="-o ControlMaster=no -o StrictHostKeyChecking=no -o ServerAliveInterval=30"

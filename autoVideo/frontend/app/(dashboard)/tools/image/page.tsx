@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Slider } from '@/components/ui/slider'
 import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -592,7 +593,7 @@ function CropTool({ info, onFile }: { info: ImageInfo | null; onFile: (file: Fil
     }
   }, [crop, imageBox])
 
-  function startInteraction(handle: CropHandle, event: ReactPointerEvent<HTMLDivElement>) {
+  function startInteraction(handle: CropHandle, event: ReactPointerEvent<HTMLElement>) {
     if (!info || !crop || !imageBox) return
     event.preventDefault()
     event.stopPropagation()

@@ -83,8 +83,8 @@ type SystemAPIKey struct {
 // Permission —— 权限表，每条记录代表一个可授予的权限。
 type Permission struct {
 	ID   uint64 `gorm:"primaryKey;autoIncrement"`
-	Code string `gorm:"size:128;uniqueIndex;not null"` // 权限标识码，如 "user:create"
-	Desc string `gorm:"type:text"`                     // 权限描述
+	Code string `gorm:"size:128;uniqueIndex;not null"`           // 权限标识码，如 "user:create"
+	Desc string `gorm:"column:description;type:text"`            // 权限描述
 }
 
 // RolePermission —— 角色-权限关联表（多对多关系）。

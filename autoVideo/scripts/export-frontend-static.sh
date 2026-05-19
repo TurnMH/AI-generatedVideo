@@ -8,12 +8,14 @@ source "$ROOT/scripts/config.sh"
 ENV="$DEFAULT_ENV"
 TARGET_DIR="${FRONTEND_STATIC_DIR:-/home/autoVideo/web}"
 SKIP_INSTALL=false
+BUILD_ONLY=false
 
 for arg in "$@"; do
   case $arg in
     --env=*) ENV="${arg#*=}" ;;
     --target=*) TARGET_DIR="${arg#*=}" ;;
     --skip-install) SKIP_INSTALL=true ;;
+    --build-only) BUILD_ONLY=true ;;
   esac
 done
 
@@ -61,6 +63,11 @@ fi
 
 log "构建前端静态导出..."
 (cd frontend && npm run build)
+
+if [ "$BUILD_ONLY" = true ]; then
+  ok "前端静态产物已生成到 frontend/out"
+  exit 0
+fi
 
 STAGING_DIR="${TARGET_DIR}.staging"
 log "同步静态文件到 $TARGET_DIR"

@@ -57,7 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_user_api_keys_user_id ON user_api_keys(user_id);
 CREATE TABLE IF NOT EXISTS permissions (
     id   BIGSERIAL PRIMARY KEY,
     code VARCHAR(128) NOT NULL UNIQUE,
-    desc TEXT
+    description TEXT
 );
 
 -- 角色权限关联表
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS role_permissions (
 );
 
 -- 预置角色权限数据
-INSERT INTO permissions (code, desc) VALUES
+INSERT INTO permissions (code, description) VALUES
     ('video:create', '创建视频'),
     ('video:read',   '读取视频'),
     ('video:delete', '删除视频'),

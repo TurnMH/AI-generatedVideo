@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS script_libraries (
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_script_libraries_source ON script_libraries (source);
-CREATE INDEX idx_script_libraries_user_id ON script_libraries (user_id);
-CREATE INDEX idx_script_libraries_project_id ON script_libraries (project_id);
+CREATE INDEX IF NOT EXISTS idx_script_libraries_source ON script_libraries (source);
+CREATE INDEX IF NOT EXISTS idx_script_libraries_user_id ON script_libraries (user_id);
+CREATE INDEX IF NOT EXISTS idx_script_libraries_project_id ON script_libraries (project_id);
 
 -- Seed showcase scripts
 INSERT INTO script_libraries (title, author, description, genre, tags, source, word_count, sort_order) VALUES

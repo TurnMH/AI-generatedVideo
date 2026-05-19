@@ -135,8 +135,12 @@ if [ -f "$COMPOSE_FULL" ]; then
   done
   ok "API Gateway ✓ → http://localhost:8000"
 
-  log "发布前端静态文件..."
-  bash "$ROOT/scripts/export-frontend-static.sh" --env="$ENV"
+  if [ "${SKIP_FRONTEND_EXPORT:-false}" = "true" ]; then
+    warn "跳过前端静态文件发布（由外部同步流程负责）"
+  else
+    log "发布前端静态文件..."
+    bash "$ROOT/scripts/export-frontend-static.sh" --env="$ENV"
+  fi
 
   if docker ps -a --format '{{.Names}}' | grep -Fxq autovideo-frontend; then
     log "移除旧的 frontend 容器..."

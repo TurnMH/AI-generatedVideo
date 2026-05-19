@@ -1,4 +1,4 @@
--- migrations/007_add_glm_air_plus_models.up.sql
+-- migrations/010_add_glm_air_plus_models.up.sql
 -- Add GLM-4 Air, GLM-4 Air X, GLM-4 Plus — verified available on BigModel official API
 -- Tested: 2025-07, all return HTTP 200 via https://open.bigmodel.cn/api/paas/v4
 
@@ -6,7 +6,14 @@ INSERT INTO models (model_key, name, type, provider, api_endpoint, api_key_ref, 
 VALUES
   ('glm-4-plus',  'GLM-4 Plus',  'llm', 'zhipu', 'https://open.bigmodel.cn/api/paas/v4/chat/completions', 'zhipu-official', 58, true),
   ('glm-4-air',   'GLM-4 Air',   'llm', 'zhipu', 'https://open.bigmodel.cn/api/paas/v4/chat/completions', 'zhipu-official', 57, true),
-  ('glm-4-airx',  'GLM-4 Air X', 'llm', 'zhipu', 'https://open.bigmodel.cn/api/paas/v4/chat/completions', 'zhipu-official', 56, true);
+  ('glm-4-airx',  'GLM-4 Air X', 'llm', 'zhipu', 'https://open.bigmodel.cn/api/paas/v4/chat/completions', 'zhipu-official', 56, true)
+ON CONFLICT (name, provider) DO UPDATE SET
+  model_key = EXCLUDED.model_key,
+  type = EXCLUDED.type,
+  api_endpoint = EXCLUDED.api_endpoint,
+  api_key_ref = EXCLUDED.api_key_ref,
+  priority = EXCLUDED.priority,
+  is_active = EXCLUDED.is_active;
 
 -- Priority reference for zhipu LLM models:
 --   glm-4.7 (via easyart)  = 70

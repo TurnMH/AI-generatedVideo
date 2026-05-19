@@ -1,7 +1,39 @@
--- Migration 004: Add new video generator models (doubao, vidu, suanneng, gaga)
--- These correspond to the new generators added in video-service.
 
--- ─── Doubao V4.0 (xingguang-3.0, ByteDance Ark) ────────────────────────────
+-- Clean up duplicate seed rows first, then enforce a stable identity on name/provider.
+DROP INDEX IF EXISTS idx_models_model_key_unique;
+
+CREATE TEMP TABLE model_dedup_map AS
+WITH ranked AS (
+  SELECT
+    id,
+    name,
+    provider,
+    row_number() OVER (PARTITION BY name, provider ORDER BY id DESC) AS rn,
+    first_value(id) OVER (PARTITION BY name, provider ORDER BY id DESC) AS keep_id
+  FROM models
+  WHERE name IS NOT NULL
+    AND provider IS NOT NULL
+)
+SELECT id AS duplicate_id, keep_id
+FROM ranked
+WHERE rn > 1;
+
+UPDATE model_healths mh
+SET model_id = m.keep_id
+FROM model_dedup_map m
+WHERE mh.model_id = m.duplicate_id;
+
+UPDATE usage_records ur
+SET model_id = m.keep_id
+FROM model_dedup_map m
+WHERE ur.model_id = m.duplicate_id;
+
+DELETE FROM models
+WHERE id IN (SELECT duplicate_id FROM model_dedup_map);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_models_name_provider_unique
+ON models (name, provider);
+
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -26,7 +58,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key  = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── Doubao SeedDream (doubao-seedance, ByteDance Ark) ──────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -51,7 +82,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key  = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── Vidu Q3 Pro (xingcheng-2.6) ────────────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -76,7 +106,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key  = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── Vidu Q3 Mix (xingchen-3.1) ─────────────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -101,7 +130,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key  = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── Suanneng Seedance 1.5 Pro (xingguang-2.5, SophNet) ─────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -126,7 +154,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key  = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── Gaga-1 (xingdian2.0) ────────────────────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,

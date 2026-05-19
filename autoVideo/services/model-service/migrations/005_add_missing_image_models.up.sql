@@ -1,18 +1,10 @@
--- Migration 005: Add missing image models + fix model_key mismatches
--- Adds all image generators registered in image-service/cmd/main.go that
--- were absent from the model-service DB. Also fixes model_key values that
--- didn't match the generator key used by selectGenerator().
 
--- ─── Fix model_key mismatches ──────────────────────────────────────────────
--- 通义万象-Plus: auto-generated key '通义万象-plus' ≠ generator key 'wanx2.1-t2i-plus'
 UPDATE models SET model_key = 'wanx2.1-t2i-plus'
   WHERE name = '通义万象-Plus' AND type = 'image';
 
--- Flux.1-dev: auto-generated key 'flux.1-dev' ≠ generator key 'flux'
 UPDATE models SET model_key = 'flux'
   WHERE name = 'Flux.1-dev' AND type = 'image';
 
--- ─── GPT-Image-1 (OpenAI native image model) ──────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -36,7 +28,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key   = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── CogView-3 Plus (智谱AI) ──────────────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -60,7 +51,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key   = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── CogView-4 (智谱AI) ───────────────────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -84,7 +74,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key   = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── 豆包SeedDream (ByteDance Ark image) ──────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -108,7 +97,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key   = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── 通义万象-Turbo (DashScope fast) ──────────────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,
@@ -132,7 +120,6 @@ ON CONFLICT (name, provider) DO UPDATE SET
   model_key   = EXCLUDED.model_key,
   description = EXCLUDED.description;
 
--- ─── 通义万象 i2i (DashScope image-to-image) ──────────────────────────────
 INSERT INTO models (
   name, provider, type, is_active, priority, cost_per_unit, unit,
   model_key, speed_rating, capability_tags,

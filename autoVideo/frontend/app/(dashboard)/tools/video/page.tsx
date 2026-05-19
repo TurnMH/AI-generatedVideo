@@ -48,7 +48,7 @@ function recoverStaleHistory(records: ExtractRecord[]) {
   const now = Date.now()
   let changed = false
 
-  const next = records.map((record) => {
+  const next: ExtractRecord[] = records.map((record): ExtractRecord => {
     if (record.status !== 'processing') {
       return record
     }
@@ -100,8 +100,8 @@ export default function VideoExtractToolPage() {
 
       const typed = parsed.filter((item): item is ExtractRecord => Boolean(item && typeof item === 'object' && typeof item.id === 'string'))
       const activeRecordId = localStorage.getItem(ACTIVE_EXTRACT_KEY)
-      const afterActiveRecovery = activeRecordId
-        ? typed.map((record) => {
+      const afterActiveRecovery: ExtractRecord[] = activeRecordId
+        ? typed.map((record): ExtractRecord => {
             if (record.id !== activeRecordId || record.status !== 'processing') {
               return record
             }
