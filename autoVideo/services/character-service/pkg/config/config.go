@@ -30,7 +30,8 @@ type Config struct {
 		ProducerTopic string   `mapstructure:"producer_topic"`
 	} `mapstructure:"kafka"`
 	Image struct {
-		BaseURL string `mapstructure:"base_url"`
+		BaseURL      string `mapstructure:"base_url"`
+		DefaultModel string `mapstructure:"default_model"`
 	} `mapstructure:"image"`
 	LLM struct {
 		BaseURL     string `mapstructure:"base_url"`
@@ -93,6 +94,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("kafka.consumer_topic", "asset.generate.request")
 	viper.SetDefault("kafka.producer_topic", "asset.generate.result")
 	viper.SetDefault("image.base_url", "http://localhost:8005")
+	viper.SetDefault("image.default_model", "doubao-seedream-4-0-250828")
 	viper.SetDefault("llm.base_url", "https://api.easyart.cc/v1")
 	viper.SetDefault("llm.api_key", "")
 	viper.SetDefault("llm.model", "gpt-5.4-mini")

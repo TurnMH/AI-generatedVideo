@@ -82,6 +82,7 @@ type generateReq struct {
 	EpisodeID         *int64             `json:"episode_id"`
 	ImageURLs         []string           `json:"image_urls" binding:"required,min=1"`
 	SceneDescriptions []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
+	Dialogues         []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
 	MotionDescs       []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
 	StylePreset       string             `json:"style_preset"`
 	MotionMode        string             `json:"motion_mode"`
@@ -123,6 +124,19 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 
 	// Store per-clip scene descriptions in render_config for use during generation.
 	req.RenderConfig = normalizeRenderConfig(req.RenderConfig)
+	if len(req.Dialogues) == 0 && strings.TrimSpace(req.SubtitleText) != "" {
+		for _, line := range strings.Split(strings.ReplaceAll(req.SubtitleText, "\r\n", "\n"), "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				req.Dialogues = append(req.Dialogues, trimmed)
+			}
+		}
+	}
+	if len(req.Dialogues) > 0 {
+		req.RenderConfig["dialogues"] = req.Dialogues
+		if strings.TrimSpace(req.SubtitleText) == "" {
+			req.SubtitleText = strings.Join(req.Dialogues, "\n")
+		}
+	}
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
 	}

@@ -24,12 +24,14 @@ import (
 // parallel.  5 concurrent submissions keeps image-service within standard
 // single-API-key rate limits.  Tune via concurrency.max_generations in config.
 const defaultMaxConcurrent = 5
+const defaultImageModel = "doubao-seedream-4-0-250828"
 
 type KafkaConsumer struct {
 	reader         *kafka.Reader
 	resultWriter   *kafka.Writer
 	assetSvc       *AssetService
 	imageBaseURL   string
+	defaultModel   string
 	projectBaseURL string
 	jwtSecret      string
 	logger         *zap.Logger
@@ -40,13 +42,17 @@ type KafkaConsumer struct {
 // NewKafkaConsumer —— 创建 Kafka 消费者实例，用于消费图像生成任务
 func NewKafkaConsumer(
 	brokers []string,
-	group, topic, resultTopic, imageBaseURL, projectBaseURL, jwtSecret string,
+	group, topic, resultTopic, imageBaseURL, defaultModel, projectBaseURL, jwtSecret string,
 	assetSvc *AssetService,
 	logger *zap.Logger,
 	maxConcurrent int,
 ) *KafkaConsumer {
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrent
+	}
+	defaultModel = strings.TrimSpace(defaultModel)
+	if defaultModel == "" {
+		defaultModel = defaultImageModel
 	}
 	return &KafkaConsumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
@@ -63,6 +69,7 @@ func NewKafkaConsumer(
 		},
 		assetSvc:       assetSvc,
 		imageBaseURL:   imageBaseURL,
+		defaultModel:   defaultModel,
 		projectBaseURL: strings.TrimRight(projectBaseURL, "/"),
 		jwtSecret:      jwtSecret,
 		logger:         logger,
@@ -76,6 +83,17 @@ func NewKafkaConsumer(
 			},
 		},
 	}
+}
+
+func (c *KafkaConsumer) resolveModelName(modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if modelName != "" {
+		return modelName
+	}
+	if strings.TrimSpace(c.defaultModel) != "" {
+		return c.defaultModel
+	}
+	return defaultImageModel
 }
 
 // Start —— 启动消费循环，持续读取 Kafka 消息并并发处理图像生成任务
@@ -242,9 +260,7 @@ func assetImageDimensions(assetType string) (width, height int) {
 // referenceImageURL 非空时透传给 image-service，底层 generator 会把它作为参考图（Doubao/Seedream 支持）。
 // taskType 透传给 image-service 的 task_type 字段（"portrait"/"character-sheet" 等），影响尺寸归一化策略；空串由 image-service 自行推断。
 func (c *KafkaConsumer) submitImageTask(ctx context.Context, assetID, projectID uint64, prompt, modelName, stylePreset, negativePrompt, assetType, taskType string, width, height int, seed int64, referenceImageURL string) (int64, error) {
-	if modelName == "" {
-		modelName = "dalle"
-	}
+	modelName = c.resolveModelName(modelName)
 	if strings.TrimSpace(stylePreset) == "" {
 		stylePreset = stylepreset.Default
 	}
@@ -385,9 +401,7 @@ func (c *KafkaConsumer) recoverPendingAsset(ctx context.Context, asset *model.As
 		return
 	}
 	modelName := strings.TrimSpace(stringValue(raw["model_name"]))
-	if modelName == "" {
-		modelName = "dalle"
-	}
+	modelName = c.resolveModelName(modelName)
 	if c.assetSvc.isProjectGenerationPaused(asset.ProjectID) || asset.Status == "paused" {
 		return
 	}
@@ -862,9 +876,7 @@ func (c *KafkaConsumer) generateCharacterPanels(
 			failedPanels = []string{"closeup", "front", "side", "back"}
 		}
 		regenModel := strings.TrimSpace(req.ModelName)
-		if regenModel == "" {
-			regenModel = "dalle"
-		}
+		regenModel = c.resolveModelName(regenModel)
 		c.logger.Info("vision QA failed, auto-retrying panels",
 			zap.Uint64("asset_id", assetID), zap.Strings("panels", failedPanels))
 
@@ -934,8 +946,8 @@ func (c *KafkaConsumer) RegenPanel(ctx context.Context, assetID uint64, panelStr
 		return fmt.Errorf("invalid panel %q (must be one of closeup/front/side/back)", panelStr)
 	}
 	if strings.TrimSpace(modelName) == "" {
-		// Asset model 本身不存 model_name（pipeline 层透传），老资产无处可取，直接用默认。
-		modelName = "dalle"
+		// Asset model 本身不存 model_name（pipeline 层透传），老资产无处可取，直接用服务默认值。
+		modelName = c.resolveModelName("")
 	}
 
 	// 定位目标栏索引

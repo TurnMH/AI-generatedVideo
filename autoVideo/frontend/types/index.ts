@@ -390,11 +390,13 @@ export interface Task {
 }
 
 export interface TaskProgress {
+  id?: number
   task_id: number
   progress: number
   message: string
   status: string
   timestamp: number
+  created_at?: string
 }
 
 // ─── Scene (legacy, kept for backward compat) ────────────────

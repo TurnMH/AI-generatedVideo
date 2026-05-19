@@ -17,8 +17,7 @@ import {
   Upload,
   Wand2,
 } from 'lucide-react'
-import { assetAPI, modelAPI, projectAPI, storageAPI, taskAPI, videoAPI } from '@/lib/api'
-import { savePendingProjectDraft } from '@/lib/project-draft'
+import { assetAPI, chatAPI, modelAPI, projectAPI, storageAPI, taskAPI, videoAPI } from '@/lib/api'
 import { ensureProjectMediaTag } from '@/lib/project-media'
 import type { Asset } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -35,6 +34,9 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { CurrentTaskPanel } from '@/components/ad-video/CurrentTaskPanel'
+import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel'
+import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
 import { VIDEO_MOTION_OPTIONS, VIDEO_STYLE_PRESETS } from '@/lib/video-style-config'
 
 function parseLines(raw: string): string[] {
@@ -87,6 +89,109 @@ const AD_TEMPLATES = [
   },
 ] as const
 
+const STORYBOARD_TEMPLATES = [
+  {
+    key: 'product-reveal',
+    label: '产品开场',
+    hint: '适合先展示产品本体，再用使用场景和收尾 CTA 完成转化。',
+    sceneLines: [
+      '开场产品特写：直接展示品牌主视觉与核心卖点。',
+      '功能细节镜头：突出材质、界面或使用方式。',
+      '真实使用场景：让目标用户看到自己在画面里的样子。',
+      '收尾 CTA：强化优惠、购买或下载行动。',
+    ],
+    dialogueLines: [
+      '先把最强卖点讲出来。',
+      '再补一条能感知到的功能优势。',
+      '把用户放进真实使用场景里。',
+      '最后明确行动号召。',
+    ],
+    referenceLines: [
+      '白底产品特写 / 主视觉海报',
+      '功能细节近景 / 包装或界面截图',
+      '人物手持使用 / 场景化照片',
+      '品牌结尾海报 / 优惠 CTA 图',
+    ],
+  },
+  {
+    key: 'pain-solution',
+    label: '痛点解决',
+    hint: '适合先抛出痛点，再给出解决方案和结果对比。',
+    sceneLines: [
+      '痛点开场：展示用户当前遇到的困扰。',
+      '方案登场：让产品作为解决方案出现。',
+      '结果对比：突出使用前后变化。',
+      '行动号召：引导立即体验或购买。',
+    ],
+    dialogueLines: [
+      '这个问题是不是你也遇到过？',
+      '我们用这个方案直接解决。',
+      '前后变化一眼就能看懂。',
+      '现在就去试试。',
+    ],
+    referenceLines: [
+      '问题场景抓拍 / 用户痛点画面',
+      '产品解决方案图 / 功能演示截图',
+      '前后对比拼图 / 结果对照图',
+      '下载页 / 购买按钮 / 优惠弹窗',
+    ],
+  },
+  {
+    key: 'social-proof',
+    label: '口碑转化',
+    hint: '适合用评价、测评和真实反馈增强信任。',
+    sceneLines: [
+      '用户口碑开场：先给出好评或评分。',
+      '真实测评镜头：展示产品在手里的状态。',
+      '结果反馈：补充用户使用后的感受。',
+      '品牌收尾：统一品牌信息与 CTA。',
+    ],
+    dialogueLines: [
+      '大家都在夸的点，先看这里。',
+      '实测一下，效果很直接。',
+      '用户反馈和结果都很清晰。',
+      '想要同款，马上行动。',
+    ],
+    referenceLines: [
+      '评分截图 / 评论区高赞图',
+      '实拍测评 / 近景手持图',
+      '用户反馈截图 / 对比图',
+      '品牌收口海报 / CTA 图',
+    ],
+  },
+] as const
+
+const BRAND_VOICE_TEMPLATES = [
+  {
+    key: 'premium',
+    label: '高端质感',
+    hint: '适合强调质感、克制和品牌信任的广告。',
+    directive: '品牌语气要克制、干净、稍有留白，突出高级感和可信度。',
+    contrast: '更适合美妆、消费电子、高客单价品牌。',
+  },
+  {
+    key: 'youthful',
+    label: '年轻活力',
+    hint: '适合轻快、社交感和即时反馈强的广告。',
+    directive: '品牌语气要轻快、口语化、带一点社交感，结尾 CTA 要直接。',
+    contrast: '更适合饮料、零食、APP 拉新和短视频投放。',
+  },
+  {
+    key: 'expert',
+    label: '专业可信',
+    hint: '适合功能说明、工具类和知识型产品。',
+    directive: '品牌语气要专业、清楚、避免夸张，用事实和功能点建立信任。',
+    contrast: '更适合工具、科技、教育和 B2B 内容。',
+  },
+  {
+    key: 'promo',
+    label: '促销直给',
+    hint: '适合活动投放、限时促销和转化导向广告。',
+    directive: '品牌语气要直接、明确、转化导向强，少修辞，多利益点和行动号召。',
+    contrast: '更适合活动节点、优惠券和强 CTA 场景。',
+  },
+] as const
+
 type OptimizedAdResult = {
   title: string
   content: string
@@ -107,17 +212,37 @@ type VideoTaskSnapshot = {
   image_urls?: string[]
 }
 
+type TaskProgressRecord = {
+  id?: number
+  task_id: number
+  progress: number
+  message: string
+  status: string
+  timestamp: number
+  created_at?: string
+}
+
 type GenerationContext = {
   projectId: number
   projectTitle: string
   prompt: string
   imageUrls: string[]
   sceneDescriptions: string[]
+  storyboardTemplate: string
+  referenceImageHints: string[]
+  brandVoiceTemplate: string
+  brandVoiceNotes: string
   modelName: string
   stylePreset: string
   motionMode: (typeof VIDEO_MOTION_OPTIONS)[number]['key']
   videoMode: 'frame_animation' | 'api_generation'
   clipDurationSec: number
+  targetMarket: string
+  subtitleLanguage: string
+  creativeMode: string
+  directorNote: string
+  subtitleText: string
+  dialogues: string[]
   startedAt: string
 }
 
@@ -127,6 +252,299 @@ type RetryRecord = {
   toModel: string
   reason: string
   status: 'submitted' | 'failed'
+}
+
+type AdTaskLogEntry = {
+  at: string
+  level: 'info' | 'progress' | 'success' | 'warning' | 'error'
+  message: string
+}
+
+const TARGET_MARKET_OPTIONS = [
+  {
+    key: 'cn-mainland',
+    label: '中国大陆',
+    prompt: '使用大陆短视频广告口吻，优先本地化消费场景、直接卖点和明确 CTA，避免泛国际化表达。',
+  },
+  {
+    key: 'global-en',
+    label: '海外英语',
+    prompt: 'Use natural market-local English copy, avoid literal translation, and keep the CTA concise and persuasive.',
+  },
+  {
+    key: 'sea',
+    label: '东南亚',
+    prompt: '使用容易理解的本地化营销文案，强调价格感、利益点和直接转化，不要过度文艺化。',
+  },
+] as const
+
+const SUBTITLE_LANGUAGE_OPTIONS = [
+  {
+    key: 'zh-CN',
+    label: '中文',
+    prompt: '字幕、口播与镜头文案全部使用中文，句子短一点，便于烧录和 TTS 对齐。',
+  },
+  {
+    key: 'en-US',
+    label: '英文',
+    prompt: 'Subtitle and spoken lines should be in natural English; avoid direct translation and keep the lines short.',
+  },
+  {
+    key: 'bilingual',
+    label: '中英双语',
+    prompt: '字幕按中英双语输出，优先保证中文卖点不丢失，同时保留英文可投放版本。',
+  },
+] as const
+
+const CREATIVE_MODE_OPTIONS = [
+  {
+    key: 'market-first',
+    label: '市场优先',
+    prompt: '优先匹配目标市场，不要把脚本自动改成过于泛化的广告腔。',
+  },
+  {
+    key: 'script-preserved',
+    label: '文案保真',
+    prompt: '尽量保留用户原文的卖点和节奏，只做必要的整理，不要重写核心卖点。',
+  },
+  {
+    key: 'director-led',
+    label: '导演强化',
+    prompt: '允许强化镜头感和节奏，但不要偏离品牌信息和目标市场。',
+  },
+] as const
+
+const AD_VIDEO_DRAFT_STORAGE_KEY = 'autovideo:ad-video-draft:v1'
+const AD_VIDEO_HISTORY_STORAGE_KEY = 'autovideo:ad-video-history:v1'
+
+type AdVideoDraftSnapshot = {
+  title: string
+  adPrompt: string
+  optimizedScript: string
+  imageUrlsText: string
+  sceneDescriptionsText: string
+  referenceImageHintsText: string
+  brandVoiceNotesText: string
+  targetMarket: string
+  subtitleLanguage: string
+  creativeMode: string
+  directorNote: string
+  subtitleText: string
+  selectedTemplate: string
+  selectedStoryboardTemplate: string
+  selectedBrandVoiceTemplate: string
+  selectedVideoModel: string
+  selectedStylePreset: string
+  selectedMotionMode: (typeof VIDEO_MOTION_OPTIONS)[number]['key']
+  selectedVideoMode: 'frame_animation' | 'api_generation'
+  clipDurationSec: number
+  autoOptimizeCopy: boolean
+  enableLocalCompression: boolean
+  maxImageSide: number
+  jpegQuality: number
+  autoAvoidLowHourEnabled: boolean
+  lowHourThreshold: number
+  autoRetryEnabled: boolean
+}
+
+type AdReviewChecklistItem = {
+  key: string
+  label: string
+  passed: boolean
+  detail: string
+  blocking: boolean
+}
+
+type AdVideoHistoryEntry = {
+  id: string
+  savedAt: string
+  label: string
+  state: AdVideoDraftSnapshot
+}
+
+type AdGenerationTaskStatus = 'queued' | 'optimizing' | 'uploading' | 'submitting' | 'running' | 'succeeded' | 'failed'
+
+type AdGenerationTaskEntry = {
+  id: string
+  createdAt: string
+  updatedAt: string
+  label: string
+  status: AdGenerationTaskStatus
+  step: string
+  projectId?: number
+  outputUrl?: string
+  error?: string
+  title: string
+  marketLabel: string
+  brandVoiceLabel: string
+  storyboardLabel: string
+  subtitleCount: number
+  imageCount: number
+}
+
+type StoryboardPreviewItem = {
+  index: number
+  scene: string
+  dialogue: string
+  referenceHint: string
+  imageSource: string
+}
+
+type BrandVoiceTemplateKey = (typeof BRAND_VOICE_TEMPLATES)[number]['key']
+
+function splitSubtitleScript(raw: string): string[] {
+  const normalized = String(raw || '').replace(/\r\n/g, '\n').trim()
+  if (!normalized) return []
+
+  const directLines = normalized
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim())
+    .filter(Boolean)
+
+  if (directLines.length > 0) {
+    return directLines
+  }
+
+  return normalized
+    .split(/[。！？!?；;]+/)
+    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim())
+    .filter(Boolean)
+}
+
+function splitEditableLines(raw: string): string[] {
+  return String(raw || '').replace(/\r\n/g, '\n').split('\n')
+}
+
+function updateLineAtIndex(raw: string, index: number, nextValue: string): string {
+  const lines = splitEditableLines(raw)
+  while (lines.length <= index) {
+    lines.push('')
+  }
+  lines[index] = nextValue
+  return lines.join('\n')
+}
+
+function distributeDialogues(lines: readonly string[], clipCount: number): string[] {
+  if (clipCount <= 0) return []
+
+  const normalized = lines.map((line) => line.trim()).filter(Boolean)
+  if (normalized.length === 0) {
+    return Array.from({ length: clipCount }, () => '')
+  }
+
+  if (normalized.length === 1) {
+    return Array.from({ length: clipCount }, () => normalized[0])
+  }
+
+  const result: string[] = []
+  for (let index = 0; index < clipCount; index += 1) {
+    const start = Math.floor((index * normalized.length) / clipCount)
+    const end = Math.max(start + 1, Math.floor(((index + 1) * normalized.length) / clipCount))
+    const chunk = normalized.slice(start, end)
+    result.push(chunk.join(' ').trim() || normalized[Math.min(start, normalized.length - 1)] || '')
+  }
+  return result
+}
+
+function buildMarketDirective(
+  marketKey: string,
+  subtitleLanguageKey: string,
+  creativeModeKey: string,
+  directorNote: string,
+  brandVoiceKey: string,
+  brandVoiceNotes: string,
+): string {
+  const marketOption = TARGET_MARKET_OPTIONS.find((item) => item.key === marketKey) ?? TARGET_MARKET_OPTIONS[0]
+  const subtitleLanguageOption = SUBTITLE_LANGUAGE_OPTIONS.find((item) => item.key === subtitleLanguageKey) ?? SUBTITLE_LANGUAGE_OPTIONS[0]
+  const creativeModeOption = CREATIVE_MODE_OPTIONS.find((item) => item.key === creativeModeKey) ?? CREATIVE_MODE_OPTIONS[0]
+  const brandVoiceOption = BRAND_VOICE_TEMPLATES.find((item) => item.key === brandVoiceKey) ?? BRAND_VOICE_TEMPLATES[0]
+  const note = directorNote.trim()
+  const voiceNote = brandVoiceNotes.trim()
+
+  return [
+    `目标市场：${marketOption.label}`,
+    marketOption.prompt,
+    `字幕语言：${subtitleLanguageOption.label}`,
+    subtitleLanguageOption.prompt,
+    `创意模式：${creativeModeOption.label}`,
+    creativeModeOption.prompt,
+    `品牌语气：${brandVoiceOption.label}`,
+    brandVoiceOption.directive,
+    brandVoiceOption.contrast,
+    voiceNote ? `品牌语气补充：${voiceNote}` : '',
+    note ? `导演备注：${note}` : '',
+    '要求：字幕、口播和镜头说明要一一对应，保持品牌卖点，不要把本地市场脚本自动改写成泛化风格。',
+  ].filter(Boolean).join('\n')
+}
+
+function getTargetMarketLabelSafe(marketKey: string): string {
+  return TARGET_MARKET_OPTIONS.find((item) => item.key === marketKey)?.label ?? TARGET_MARKET_OPTIONS[0].label
+}
+
+function readAdVideoDraft(): { savedAt: string | null; state: Partial<AdVideoDraftSnapshot> | null } {
+  if (typeof window === 'undefined') {
+    return { savedAt: null, state: null }
+  }
+
+  try {
+    const raw = window.localStorage.getItem(AD_VIDEO_DRAFT_STORAGE_KEY)
+    if (!raw) {
+      return { savedAt: null, state: null }
+    }
+
+    const parsed = JSON.parse(raw) as { savedAt?: string; state?: Partial<AdVideoDraftSnapshot> }
+    return {
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
+      state: parsed && typeof parsed === 'object' ? (parsed.state ?? null) : null,
+    }
+  } catch {
+    return { savedAt: null, state: null }
+  }
+}
+
+function writeAdVideoDraft(state: AdVideoDraftSnapshot): string {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+
+  const savedAt = new Date().toISOString()
+  window.localStorage.setItem(AD_VIDEO_DRAFT_STORAGE_KEY, JSON.stringify({
+    savedAt,
+    state,
+  }))
+  return savedAt
+}
+
+function readAdVideoHistory(): AdVideoHistoryEntry[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  try {
+    const raw = window.localStorage.getItem(AD_VIDEO_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((entry) => entry && typeof entry === 'object') as AdVideoHistoryEntry[]
+  } catch {
+    return []
+  }
+}
+
+function writeAdVideoHistory(entries: AdVideoHistoryEntry[]) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(AD_VIDEO_HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 8)))
+}
+
+function clearAdVideoDraft() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.removeItem(AD_VIDEO_DRAFT_STORAGE_KEY)
 }
 
 function normalizeFailureReason(raw?: string): string {
@@ -234,6 +652,11 @@ export default function AdVideoPage() {
   const [enableLocalCompression, setEnableLocalCompression] = useState(true)
   const [maxImageSide, setMaxImageSide] = useState(1920)
   const [jpegQuality, setJpegQuality] = useState(88)
+  const [targetMarket, setTargetMarket] = useState<string>(TARGET_MARKET_OPTIONS[0].key)
+  const [subtitleLanguage, setSubtitleLanguage] = useState<string>(SUBTITLE_LANGUAGE_OPTIONS[0].key)
+  const [creativeMode, setCreativeMode] = useState<string>(CREATIVE_MODE_OPTIONS[0].key)
+  const [directorNote, setDirectorNote] = useState('')
+  const [subtitleText, setSubtitleText] = useState('')
   const [autoOptimizeCopy, setAutoOptimizeCopy] = useState(true)
   const [optimizingCopy, setOptimizingCopy] = useState(false)
   const [creatingByText, setCreatingByText] = useState(false)
@@ -265,16 +688,570 @@ export default function AdVideoPage() {
   const [lockRunsInput, setLockRunsInput] = useState(3)
   const [adviceExporting, setAdviceExporting] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<(typeof AD_TEMPLATES)[number]['key']>('ecommerce-sale')
+  const [selectedStoryboardTemplate, setSelectedStoryboardTemplate] = useState<string>(STORYBOARD_TEMPLATES[0].key)
+  const [selectedBrandVoiceTemplate, setSelectedBrandVoiceTemplate] = useState<BrandVoiceTemplateKey>(BRAND_VOICE_TEMPLATES[0].key)
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
   const [selectedStylePreset, setSelectedStylePreset] = useState('live-action-short')
   const [selectedMotionMode, setSelectedMotionMode] = useState<(typeof VIDEO_MOTION_OPTIONS)[number]['key']>('dynamic')
   const [selectedVideoMode, setSelectedVideoMode] = useState<'frame_animation' | 'api_generation'>('frame_animation')
   const [clipDurationSec, setClipDurationSec] = useState(5)
   const [videoModelAvailability, setVideoModelAvailability] = useState<Record<string, boolean>>({})
+  const [draftHydrated, setDraftHydrated] = useState(false)
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
+  const [referenceImageHintsText, setReferenceImageHintsText] = useState('')
+  const [brandVoiceNotesText, setBrandVoiceNotesText] = useState('')
+  const [historyEntries, setHistoryEntries] = useState<AdVideoHistoryEntry[]>([])
+  const [selectedHistoryEntryId, setSelectedHistoryEntryId] = useState('')
+  const [generationTasks, setGenerationTasks] = useState<AdGenerationTaskEntry[]>([])
+  const [activeGenerationTaskId, setActiveGenerationTaskId] = useState('')
+  const [adTaskLogs, setAdTaskLogs] = useState<AdTaskLogEntry[]>([])
+  const [activeOptimizeTaskId, setActiveOptimizeTaskId] = useState<number | null>(null)
+  const [referenceHintGeneratingAll, setReferenceHintGeneratingAll] = useState(false)
+  const [referenceHintGeneratingIndex, setReferenceHintGeneratingIndex] = useState<number | null>(null)
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
+  const [pendingDraftRestore, setPendingDraftRestore] = useState<Partial<AdVideoDraftSnapshot> | null>(null)
+  const adTaskLogProgressRef = useRef<Set<string>>(new Set())
+  const adTaskStatusRef = useRef<'idle' | 'pending' | 'processing' | 'succeeded' | 'failed'>('idle')
 
 
   const imageUrls = useMemo(() => parseLines(imageUrlsText), [imageUrlsText])
   const sceneDescriptions = useMemo(() => parseLines(sceneDescriptionsText), [sceneDescriptionsText])
+  const subtitleLines = useMemo(() => splitSubtitleScript(subtitleText), [subtitleText])
+  const referenceImageHints = useMemo(() => parseLines(referenceImageHintsText), [referenceImageHintsText])
+  const selectedStoryboardTemplateMeta = useMemo(
+    () => STORYBOARD_TEMPLATES.find((item) => item.key === selectedStoryboardTemplate) ?? STORYBOARD_TEMPLATES[0],
+    [selectedStoryboardTemplate],
+  )
+  const selectedBrandVoiceTemplateMeta = useMemo(
+    () => BRAND_VOICE_TEMPLATES.find((item) => item.key === selectedBrandVoiceTemplate) ?? BRAND_VOICE_TEMPLATES[0],
+    [selectedBrandVoiceTemplate],
+  )
+  const selectedHistoryEntry = useMemo(
+    () => historyEntries.find((entry) => entry.id === selectedHistoryEntryId) ?? null,
+    [historyEntries, selectedHistoryEntryId],
+  )
+  const appendAdTaskLog = (message: string, level: AdTaskLogEntry['level'] = 'info') => {
+    setAdTaskLogs((prev) => [
+      ...prev,
+      {
+        at: new Date().toISOString(),
+        level,
+        message,
+      },
+    ].slice(-24))
+  }
+  const resetAdTaskLogs = (message: string) => {
+    adTaskLogProgressRef.current = new Set()
+    adTaskStatusRef.current = 'idle'
+    setActiveOptimizeTaskId(null)
+    setAdTaskLogs([{
+      at: new Date().toISOString(),
+      level: 'info',
+      message,
+    }])
+  }
+  const ingestBackendProgress = (records: TaskProgressRecord[]) => {
+    if (records.length === 0) return
+    setAdTaskLogs((prev) => {
+      const next = [...prev]
+      const seen = new Set(prev.map((item) => `${item.at}|${item.level}|${item.message}`))
+      const sorted = [...records].sort((a, b) => a.timestamp - b.timestamp)
+      for (const record of sorted) {
+        const at = record.created_at || new Date(record.timestamp).toISOString()
+        const key = `${at}|${record.progress}|${record.message}`
+        if (adTaskLogProgressRef.current.has(key) || seen.has(`${at}|progress|${record.message}`)) {
+          continue
+        }
+        adTaskLogProgressRef.current.add(key)
+        next.push({
+          at,
+          level: 'progress',
+          message: `${record.progress}% · ${record.message}`.trim(),
+        })
+      }
+      return next.slice(-24)
+    })
+  }
+  const brandVoiceBrief = useMemo(() => {
+    const notes = brandVoiceNotesText.trim()
+    return [
+      `品牌语气：${selectedBrandVoiceTemplateMeta.label}`,
+      selectedBrandVoiceTemplateMeta.directive,
+      notes ? `补充要求：${notes}` : '',
+    ].filter(Boolean).join('\n')
+  }, [brandVoiceNotesText, selectedBrandVoiceTemplateMeta])
+  const storyboardPreview = useMemo<StoryboardPreviewItem[]>(() => {
+    const clipCount = Math.max(
+      imageUrls.length,
+      sceneDescriptions.length,
+      subtitleLines.length,
+      referenceImageHints.length,
+      selectedStoryboardTemplateMeta.sceneLines.length,
+      selectedStoryboardTemplateMeta.referenceLines.length,
+      localFiles.length,
+      1,
+    )
+    const fallbackSceneText = optimizedScript.trim() || adPrompt.trim()
+    const fallbackDialogueText = subtitleText.trim()
+    return Array.from({ length: clipCount }, (_, index) => {
+      const scene = sceneDescriptions[index]
+        ?? sceneDescriptions[sceneDescriptions.length - 1]
+        ?? selectedStoryboardTemplateMeta.sceneLines[index]
+        ?? selectedStoryboardTemplateMeta.sceneLines[selectedStoryboardTemplateMeta.sceneLines.length - 1]
+        ?? fallbackSceneText
+        ?? ''
+      const dialogue = subtitleLines[index]
+        ?? subtitleLines[subtitleLines.length - 1]
+        ?? selectedStoryboardTemplateMeta.dialogueLines[index]
+        ?? selectedStoryboardTemplateMeta.dialogueLines[selectedStoryboardTemplateMeta.dialogueLines.length - 1]
+        ?? fallbackDialogueText
+        ?? ''
+      const referenceHint = referenceImageHints[index]
+        ?? referenceImageHints[referenceImageHints.length - 1]
+        ?? selectedStoryboardTemplateMeta.referenceLines[index]
+        ?? selectedStoryboardTemplateMeta.referenceLines[selectedStoryboardTemplateMeta.referenceLines.length - 1]
+        ?? ''
+      const imageSource = imageUrls[index]
+        ?? localFiles[index]?.name
+        ?? imageUrls[imageUrls.length - 1]
+        ?? localFiles[localFiles.length - 1]?.name
+        ?? '待补图片'
+
+      return {
+        index,
+        scene,
+        dialogue,
+        referenceHint,
+        imageSource,
+      }
+    })
+  }, [adPrompt, imageUrls, localFiles, optimizedScript, referenceImageHints, sceneDescriptions, selectedStoryboardTemplateMeta, subtitleLines, subtitleText])
+
+  const readChatReply = (payload: unknown): string => {
+    const data = payload as {
+      data?: { reply?: string; parts?: Array<{ type?: string; text?: string }> }
+      reply?: string
+      parts?: Array<{ type?: string; text?: string }>
+    }
+    const reply = String(data?.data?.reply ?? data?.reply ?? '').trim()
+    if (reply) return reply
+    const parts = data?.data?.parts ?? data?.parts ?? []
+    return parts
+      .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part) => String(part.text).trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
+
+  const normalizeReferenceHintLine = (text: string): string =>
+    text
+      .replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '')
+      .replace(/^["'“”]+|["'“”]+$/g, '')
+      .trim()
+
+  const buildReferenceHintPrompt = (shot: StoryboardPreviewItem, total: number) => [
+    '你是广告分镜参考图提示词助手。',
+    '请根据广告文案、分镜描述和口播，生成适合 AI 画图的“镜头参考图提示词”。',
+    '要求：',
+    '1. 只输出 1 行中文提示词，不要编号，不要解释。',
+    '2. 侧重主体、构图、场景、光影、情绪，不要写成完整文案。',
+    '3. 尽量控制在 12 到 24 个字。',
+    `当前广告标题：${title.trim() || '未命名广告'}`,
+    `当前广告文案：${adPrompt.trim() || optimizedScript.trim() || '暂无'}`,
+    `当前目标市场：${getTargetMarketLabel()}`,
+    `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
+    `镜头 ${shot.index + 1}/${total}`,
+    `分镜描述：${shot.scene || '暂无'}`,
+    `字幕 / 口播：${shot.dialogue || '暂无'}`,
+    `现有参考提示：${shot.referenceHint || '暂无'}`,
+  ].join('\n')
+
+  const fillReferenceHintAtIndex = async (shot: StoryboardPreviewItem) => {
+    if (referenceHintGeneratingAll || referenceHintGeneratingIndex !== null) return
+    setReferenceHintGeneratingIndex(shot.index)
+    try {
+      const res = await chatAPI.sendGemini([
+        { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
+        { role: 'user', content: buildReferenceHintPrompt(shot, storyboardPreview.length) },
+      ]) as unknown as { data?: unknown }
+      const reply = normalizeReferenceHintLine(readChatReply(res.data))
+      if (!reply) throw new Error('AI 未返回有效参考图提示')
+      setReferenceImageHintsText((prev) => updateLineAtIndex(prev, shot.index, reply))
+      toast({ title: '已补全参考图提示', description: `镜头 ${shot.index + 1} 的参考图提示已生成`, variant: 'success' })
+    } catch (err: unknown) {
+      toast({
+        title: '参考图提示生成失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    } finally {
+      setReferenceHintGeneratingIndex(null)
+    }
+  }
+
+  const fillReferenceHintsForAll = async () => {
+    if (storyboardPreview.length === 0 || referenceHintGeneratingAll || referenceHintGeneratingIndex !== null) return
+    setReferenceHintGeneratingAll(true)
+    try {
+      const prompt = [
+        '你是广告分镜参考图提示词助手。',
+        '请一次性为下面每个镜头输出 1 行中文参考图提示词。',
+        '要求：',
+        '1. 每行对应一个镜头，禁止编号、禁止解释、禁止空行。',
+        '2. 每行尽量 12 到 24 个字，侧重主体、构图、场景、光影、情绪。',
+        '3. 只输出提示词本身，不要写完整文案。',
+        `当前广告标题：${title.trim() || '未命名广告'}`,
+        `当前广告文案：${adPrompt.trim() || optimizedScript.trim() || '暂无'}`,
+        `当前目标市场：${getTargetMarketLabel()}`,
+        `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
+        '',
+        ...storyboardPreview.map((shot) => [
+          `镜头 ${shot.index + 1}/${storyboardPreview.length}`,
+          `分镜描述：${shot.scene || '暂无'}`,
+          `字幕 / 口播：${shot.dialogue || '暂无'}`,
+          `现有参考提示：${shot.referenceHint || '暂无'}`,
+          '',
+        ].join('\n')),
+      ].join('\n')
+
+      const res = await chatAPI.sendGemini([
+        { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
+        { role: 'user', content: prompt },
+      ]) as unknown as { data?: unknown }
+      const replyLines = readChatReply(res.data)
+        .split(/\r?\n/)
+        .map(normalizeReferenceHintLine)
+        .filter(Boolean)
+
+      if (replyLines.length === 0) throw new Error('AI 未返回有效参考图提示')
+
+      setReferenceImageHintsText((prev) => {
+        let next = prev
+        storyboardPreview.forEach((shot, idx) => {
+          const fallback = replyLines[Math.min(idx, replyLines.length - 1)] ?? ''
+          if (fallback) next = updateLineAtIndex(next, shot.index, fallback)
+        })
+        return next
+      })
+      toast({ title: '已补全全部参考图提示', description: '可继续手动微调每个镜头的提示词', variant: 'success' })
+    } catch (err: unknown) {
+      toast({
+        title: '参考图提示生成失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    } finally {
+      setReferenceHintGeneratingAll(false)
+    }
+  }
+  const adReviewChecklist = useMemo<AdReviewChecklistItem[]>(() => {
+    const promptText = adPrompt.trim()
+    const subtitleCount = subtitleLines.length
+    const sceneCount = sceneDescriptions.length
+    const mediaCount = imageUrls.length + localFiles.length
+    const subtitleReady = subtitleCount > 0 || subtitleText.trim().length > 0
+    const referenceReady = referenceImageHints.length > 0
+    const brandVoiceReady = Boolean(selectedBrandVoiceTemplate)
+    const storyboardAligned = subtitleCount === 0 || sceneCount === 0 || Math.abs(sceneCount - subtitleCount) <= 1
+    const directorNoteReady = directorNote.trim().length > 0
+    const marketLabel = TARGET_MARKET_OPTIONS.find((item) => item.key === targetMarket)?.label ?? TARGET_MARKET_OPTIONS[0].label
+    const creativeLabel = CREATIVE_MODE_OPTIONS.find((item) => item.key === creativeMode)?.label ?? CREATIVE_MODE_OPTIONS[0].label
+
+    return [
+      {
+        key: 'prompt',
+        label: '广告文案',
+        passed: promptText.length >= 10,
+        detail: promptText.length >= 10 ? `已填写 ${promptText.length} 字` : '至少输入 10 个字',
+        blocking: true,
+      },
+      {
+        key: 'assets',
+        label: '图片素材',
+        passed: mediaCount > 0,
+        detail: mediaCount > 0 ? `已准备 ${mediaCount} 份图片素材` : '需要至少 1 张图片 URL 或本地图片',
+        blocking: true,
+      },
+      {
+        key: 'market',
+        label: '目标市场',
+        passed: Boolean(targetMarket),
+        detail: marketLabel,
+        blocking: false,
+      },
+      {
+        key: 'subtitle',
+        label: '字幕 / 台词',
+        passed: subtitleReady,
+        detail: subtitleReady ? `已准备 ${subtitleCount} 条台词` : '还未填写台词，生成时会用广告文案兜底',
+        blocking: false,
+      },
+      {
+        key: 'storyboard',
+        label: '分镜对齐',
+        passed: storyboardAligned,
+        detail: storyboardAligned ? '分镜与台词数量基本一致' : `分镜 ${sceneCount} 行 / 台词 ${subtitleCount} 行`,
+        blocking: false,
+      },
+      {
+        key: 'directive',
+        label: '导演备注',
+        passed: directorNoteReady,
+        detail: directorNoteReady ? '已填写' : '建议补充市场禁忌与口播要求',
+        blocking: false,
+      },
+      {
+        key: 'creative',
+        label: '创意模式',
+        passed: Boolean(creativeMode),
+        detail: creativeLabel,
+        blocking: false,
+      },
+      {
+        key: 'reference',
+        label: '镜头参考图',
+        passed: referenceReady,
+        detail: referenceReady ? `已填写 ${referenceImageHints.length} 条参考提示` : `可用「${selectedStoryboardTemplateMeta.label}」模板快速补齐`,
+        blocking: false,
+      },
+      {
+        key: 'brand-voice',
+        label: '品牌语气',
+        passed: brandVoiceReady,
+        detail: `${selectedBrandVoiceTemplateMeta.label} · ${selectedBrandVoiceTemplateMeta.hint}`,
+        blocking: false,
+      },
+    ]
+  }, [adPrompt, brandVoiceBrief, creativeMode, directorNote, imageUrls.length, localFiles.length, referenceImageHints.length, sceneDescriptions.length, selectedBrandVoiceTemplate, selectedBrandVoiceTemplateMeta.hint, selectedBrandVoiceTemplateMeta.label, selectedStoryboardTemplateMeta.label, subtitleLines.length, subtitleText, targetMarket])
+  const blockingReviewItems = adReviewChecklist.filter((item) => item.blocking && !item.passed)
+  const advisoryReviewItems = adReviewChecklist.filter((item) => !item.blocking && !item.passed)
+  const reviewReady = reviewConfirmed && blockingReviewItems.length === 0
+  const currentVersionSummary = useMemo(() => ({
+    promptLength: adPrompt.trim().length,
+    subtitleCount: splitSubtitleScript(subtitleText).length,
+    sceneCount: parseLines(sceneDescriptionsText).length,
+    referenceCount: parseLines(referenceImageHintsText).length,
+    market: getTargetMarketLabelSafe(targetMarket),
+    brandVoice: BRAND_VOICE_TEMPLATES.find((item) => item.key === selectedBrandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label,
+    storyboard: STORYBOARD_TEMPLATES.find((item) => item.key === selectedStoryboardTemplate)?.label ?? STORYBOARD_TEMPLATES[0].label,
+  }), [adPrompt, referenceImageHintsText, sceneDescriptionsText, selectedBrandVoiceTemplate, selectedStoryboardTemplate, subtitleText, targetMarket])
+  const selectedHistorySummary = useMemo(() => {
+    if (!selectedHistoryEntry) return null
+    return {
+      promptLength: selectedHistoryEntry.state.adPrompt.trim().length,
+      subtitleCount: splitSubtitleScript(selectedHistoryEntry.state.subtitleText).length,
+      sceneCount: parseLines(selectedHistoryEntry.state.sceneDescriptionsText).length,
+      referenceCount: parseLines(selectedHistoryEntry.state.referenceImageHintsText).length,
+      market: getTargetMarketLabelSafe(selectedHistoryEntry.state.targetMarket),
+      brandVoice: BRAND_VOICE_TEMPLATES.find((item) => item.key === selectedHistoryEntry.state.selectedBrandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label,
+      storyboard: STORYBOARD_TEMPLATES.find((item) => item.key === selectedHistoryEntry.state.selectedStoryboardTemplate)?.label ?? STORYBOARD_TEMPLATES[0].label,
+    }
+  }, [selectedHistoryEntry])
+  const adVideoDraftState = useMemo<AdVideoDraftSnapshot>(() => ({
+    title,
+    adPrompt,
+    optimizedScript,
+    imageUrlsText,
+    sceneDescriptionsText,
+    referenceImageHintsText,
+    brandVoiceNotesText,
+    targetMarket,
+    subtitleLanguage,
+    creativeMode,
+    directorNote,
+    subtitleText,
+    selectedTemplate,
+    selectedStoryboardTemplate,
+    selectedBrandVoiceTemplate,
+    selectedVideoModel,
+    selectedStylePreset,
+    selectedMotionMode,
+    selectedVideoMode,
+    clipDurationSec,
+    autoOptimizeCopy,
+    enableLocalCompression,
+    maxImageSide,
+    jpegQuality,
+    autoAvoidLowHourEnabled,
+    lowHourThreshold,
+    autoRetryEnabled,
+  }), [
+    adPrompt,
+    autoAvoidLowHourEnabled,
+    autoOptimizeCopy,
+    autoRetryEnabled,
+    clipDurationSec,
+    creativeMode,
+    directorNote,
+    enableLocalCompression,
+    imageUrlsText,
+    jpegQuality,
+    lowHourThreshold,
+    maxImageSide,
+    optimizedScript,
+    sceneDescriptionsText,
+    referenceImageHintsText,
+    brandVoiceNotesText,
+    selectedMotionMode,
+    selectedStylePreset,
+    selectedTemplate,
+    selectedStoryboardTemplate,
+    selectedBrandVoiceTemplate,
+    selectedVideoMode,
+    selectedVideoModel,
+    subtitleLanguage,
+    subtitleText,
+    targetMarket,
+    title,
+  ])
+
+  const applyDraftSnapshot = (state: Partial<AdVideoDraftSnapshot>) => {
+    if (typeof state.title === 'string') setTitle(state.title)
+    if (typeof state.adPrompt === 'string') setAdPrompt(state.adPrompt)
+    if (typeof state.optimizedScript === 'string') setOptimizedScript(state.optimizedScript)
+    if (typeof state.imageUrlsText === 'string') setImageUrlsText(state.imageUrlsText)
+    if (typeof state.sceneDescriptionsText === 'string') setSceneDescriptionsText(state.sceneDescriptionsText)
+    if (typeof state.referenceImageHintsText === 'string') setReferenceImageHintsText(state.referenceImageHintsText)
+    if (typeof state.brandVoiceNotesText === 'string') setBrandVoiceNotesText(state.brandVoiceNotesText)
+    if (typeof state.targetMarket === 'string') setTargetMarket(state.targetMarket)
+    if (typeof state.subtitleLanguage === 'string') setSubtitleLanguage(state.subtitleLanguage)
+    if (typeof state.creativeMode === 'string') setCreativeMode(state.creativeMode)
+    if (typeof state.directorNote === 'string') setDirectorNote(state.directorNote)
+    if (typeof state.subtitleText === 'string') setSubtitleText(state.subtitleText)
+    if (typeof state.selectedTemplate === 'string' && AD_TEMPLATES.some((item) => item.key === state.selectedTemplate)) {
+      setSelectedTemplate(state.selectedTemplate as (typeof AD_TEMPLATES)[number]['key'])
+    }
+    if (typeof state.selectedStoryboardTemplate === 'string' && STORYBOARD_TEMPLATES.some((item) => item.key === state.selectedStoryboardTemplate)) {
+      setSelectedStoryboardTemplate(state.selectedStoryboardTemplate)
+    }
+    if (typeof state.selectedBrandVoiceTemplate === 'string' && BRAND_VOICE_TEMPLATES.some((item) => item.key === state.selectedBrandVoiceTemplate)) {
+      setSelectedBrandVoiceTemplate(state.selectedBrandVoiceTemplate as BrandVoiceTemplateKey)
+    }
+    if (typeof state.selectedVideoModel === 'string') setSelectedVideoModel(state.selectedVideoModel)
+    if (typeof state.selectedStylePreset === 'string') setSelectedStylePreset(state.selectedStylePreset)
+    if (state.selectedMotionMode && VIDEO_MOTION_OPTIONS.some((item) => item.key === state.selectedMotionMode)) {
+      setSelectedMotionMode(state.selectedMotionMode as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])
+    }
+    if (state.selectedVideoMode === 'frame_animation' || state.selectedVideoMode === 'api_generation') setSelectedVideoMode(state.selectedVideoMode)
+    if (typeof state.clipDurationSec === 'number' && !Number.isNaN(state.clipDurationSec)) setClipDurationSec(state.clipDurationSec)
+    if (typeof state.autoOptimizeCopy === 'boolean') setAutoOptimizeCopy(state.autoOptimizeCopy)
+    if (typeof state.enableLocalCompression === 'boolean') setEnableLocalCompression(state.enableLocalCompression)
+    if (typeof state.maxImageSide === 'number' && !Number.isNaN(state.maxImageSide)) setMaxImageSide(state.maxImageSide)
+    if (typeof state.jpegQuality === 'number' && !Number.isNaN(state.jpegQuality)) setJpegQuality(state.jpegQuality)
+    if (typeof state.autoAvoidLowHourEnabled === 'boolean') setAutoAvoidLowHourEnabled(state.autoAvoidLowHourEnabled)
+    if (typeof state.lowHourThreshold === 'number' && !Number.isNaN(state.lowHourThreshold)) setLowHourThreshold(state.lowHourThreshold)
+    if (typeof state.autoRetryEnabled === 'boolean') setAutoRetryEnabled(state.autoRetryEnabled)
+  }
+
+  const handleRestoreSavedDraft = () => {
+    if (!pendingDraftRestore) return
+    applyDraftSnapshot(pendingDraftRestore)
+    clearAdVideoDraft()
+    setPendingDraftRestore(null)
+    toast({ title: '已恢复上次草稿', description: '草稿内容已回到当前页，不会跳转到旧项目。', variant: 'success' })
+  }
+
+  const handleDiscardSavedDraft = () => {
+    clearAdVideoDraft()
+    setPendingDraftRestore(null)
+    toast({ title: '已清除上次草稿', description: '后续会使用当前页面的新编辑内容。', variant: 'success' })
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const { savedAt, state } = readAdVideoDraft()
+    setHistoryEntries(readAdVideoHistory())
+    if (state) {
+      setPendingDraftRestore(state)
+      setDraftSavedAt(savedAt)
+    }
+
+    setDraftHydrated(true)
+  }, [])
+
+  useEffect(() => {
+    if (!draftHydrated || typeof window === 'undefined') return
+    const savedAt = writeAdVideoDraft(adVideoDraftState)
+    setDraftSavedAt(savedAt)
+  }, [adVideoDraftState, draftHydrated])
+
+  useEffect(() => {
+    if (!draftHydrated) return
+    setReviewConfirmed(false)
+  }, [
+    adPrompt,
+    clipDurationSec,
+    creativeMode,
+    directorNote,
+    draftHydrated,
+    imageUrlsText,
+    localFiles.length,
+    optimizedScript,
+    brandVoiceNotesText,
+    referenceImageHintsText,
+    sceneDescriptionsText,
+    selectedMotionMode,
+    selectedStylePreset,
+    selectedTemplate,
+    selectedStoryboardTemplate,
+    selectedBrandVoiceTemplate,
+    selectedVideoMode,
+    subtitleLanguage,
+    subtitleText,
+    targetMarket,
+    title,
+  ])
+
+  useEffect(() => {
+    if (!activeGenerationTaskId) return
+
+    setGenerationTasks((prev) => prev.map((task) => {
+      if (task.id !== activeGenerationTaskId) return task
+
+      if (taskStatus === 'succeeded') {
+        return {
+          ...task,
+          projectId: activeProjectId ?? task.projectId,
+          status: 'succeeded',
+          step: '生成完成，可预览或下载成片',
+          outputUrl: taskOutputUrl || task.outputUrl,
+          error: '',
+        }
+      }
+
+      if (taskStatus === 'failed') {
+        return {
+          ...task,
+          projectId: activeProjectId ?? task.projectId,
+          status: 'failed',
+          step: taskError || '生成失败',
+          error: taskError || '生成失败',
+        }
+      }
+
+      if (taskStatus === 'processing') {
+        return {
+          ...task,
+          projectId: activeProjectId ?? task.projectId,
+          status: 'running',
+          step: '生成中，后台正在轮询任务状态',
+        }
+      }
+
+      if (taskStatus === 'pending') {
+        return {
+          ...task,
+          projectId: activeProjectId ?? task.projectId,
+          status: 'running',
+          step: '已提交，等待队列执行',
+        }
+      }
+
+      return task
+    }))
+  }, [activeGenerationTaskId, activeProjectId, taskError, taskOutputUrl, taskStatus])
 
   const { data: videoModelsData } = useSWR(
     'ad-video-models',
@@ -584,6 +1561,93 @@ export default function AdVideoPage() {
     toast({ title: `已应用模板：${template.label}`, description: template.hint, variant: 'success' })
   }
 
+  const applyStoryboardTemplate = (templateKey: string) => {
+    const template = STORYBOARD_TEMPLATES.find((item) => item.key === templateKey)
+    if (!template) return
+
+    setSelectedStoryboardTemplate(template.key)
+    setSceneDescriptionsText(template.sceneLines.join('\n'))
+    setSubtitleText(template.dialogueLines.join('\n'))
+    setReferenceImageHintsText(template.referenceLines.join('\n'))
+    toast({ title: `已应用分镜模板：${template.label}`, description: template.hint, variant: 'success' })
+  }
+
+  const getMarketBrief = () => buildMarketDirective(
+    targetMarket,
+    subtitleLanguage,
+    creativeMode,
+    directorNote,
+    selectedBrandVoiceTemplate,
+    brandVoiceNotesText,
+  )
+
+  const getTargetMarketLabel = () => TARGET_MARKET_OPTIONS.find((item) => item.key === targetMarket)?.label ?? TARGET_MARKET_OPTIONS[0].label
+
+  const getSubtitleLanguageLabel = () => SUBTITLE_LANGUAGE_OPTIONS.find((item) => item.key === subtitleLanguage)?.label ?? SUBTITLE_LANGUAGE_OPTIONS[0].label
+
+  const getCreativeModeLabel = () => CREATIVE_MODE_OPTIONS.find((item) => item.key === creativeMode)?.label ?? CREATIVE_MODE_OPTIONS[0].label
+
+  const getBrandVoiceLabel = () => BRAND_VOICE_TEMPLATES.find((item) => item.key === selectedBrandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label
+
+  const buildHistoryLabel = () => {
+    const titleText = title.trim() || '未命名广告'
+    return `${titleText} · ${getBrandVoiceLabel()} · ${getTargetMarketLabel()}`
+  }
+
+  const handleSaveHistorySnapshot = () => {
+    const entry: AdVideoHistoryEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      savedAt: new Date().toISOString(),
+      label: buildHistoryLabel(),
+      state: adVideoDraftState,
+    }
+    const nextEntries = [entry, ...historyEntries].slice(0, 8)
+    writeAdVideoHistory(nextEntries)
+    setHistoryEntries(nextEntries)
+    setSelectedHistoryEntryId(entry.id)
+    toast({ title: '已保存本地版本', description: '可随时恢复到当前页面；不包含本地上传图片文件。', variant: 'success' })
+  }
+
+  const handleRestoreHistorySnapshot = (entry: AdVideoHistoryEntry) => {
+    applyDraftSnapshot(entry.state)
+    setSelectedHistoryEntryId(entry.id)
+    toast({ title: '已恢复历史版本', description: '当前页面已切换到所选版本内容。', variant: 'success' })
+  }
+
+  const updateGenerationTask = (taskId: string, patch: Partial<AdGenerationTaskEntry>) => {
+    setGenerationTasks((prev) => prev.map((item) => {
+      if (item.id !== taskId) return item
+      return {
+        ...item,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      }
+    }))
+  }
+
+  const buildGenerationTaskLabel = () => {
+    const trimmedTitle = title.trim() || '未命名广告'
+    return `${trimmedTitle} · ${getBrandVoiceLabel()} · ${selectedStoryboardTemplateMeta.label}`
+  }
+
+  const createGenerationTaskEntry = (): AdGenerationTaskEntry => {
+    const now = new Date().toISOString()
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: now,
+      updatedAt: now,
+      label: buildGenerationTaskLabel(),
+      status: 'queued',
+      step: '等待提交',
+      title: title.trim() || '未命名广告',
+      marketLabel: getTargetMarketLabel(),
+      brandVoiceLabel: getBrandVoiceLabel(),
+      storyboardLabel: selectedStoryboardTemplateMeta.label,
+      subtitleCount: splitSubtitleScript(subtitleText).length,
+      imageCount: Math.max(imageUrls.length, localFiles.length),
+    }
+  }
+
   const buildProjectTitle = () => {
     const trimmed = title.trim()
     if (trimmed) return trimmed
@@ -603,6 +1667,7 @@ export default function AdVideoPage() {
 
   const triggerVideoGeneration = async (ctx: Omit<GenerationContext, 'startedAt'>) => {
     const startedAt = new Date().toISOString()
+    adTaskStatusRef.current = 'pending'
     setActiveProjectId(ctx.projectId)
     setActiveTaskId(null)
     setActiveTaskStartedAt(startedAt)
@@ -610,6 +1675,10 @@ export default function AdVideoPage() {
     setTaskError('')
     setTaskOutputUrl('')
     setTaskClipProgress({ done: 0, total: 0 })
+    appendAdTaskLog(`已发起视频生成请求：项目 ${ctx.projectId} / 模型 ${ctx.modelName}`, 'info')
+
+    const effectiveSubtitleText = ctx.subtitleText.trim() || ctx.prompt.trim()
+    const subtitlesEnabled = ctx.dialogues.some((line) => line.trim().length > 0) || effectiveSubtitleText.length > 0
 
     await videoAPI.generate(ctx.projectId, {
       image_urls: ctx.imageUrls,
@@ -620,9 +1689,34 @@ export default function AdVideoPage() {
       video_mode: ctx.videoMode,
       model_name: ctx.modelName || undefined,
       clip_duration_sec: ctx.clipDurationSec,
+      subtitle_text: effectiveSubtitleText,
+      dialogues: ctx.dialogues,
+      render_config: {
+        config_version: 1,
+        target_market: ctx.targetMarket,
+        subtitle_language: ctx.subtitleLanguage,
+        creative_mode: ctx.creativeMode,
+        director_note: ctx.directorNote,
+        brand_voice_template: ctx.brandVoiceTemplate,
+        brand_voice_notes: ctx.brandVoiceNotes,
+        storyboard_template: ctx.storyboardTemplate,
+        reference_image_hints: ctx.referenceImageHints,
+        workflow_mode: 'guided-ad-video',
+        dialogues: ctx.dialogues,
+        generate_audio: subtitlesEnabled,
+        subtitle_style: {
+          font_name: ctx.subtitleLanguage === 'en-US' ? 'Inter' : 'Noto Sans CJK SC',
+          font_size: ctx.subtitleLanguage === 'bilingual' ? 40 : 44,
+          outline_width: 3,
+          alignment: 2,
+          margin_v: 48,
+          bold: true,
+        },
+      },
     })
 
     setLastGenerationContext({ ...ctx, startedAt })
+    appendAdTaskLog('视频生成请求已提交，等待后台创建任务', 'progress')
     setTriedModelKeys((prev) => {
       const next = prev.filter((item) => item !== ctx.modelName)
       next.push(ctx.modelName)
@@ -704,12 +1798,24 @@ export default function AdVideoPage() {
   }
 
 
-  const runCopyOptimization = async (): Promise<OptimizedAdResult | null> => {
+  const runCopyOptimization = async (options?: { preserveLogs?: boolean }): Promise<OptimizedAdResult | null> => {
     const premise = adPrompt.trim()
     if (premise.length < 10) {
       toast({ title: '请先输入足够详细的广告文案', variant: 'destructive' })
       return null
     }
+
+    if (!options?.preserveLogs) {
+      resetAdTaskLogs('开始文案优化任务')
+    }
+    appendAdTaskLog('正在创建文案优化任务', 'info')
+
+    const marketBrief = getMarketBrief()
+    const marketLabel = getTargetMarketLabel()
+    const subtitleLanguageLabel = getSubtitleLanguageLabel()
+    const creativeModeLabel = getCreativeModeLabel()
+    const brandVoiceLabel = getBrandVoiceLabel()
+    const subtitleLineHint = subtitleLines.length > 0 ? `当前已填写 ${subtitleLines.length} 条字幕/台词` : '当前还未填写字幕/台词，请生成时自动补齐'
 
     setOptimizingCopy(true)
     try {
@@ -719,18 +1825,32 @@ export default function AdVideoPage() {
           mode: 'script',
           premise,
           genre: '广告短片',
-          platform: '短视频投放',
-          delivery_format: '分镜脚本+口播文案+结尾CTA',
-          episode_duration: '15-45秒',
-          tone: '明确卖点、节奏紧凑、转化导向',
-          requirements: '输出可直接用于广告视频生成，包含镜头建议、产品卖点、情绪转折和行动号召',
-          target_words: 600,
-          chapter_count: 4,
+          platform: `${marketLabel}短视频投放`,
+          delivery_format: '分镜脚本+逐句口播+字幕分行+结尾CTA',
+          episode_duration: '45-60秒',
+          tone: creativeMode === 'script-preserved'
+            ? '保留原文卖点和节奏，减少导演改写'
+            : creativeMode === 'director-led'
+              ? '强化镜头感、节奏感和转化导向，但保持市场一致性'
+              : '本地化、口语化、直给卖点，避免泛化广告腔',
+          requirements: [
+            '输出可直接用于广告视频生成，包含镜头建议、产品卖点、情绪转折和行动号召',
+            `目标市场：${marketLabel}`,
+            `字幕语言：${subtitleLanguageLabel}`,
+            `创意模式：${creativeModeLabel}`,
+            `品牌语气：${brandVoiceLabel}`,
+            subtitleLineHint,
+            marketBrief,
+          ].join('\n'),
+          target_words: 750,
+          chapter_count: 5,
         },
       }) as unknown as { data?: { id?: number } }
 
       const optimizeTaskId = Number(taskRes?.data?.id ?? 0)
       if (!optimizeTaskId) throw new Error('文案优化任务创建失败')
+      setActiveOptimizeTaskId(optimizeTaskId)
+      appendAdTaskLog(`文案优化任务已创建 #${optimizeTaskId}`, 'progress')
 
       const result = await new Promise<OptimizedAdResult>((resolve, reject) => {
         let elapsed = 0
@@ -743,6 +1863,15 @@ export default function AdVideoPage() {
           }
 
           try {
+            try {
+              const progressResp = await taskAPI.getProgress(optimizeTaskId) as unknown as {
+                data?: TaskProgressRecord[]
+              }
+              ingestBackendProgress(progressResp?.data ?? [])
+            } catch {
+              // ignore transient progress fetch errors
+            }
+
             const taskResp = await taskAPI.get(optimizeTaskId) as unknown as {
               data?: {
                 status?: string
@@ -765,6 +1894,7 @@ export default function AdVideoPage() {
                 reject(new Error('文案优化完成但结果为空'))
                 return
               }
+              appendAdTaskLog('文案优化完成', 'success')
               resolve({
                 title: String(taskResult.title ?? '').trim(),
                 content: String(taskResult.content ?? '').trim(),
@@ -773,6 +1903,7 @@ export default function AdVideoPage() {
               })
             } else if (task.status === 'failed') {
               clearInterval(timer)
+              appendAdTaskLog(task.error_msg || '文案优化失败', 'error')
               reject(new Error(task.error_msg || '文案优化失败'))
             }
           } catch {
@@ -786,9 +1917,13 @@ export default function AdVideoPage() {
       if (result.outline.length > 0 && sceneDescriptions.length === 0) {
         setSceneDescriptionsText(result.outline.join('\n'))
       }
+      if (!subtitleText.trim() && result.content) {
+        setSubtitleText(result.content)
+      }
       toast({ title: '文案优化完成', description: '已自动回填优化结果与分镜建议', variant: 'success' })
       return result
     } catch (err: unknown) {
+      appendAdTaskLog(err instanceof Error ? err.message : '文案优化失败', 'error')
       toast({
         title: '文案优化失败',
         description: err instanceof Error ? err.message : '请稍后重试',
@@ -809,27 +1944,21 @@ export default function AdVideoPage() {
 
     setCreatingByText(true)
     try {
-      const draftId = savePendingProjectDraft({
-        title: buildProjectTitle(),
-        description: '由视频广告生成器创建',
-        scriptContent: trimmedPrompt,
-        scriptFileName: 'ad-script.txt',
-        scriptMimeType: 'text/plain;charset=utf-8',
-        targetEpisodes: 1,
-        styleTags: DEFAULT_AD_TAGS,
-        media: 'video',
-      })
+      const savedAt = writeAdVideoDraft(adVideoDraftState)
+      setDraftSavedAt(savedAt)
 
       toast({
-        title: '文案已带入创建向导',
-        description: '你可以继续调整模型与风格后创建项目',
+        title: '广告草稿已保存',
+        description: '你可以继续在当前页面调整市场、字幕和导演备注，然后直接生成视频',
         variant: 'success',
       })
-      router.push(`/projects/new?media=video&draft=${encodeURIComponent(draftId)}`)
     } catch {
-      toast({ title: '创建草稿失败，请稍后重试', variant: 'destructive' })
+      toast({ title: '保存草稿失败，请稍后重试', variant: 'destructive' })
       setCreatingByText(false)
+      return
     }
+
+    setCreatingByText(false)
   }
 
   const handleGenerateByImages = async () => {
@@ -839,7 +1968,7 @@ export default function AdVideoPage() {
       return
     }
 
-    const optimized = autoOptimizeCopy ? await runCopyOptimization() : null
+    const optimized = autoOptimizeCopy ? await runCopyOptimization({ preserveLogs: true }) : null
     const trimmedPrompt = (optimized?.content || optimizedScript || basePrompt).trim()
     if (trimmedPrompt.length < 10) {
       toast({ title: '请先输入广告文案，用于场景描述和视频语义', variant: 'destructive' })
@@ -857,13 +1986,44 @@ export default function AdVideoPage() {
       return
     }
 
+    if (!reviewConfirmed) {
+      toast({
+        title: '请先完成本地审核确认',
+        description: '确认市场、台词和分镜无误后，再提交生成。',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    resetAdTaskLogs('开始创建广告任务')
+    appendAdTaskLog(`广告文案已确认，准备提交 ${getTargetMarketLabel()} 任务`, 'info')
+
+    const generationTask = createGenerationTaskEntry()
+    setGenerationTasks((prev) => [generationTask, ...prev].slice(0, 8))
+    setActiveGenerationTaskId(generationTask.id)
     setCreatingByImages(true)
 
     try {
+      updateGenerationTask(generationTask.id, {
+        status: autoOptimizeCopy ? 'optimizing' : 'uploading',
+        step: autoOptimizeCopy ? '文案优化中，正在准备广告语' : '正在准备素材并提交任务',
+      })
+      appendAdTaskLog(autoOptimizeCopy ? '开始自动优化广告文案' : '跳过自动优化，直接准备素材', 'progress')
+
+      const marketBrief = getMarketBrief()
+      const subtitleSourceText = subtitleText.trim() || trimmedPrompt
+      const generationPrompt = [trimmedPrompt, marketBrief].filter(Boolean).join('\n\n')
       const projectTitle = buildProjectTitle()
+      const referenceSourceLines = referenceImageHints.length > 0 ? referenceImageHints : selectedStoryboardTemplateMeta.referenceLines
+      const initialReferenceHints = distributeDialogues(referenceSourceLines, Math.max(imageUrls.length, localFiles.length, 1))
+      updateGenerationTask(generationTask.id, {
+        status: 'uploading',
+        step: '正在上传素材并创建项目',
+      })
+      appendAdTaskLog('正在上传素材并创建项目', 'progress')
       const createRes = (await projectAPI.create({
         title: projectTitle,
-        description: '由视频广告生成器创建',
+        description: `由视频广告生成器创建；目标市场：${getTargetMarketLabel()}；字幕语言：${getSubtitleLanguageLabel()}；创意模式：${getCreativeModeLabel()}；品牌语气：${getBrandVoiceLabel()}；分镜模板：${selectedStoryboardTemplateMeta.label}`,
         project_type: 'video',
         style_tags: ensureProjectMediaTag(DEFAULT_AD_TAGS, 'video'),
         target_episodes: 1,
@@ -874,17 +2034,26 @@ export default function AdVideoPage() {
           duration: clipDurationSec,
           aspect_ratio: '16:9',
           resolution: '1080p',
+          target_market: targetMarket,
+          subtitle_language: subtitleLanguage,
+          creative_mode: creativeMode,
+          director_note: directorNote.trim(),
+          brand_voice_template: selectedBrandVoiceTemplate,
+          brand_voice_notes: brandVoiceNotesText.trim(),
+          storyboard_template: selectedStoryboardTemplate,
+          reference_image_hints: initialReferenceHints,
         },
       } as never)) as { data: { id: number } }
 
       const projectId = createRes.data.id
+      appendAdTaskLog(`项目已创建，ID ${projectId}`, 'success')
       setAutoRetryAttempts(0)
       autoRetryingRef.current = false
       setSessionAnchorAt(new Date().toISOString())
       setRetryHistory([])
       setBatchSubmittedCount(0)
 
-      const scriptFile = new File([trimmedPrompt], 'ad-script.txt', {
+      const scriptFile = new File([subtitleSourceText], 'ad-script.txt', {
         type: 'text/plain;charset=utf-8',
       })
       await projectAPI.uploadScript(projectId, scriptFile)
@@ -919,16 +2088,20 @@ export default function AdVideoPage() {
       if (finalImageUrls.length === 0) {
         throw new Error('图片处理后未得到可用图片地址')
       }
+      appendAdTaskLog(`素材准备完成，共 ${finalImageUrls.length} 张图片`, 'success')
+
+      const perClipReferenceHints = distributeDialogues(referenceSourceLines, finalImageUrls.length)
+      const perClipDialogues = distributeDialogues(splitSubtitleScript(subtitleSourceText), finalImageUrls.length)
 
       const resolvedDescriptions = finalImageUrls.map((_, index) => {
-        const line = sceneDescriptions[index] ?? optimized?.outline?.[index] ?? sceneDescriptions[sceneDescriptions.length - 1] ?? trimmedPrompt
+        const line = sceneDescriptions[index] ?? perClipDialogues[index] ?? optimized?.outline?.[index] ?? sceneDescriptions[sceneDescriptions.length - 1] ?? trimmedPrompt
         return line.trim()
       })
 
       await triggerVideoGeneration({
         projectId,
         projectTitle,
-        prompt: trimmedPrompt,
+        prompt: generationPrompt,
         imageUrls: finalImageUrls,
         sceneDescriptions: resolvedDescriptions,
         modelName: chooseModelForSubmission(selectedVideoModel || (availableVideoModels[0]?.model_key ?? '')),
@@ -936,14 +2109,37 @@ export default function AdVideoPage() {
         motionMode: selectedMotionMode,
         videoMode: selectedVideoMode,
         clipDurationSec,
+        targetMarket,
+        subtitleLanguage,
+        creativeMode,
+        directorNote: directorNote.trim(),
+        subtitleText: subtitleSourceText,
+        dialogues: perClipDialogues,
+        storyboardTemplate: selectedStoryboardTemplate,
+        referenceImageHints: perClipReferenceHints,
+        brandVoiceTemplate: selectedBrandVoiceTemplate,
+        brandVoiceNotes: brandVoiceNotesText.trim(),
+      })
+      appendAdTaskLog(`视频生成任务已提交，项目 ${projectId} 正在后台处理`, 'success')
+
+      updateGenerationTask(generationTask.id, {
+        projectId,
+        status: 'running',
+        step: '已提交成功，后台正在生成并轮询状态',
       })
 
       toast({
         title: '广告视频生成已启动',
-        description: `项目「${projectTitle}」已提交，系统将自动轮询直至生成完成`,
+        description: `任务已加入异步列表：${projectTitle}`,
         variant: 'success',
       })
     } catch {
+      appendAdTaskLog('广告任务启动失败', 'error')
+      updateGenerationTask(generationTask.id, {
+        status: 'failed',
+        step: '生成任务提交失败',
+        error: '启动生成失败，请稍后重试',
+      })
       toast({ title: '启动生成失败，请稍后重试', variant: 'destructive' })
       setTaskStatus('failed')
       setTaskError('启动生成失败，请稍后重试')
@@ -1016,6 +2212,7 @@ export default function AdVideoPage() {
 
     const models = batchModelKeys.slice(0, 4)
     setBatchGenerating(true)
+    appendAdTaskLog(`开始批量提交 ${models.length} 个视频版本`, 'info')
     try {
       let submitted = 0
       for (const modelKey of models) {
@@ -1028,6 +2225,30 @@ export default function AdVideoPage() {
           video_mode: lastGenerationContext.videoMode,
           model_name: modelKey,
           clip_duration_sec: lastGenerationContext.clipDurationSec,
+          subtitle_text: lastGenerationContext.subtitleText,
+          dialogues: lastGenerationContext.dialogues,
+          render_config: {
+            config_version: 1,
+            target_market: lastGenerationContext.targetMarket,
+            subtitle_language: lastGenerationContext.subtitleLanguage,
+            creative_mode: lastGenerationContext.creativeMode,
+            director_note: lastGenerationContext.directorNote,
+            brand_voice_template: lastGenerationContext.brandVoiceTemplate,
+            brand_voice_notes: lastGenerationContext.brandVoiceNotes,
+            storyboard_template: lastGenerationContext.storyboardTemplate,
+            reference_image_hints: lastGenerationContext.referenceImageHints,
+            workflow_mode: 'guided-ad-video',
+            dialogues: lastGenerationContext.dialogues,
+            generate_audio: lastGenerationContext.dialogues.some((line) => line.trim().length > 0),
+            subtitle_style: {
+              font_name: lastGenerationContext.subtitleLanguage === 'en-US' ? 'Inter' : 'Noto Sans CJK SC',
+              font_size: lastGenerationContext.subtitleLanguage === 'bilingual' ? 40 : 44,
+              outline_width: 3,
+              alignment: 2,
+              margin_v: 48,
+              bold: true,
+            },
+          },
         })
         submitted += 1
       }
@@ -1043,8 +2264,10 @@ export default function AdVideoPage() {
         for (const modelKey of models) set.add(modelKey)
         return Array.from(set).slice(-12)
       })
+      appendAdTaskLog(`批量提交成功，已新增 ${submitted} 个版本`, 'success')
       toast({ title: '批量版本生成已提交', description: `已提交 ${submitted} 个模型版本`, variant: 'success' })
     } catch {
+      appendAdTaskLog('批量提交失败，请稍后重试', 'error')
       toast({ title: '批量提交失败', description: '请稍后重试', variant: 'destructive' })
     } finally {
       setBatchGenerating(false)
@@ -1062,12 +2285,22 @@ export default function AdVideoPage() {
         project_id: lastGenerationContext.projectId,
         project_title: lastGenerationContext.projectTitle,
         generated_at: new Date().toISOString(),
+        target_market: lastGenerationContext.targetMarket,
+        subtitle_language: lastGenerationContext.subtitleLanguage,
+        creative_mode: lastGenerationContext.creativeMode,
+        director_note: lastGenerationContext.directorNote,
+        brand_voice_template: lastGenerationContext.brandVoiceTemplate,
+        brand_voice_notes: lastGenerationContext.brandVoiceNotes,
+        subtitle_text: lastGenerationContext.subtitleText,
+        dialogues: lastGenerationContext.dialogues,
         model_name: lastGenerationContext.modelName,
         style_preset: lastGenerationContext.stylePreset,
         motion_mode: lastGenerationContext.motionMode,
         video_mode: lastGenerationContext.videoMode,
         clip_duration_sec: lastGenerationContext.clipDurationSec,
         prompt: lastGenerationContext.prompt,
+        storyboard_template: lastGenerationContext.storyboardTemplate,
+        reference_image_hints: lastGenerationContext.referenceImageHints,
         scene_descriptions: lastGenerationContext.sceneDescriptions,
         image_urls: lastGenerationContext.imageUrls,
         output_url: taskOutputUrl,
@@ -1086,7 +2319,12 @@ export default function AdVideoPage() {
         `- 项目ID: ${lastGenerationContext.projectId}`,
         `- 项目名称: ${lastGenerationContext.projectTitle}`,
         `- 生成时间: ${new Date().toLocaleString('zh-CN')}`,
+        `- 目标市场: ${TARGET_MARKET_OPTIONS.find((item) => item.key === lastGenerationContext.targetMarket)?.label ?? TARGET_MARKET_OPTIONS[0].label}`,
+        `- 字幕语言: ${SUBTITLE_LANGUAGE_OPTIONS.find((item) => item.key === lastGenerationContext.subtitleLanguage)?.label ?? SUBTITLE_LANGUAGE_OPTIONS[0].label}`,
+        `- 创意模式: ${CREATIVE_MODE_OPTIONS.find((item) => item.key === lastGenerationContext.creativeMode)?.label ?? CREATIVE_MODE_OPTIONS[0].label}`,
+        `- 品牌语气: ${BRAND_VOICE_TEMPLATES.find((item) => item.key === lastGenerationContext.brandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label}`,
         `- 模型: ${lastGenerationContext.modelName}`,
+        `- 分镜模板: ${lastGenerationContext.storyboardTemplate}`,
         `- 风格: ${lastGenerationContext.stylePreset}`,
         `- 运镜: ${lastGenerationContext.motionMode}`,
         `- 模式: ${lastGenerationContext.videoMode}`,
@@ -1100,9 +2338,24 @@ export default function AdVideoPage() {
         '',
         lastGenerationContext.prompt,
         '',
+        '## 字幕 / 口播台词',
+        '',
+        lastGenerationContext.subtitleText || '- 未填写',
+        '',
+        '## 品牌语气',
+        '',
+        `- 模板：${BRAND_VOICE_TEMPLATES.find((item) => item.key === lastGenerationContext.brandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label}`,
+        `- 说明：${lastGenerationContext.brandVoiceNotes || '未填写'}`,
+        '',
         '## 分镜描述',
         '',
         ...lastGenerationContext.sceneDescriptions.map((item, idx) => `${idx + 1}. ${item}`),
+        '',
+        '## 镜头参考图提示',
+        '',
+        ...(lastGenerationContext.referenceImageHints.length > 0
+          ? lastGenerationContext.referenceImageHints.map((item, idx) => `${idx + 1}. ${item}`)
+          : ['- 未填写'] ),
         '',
         '## 素材URL',
         '',
@@ -1280,16 +2533,32 @@ export default function AdVideoPage() {
         }
 
         if (!target) return
-        if (!activeTaskId) setActiveTaskId(target.id)
+        if (!activeTaskId) {
+          setActiveTaskId(target.id)
+          appendAdTaskLog(`已定位视频任务 #${target.id}`, 'info')
+        }
 
         const clipsTotal = target.clips?.length ?? target.image_urls?.length ?? 0
         const clipsDone = target.clips?.filter((clip) => clip.status === 'succeeded').length ?? 0
         setTaskClipProgress({ done: clipsDone, total: clipsTotal })
 
+        if (target.status !== adTaskStatusRef.current) {
+          adTaskStatusRef.current = target.status as typeof adTaskStatusRef.current
+          const statusMessageMap: Record<string, string> = {
+            pending: '视频任务已进入队列',
+            processing: '视频任务正在生成',
+            succeeded: '视频任务已完成',
+            failed: '视频任务已失败',
+          }
+          const statusMessage = statusMessageMap[target.status] ?? `视频任务状态更新为 ${target.status}`
+          appendAdTaskLog(statusMessage, target.status === 'failed' ? 'error' : target.status === 'succeeded' ? 'success' : 'progress')
+        }
+
         if (target.status === 'succeeded') {
           setTaskStatus('succeeded')
           const outputUrl = String(target.result_url || target.hls_url || '').trim()
           setTaskOutputUrl(outputUrl)
+          if (outputUrl) appendAdTaskLog(`已生成输出链接：${outputUrl}`, 'success')
           if (taskPollRef.current) {
             clearInterval(taskPollRef.current)
             taskPollRef.current = null
@@ -1302,6 +2571,7 @@ export default function AdVideoPage() {
           const errorMessage = String(target.error_msg || '生成失败')
           setTaskStatus('failed')
           setTaskError(errorMessage)
+          appendAdTaskLog(errorMessage, 'error')
 
           if (
             autoRetryEnabled
@@ -1314,6 +2584,7 @@ export default function AdVideoPage() {
             if (backupModel) {
               try {
                 setAutoRetryAttempts((prev) => prev + 1)
+                appendAdTaskLog(`主模型失败，自动切换到 ${backupModel} 重试`, 'warning')
                 await triggerVideoGeneration({
                   ...lastGenerationContext,
                   modelName: backupModel,
@@ -1391,18 +2662,15 @@ export default function AdVideoPage() {
             </div>
             <h2 className="text-2xl font-semibold tracking-tight">文案 + 指定图片，一步生成广告视频</h2>
             <p className="mt-2 text-sm leading-6 text-surface-300">
-              先写广告文案，再选择生成方式：
-              <span className="text-cyan-200">文案驱动创建项目</span>
-              或
-              <span className="text-amber-200">按图片 URL 直接启动视频生成</span>。
+              先写广告文案，再在本页完善市场、分镜和台词，然后保存草稿或直接生成视频。
             </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
               <p className="text-xs uppercase tracking-[0.2em] text-surface-300">方式 A</p>
-              <p className="mt-2 text-base font-semibold text-white">文案生成项目</p>
-              <p className="mt-1 text-xs text-surface-400">进入创建页继续调整参数</p>
+              <p className="mt-2 text-base font-semibold text-white">本地草稿完善</p>
+              <p className="mt-1 text-xs text-surface-400">所有修改保留在当前页</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
               <p className="text-xs uppercase tracking-[0.2em] text-surface-300">方式 B</p>
@@ -1412,6 +2680,25 @@ export default function AdVideoPage() {
           </div>
         </div>
       </div>
+
+      {pendingDraftRestore ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">检测到上次草稿</p>
+              <p className="mt-1 text-xs text-amber-700">这是本地草稿恢复，不会自动跳转到旧项目；你可以选择恢复或丢弃。</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" size="sm" onClick={handleRestoreSavedDraft}>
+                恢复草稿
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={handleDiscardSavedDraft}>
+                丢弃草稿
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Card className="overflow-hidden rounded-[24px] border-surface-200 shadow-sm">
         <CardContent className="space-y-6 bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
@@ -1455,7 +2742,7 @@ export default function AdVideoPage() {
                 variant="outline"
                 size="sm"
                 className="h-8 gap-1.5"
-                onClick={runCopyOptimization}
+				onClick={() => { void runCopyOptimization() }}
                 disabled={optimizingCopy || creatingByImages}
               >
                 {optimizingCopy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -1468,6 +2755,98 @@ export default function AdVideoPage() {
                 <p className="mt-1 line-clamp-4 text-xs leading-5 text-emerald-800">{optimizedScript}</p>
               </div>
             ) : null}
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-surface-800">市场 / 台词 / 导演备注</p>
+                <p className="text-xs text-surface-500">这些设置会进入文案优化、字幕烧录和视频生成提示词，直接影响市场匹配和口播一致性。</p>
+              </div>
+              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+                指导式生成
+              </span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-surface-700">目标市场</Label>
+                <Select value={targetMarket} onValueChange={setTargetMarket}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择市场" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TARGET_MARKET_OPTIONS.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs text-surface-700">字幕语言</Label>
+                <Select value={subtitleLanguage} onValueChange={setSubtitleLanguage}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择字幕语言" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SUBTITLE_LANGUAGE_OPTIONS.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs text-surface-700">创意模式</Label>
+                <Select value={creativeMode} onValueChange={setCreativeMode}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择创意模式" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CREATIVE_MODE_OPTIONS.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="subtitle-text">字幕 / 口播台词</Label>
+                <Textarea
+                  id="subtitle-text"
+                  rows={7}
+                  placeholder="每行一句，生成时会自动分配到各镜头；支持中文、英文或中英双语。"
+                  value={subtitleText}
+                  onChange={(event) => setSubtitleText(event.target.value)}
+                />
+                <p className="text-xs text-surface-500">
+                  当前已识别 {subtitleLines.length} 条台词；生成时会同步进入字幕和支持原生音频的模型输入。
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="director-note">导演备注 / 禁止项</Label>
+                <Textarea
+                  id="director-note"
+                  rows={7}
+                  placeholder="例如：不要把品牌卖点改掉；前 5 秒必须交代市场利益点；字幕必须跟口播逐句对应。"
+                  value={directorNote}
+                  onChange={(event) => setDirectorNote(event.target.value)}
+                />
+                <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-600">
+                  当前市场约束会自动进入文案优化与视频生成提示词，避免导演式自动改写把市场带偏。
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center justify-between rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
@@ -1716,6 +3095,268 @@ export default function AdVideoPage() {
             ) : null}
           </div>
 
+          <div className="space-y-4 rounded-xl border border-surface-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-surface-800">本地审核与分镜预览</p>
+                <p className="text-xs text-surface-500">先检查广告文案、素材、台词和分镜，再勾选确认后生成。编辑卡片会同步回上方文本区。</p>
+              </div>
+              <span className={[
+                'rounded-full border px-2.5 py-1 text-[11px] font-medium',
+                reviewReady
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : reviewConfirmed
+                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                    : 'border-surface-200 bg-surface-50 text-surface-600',
+              ].join(' ')}>
+                {reviewReady ? '已确认，可生成' : reviewConfirmed ? '等待补全项' : '等待审核确认'}
+              </span>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {adReviewChecklist.map((item) => (
+                <div
+                  key={item.key}
+                  className={[
+                    'rounded-xl border p-3',
+                    item.passed
+                      ? 'border-emerald-200 bg-emerald-50/60'
+                      : item.blocking
+                        ? 'border-rose-200 bg-rose-50/60'
+                        : 'border-amber-200 bg-amber-50/60',
+                  ].join(' ')}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-surface-800">{item.label}</p>
+                    <span className={[
+                      'rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                      item.passed
+                        ? 'border-emerald-200 bg-white/80 text-emerald-700'
+                        : item.blocking
+                          ? 'border-rose-200 bg-white/80 text-rose-700'
+                          : 'border-amber-200 bg-white/80 text-amber-700',
+                    ].join(' ')}>
+                      {item.passed ? '通过' : item.blocking ? '缺失' : '待优化'}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-surface-600">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+
+            {blockingReviewItems.length > 0 ? (
+              <p className="text-xs text-rose-600">先补全：{blockingReviewItems.map((item) => item.label).join('、')}</p>
+            ) : advisoryReviewItems.length > 0 ? (
+              <p className="text-xs text-amber-600">建议先优化：{advisoryReviewItems.map((item) => item.label).join('、')}</p>
+            ) : (
+              <p className="text-xs text-emerald-600">当前审核项已满足，可以进入生成。</p>
+            )}
+
+            <div className="flex items-start gap-3 rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
+              <Switch checked={reviewConfirmed} onCheckedChange={setReviewConfirmed} />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-cyan-900">我已确认市场、台词和分镜无误</p>
+                <p className="text-xs text-cyan-700">勾选后才能提交生成；修改任意输入后会自动取消确认。</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-cyan-900">分镜模板库</p>
+                  <p className="text-xs text-cyan-700">一键套用镜头结构、台词节奏和参考图提示，再在卡片里做局部微调。</p>
+                </div>
+                <span className="rounded-full border border-cyan-200 bg-white px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+                  当前：{selectedStoryboardTemplateMeta.label}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {STORYBOARD_TEMPLATES.map((template) => {
+                  const active = selectedStoryboardTemplate === template.key
+                  return (
+                    <button
+                      key={template.key}
+                      type="button"
+                      onClick={() => applyStoryboardTemplate(template.key)}
+                      className={[
+                        'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                        active
+                          ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
+                          : 'border-surface-200 bg-white text-surface-600 hover:border-cyan-200 hover:bg-cyan-50/40',
+                      ].join(' ')}
+                    >
+                      {template.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="rounded-lg border border-cyan-100 bg-white px-3 py-3 text-xs text-cyan-700">
+                <p className="font-medium text-cyan-900">{selectedStoryboardTemplateMeta.label}</p>
+                <p className="mt-1 leading-5">{selectedStoryboardTemplateMeta.hint}</p>
+                <p className="mt-2 text-[11px] leading-5 text-cyan-600">
+                  场景建议 {selectedStoryboardTemplateMeta.sceneLines.length} 条 · 台词建议 {selectedStoryboardTemplateMeta.dialogueLines.length} 条 · 参考图建议 {selectedStoryboardTemplateMeta.referenceLines.length} 条
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-violet-900">品牌语气模板</p>
+                  <p className="text-xs text-violet-700">模板会进入文案优化和视频生成提示词，并影响当前文案的表达方向。</p>
+                </div>
+                <span className="rounded-full border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-700">
+                  当前：{getBrandVoiceLabel()}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {BRAND_VOICE_TEMPLATES.map((template) => {
+                  const active = selectedBrandVoiceTemplate === template.key
+                  return (
+                    <button
+                      key={template.key}
+                      type="button"
+                      onClick={() => setSelectedBrandVoiceTemplate(template.key)}
+                      className={[
+                        'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                        active
+                          ? 'border-violet-300 bg-violet-50 text-violet-800'
+                          : 'border-surface-200 bg-white text-surface-600 hover:border-violet-200 hover:bg-violet-50/40',
+                      ].join(' ')}
+                    >
+                      {template.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border border-surface-200 bg-white p-3">
+                  <p className="text-xs font-medium text-surface-700">切换前预览</p>
+                  <div className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-surface-600">
+                    {optimizedScript.trim() || adPrompt.trim() || '请先填写广告文案，以便对比品牌语气模板。'}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-violet-200 bg-white p-3">
+                  <p className="text-xs font-medium text-violet-800">切换后预览</p>
+                  <div className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-violet-700">
+                    {brandVoiceBrief}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs text-violet-800">品牌语气补充说明</Label>
+                <Textarea
+                  rows={3}
+                  value={brandVoiceNotesText}
+                  onChange={(event) => setBrandVoiceNotesText(event.target.value)}
+                  placeholder="例如：更克制、更高级，不要太热闹；品牌口径要统一；避免过度促销腔。"
+                />
+                <p className="text-[11px] leading-5 text-violet-600">这里写更细的口吻要求，模板会保留，你可以只改局部表达。</p>
+              </div>
+
+              <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2 text-xs text-violet-700">
+                <p className="font-medium text-violet-900">{selectedBrandVoiceTemplateMeta.label}</p>
+                <p className="mt-1 leading-5">{selectedBrandVoiceTemplateMeta.hint}</p>
+                <p className="mt-2 text-[11px] leading-5 text-violet-600">{selectedBrandVoiceTemplateMeta.contrast}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium text-surface-800">分镜可视化编辑</p>
+                  <p className="text-xs text-surface-500">每张卡片都对应一段镜头，修改会同步回上方分镜描述和字幕文本。</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+                    {storyboardPreview.length} 个镜头
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={fillReferenceHintsForAll}
+                    disabled={referenceHintGeneratingAll || referenceHintGeneratingIndex !== null || storyboardPreview.length === 0}
+                    className="h-8 gap-2 border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
+                  >
+                    {referenceHintGeneratingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    AI 补全全部参考图
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                {storyboardPreview.map((shot) => (
+                  <div key={shot.index} className="rounded-2xl border border-surface-200 bg-surface-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-surface-500">镜头 {shot.index + 1}</p>
+                        <p className="mt-1 text-sm font-medium text-surface-800">{shot.imageSource}</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
+                          {shot.dialogue ? '台词已填' : '待补台词'}
+                        </span>
+                        <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
+                          {shot.referenceHint ? '参考图已填' : '待补参考图'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-surface-700">分镜描述</Label>
+                        <Textarea
+                          rows={3}
+                          value={shot.scene}
+                          onChange={(event) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="text-xs text-surface-700">镜头参考图</Label>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => fillReferenceHintAtIndex(shot)}
+                            disabled={referenceHintGeneratingAll || referenceHintGeneratingIndex === shot.index}
+                            className="h-7 gap-1 px-2 text-[11px] text-cyan-700 hover:bg-cyan-50 hover:text-cyan-900"
+                          >
+                            {referenceHintGeneratingIndex === shot.index ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3 w-3" />
+                            )}
+                            AI 补全
+                          </Button>
+                        </div>
+                        <Input
+                          value={shot.referenceHint}
+                          placeholder={selectedStoryboardTemplateMeta.referenceLines[shot.index] ?? selectedStoryboardTemplateMeta.referenceLines[selectedStoryboardTemplateMeta.referenceLines.length - 1] ?? '例如：白底产品特写 / 手持使用场景'}
+                          onChange={(event) => setReferenceImageHintsText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
+                        />
+                        <p className="text-[11px] leading-5 text-surface-500">可填参考图风格、构图、主体或检索关键词，不需要真实上传图片。</p>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-surface-700">字幕 / 口播</Label>
+                        <Textarea
+                          rows={3}
+                          value={shot.dialogue}
+                          onChange={(event) => setSubtitleText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Button
               type="button"
@@ -1724,86 +3365,63 @@ export default function AdVideoPage() {
               className="h-11 gap-2"
             >
               {creatingByText ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              文案生成项目
-              <ArrowRight className="h-4 w-4" />
+              保存草稿并继续编辑
             </Button>
             <Button
               type="button"
               variant="outline"
               onClick={handleGenerateByImages}
-              disabled={creatingByImages || creatingByText}
+              disabled={creatingByImages || creatingByText || !reviewReady}
               className="h-11 gap-2 border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
             >
               {creatingByImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              指定图片直接生成
+              审核通过后异步生成
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
 
+          <GenerationQueuePanel
+            generationTasks={generationTasks}
+            activeGenerationTaskId={activeGenerationTaskId}
+            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
+          />
+
+          <LocalHistoryPanel
+            historyEntries={historyEntries}
+            selectedHistoryEntryId={selectedHistoryEntryId}
+            selectedHistoryEntry={selectedHistoryEntry}
+            currentVersionSummary={currentVersionSummary}
+            selectedHistorySummary={selectedHistorySummary}
+            onSave={handleSaveHistorySnapshot}
+            onSelect={setSelectedHistoryEntryId}
+            onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-500">
+            <span>{draftSavedAt ? `草稿已保存于 ${new Date(draftSavedAt).toLocaleString('zh-CN')}` : '草稿会自动保存，避免编辑中途丢失'}</span>
+            <span>当前流程已与旧项目创建页解耦，修改会保留在本页。</span>
+          </div>
+
           {activeProjectId ? (
             <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-cyan-900">广告视频输出状态</p>
-                  <p className="mt-1 text-xs text-cyan-700">
-                    项目 ID: {activeProjectId}
-                    {activeTaskId ? ` · 任务 ID: ${activeTaskId}` : ''}
-                    {taskClipProgress.total > 0 ? ` · 片段 ${taskClipProgress.done}/${taskClipProgress.total}` : ''}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full border border-cyan-300 bg-white px-3 py-1 text-xs font-medium text-cyan-800">
-                    {taskStatus === 'idle' && '等待开始'}
-                    {taskStatus === 'pending' && '排队中'}
-                    {taskStatus === 'processing' && '生成中'}
-                    {taskStatus === 'succeeded' && '已完成'}
-                    {taskStatus === 'failed' && '失败'}
-                  </span>
-                  <Button size="sm" variant="outline" onClick={() => router.push(`/projects/${activeProjectId}`)}>
-                    打开项目
-                  </Button>
-                </div>
-              </div>
-
-              {taskStatus === 'failed' && taskError ? (
-                <p className="mt-2 text-xs text-rose-600">{taskError}</p>
-              ) : null}
-
-              {autoRetryAttempts > 0 ? (
-                <p className="mt-2 text-xs text-cyan-700">已执行自动重试次数：{autoRetryAttempts}</p>
-              ) : null}
-
-              {taskStatus === 'succeeded' && taskOutputUrl ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" className="gap-1.5" onClick={openOutput}>
-                    <Download className="h-3.5 w-3.5" />
-                    预览/下载成片
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={handleRerunAnotherVersion}
-                    disabled={manualRerunLoading}
-                  >
-                    {manualRerunLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat className="h-3.5 w-3.5" />}
-                    再生成一个版本
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={handleExportPackage}
-                    disabled={exportingPackage}
-                  >
-                    {exportingPackage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                    导出投放包
-                  </Button>
-                  <a href={taskOutputUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center rounded-md border border-cyan-300 bg-white px-3 py-1.5 text-xs font-medium text-cyan-800 hover:bg-cyan-50">
-                    新标签打开输出链接
-                  </a>
-                </div>
-              ) : null}
+              <CurrentTaskPanel
+                activeProjectId={activeProjectId}
+                activeTaskId={activeTaskId}
+                taskStatus={taskStatus}
+                taskError={taskError}
+                taskOutputUrl={taskOutputUrl}
+                taskClipProgress={taskClipProgress}
+                autoRetryAttempts={autoRetryAttempts}
+                adTaskLogs={adTaskLogs}
+                activeOptimizeTaskId={activeOptimizeTaskId}
+                manualRerunLoading={manualRerunLoading}
+                exportingPackage={exportingPackage}
+                onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+                onOpenOutput={openOutput}
+                onRerunAnotherVersion={handleRerunAnotherVersion}
+                onExportPackage={handleExportPackage}
+              />
 
               {lastGenerationContext ? (
                 <div className="mt-3 space-y-2 rounded-lg border border-cyan-200 bg-white/70 p-3">

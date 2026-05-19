@@ -116,6 +116,7 @@ character-service:
     producer_topic: "asset.generate.result"
   image:
     base_url: "http://localhost:8005"
+    default_model: "doubao-seedream-4-0-250828"
   llm:
     base_url: "https://api.example.com/v1"
     api_key: "replace-with-character-llm-key"

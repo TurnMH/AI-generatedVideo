@@ -35,7 +35,7 @@ func main() {
 		logger.Fatal("load config", zap.Error(err))
 	}
 	if err := applyRuntimeConfig(cfg); err != nil {
-		logger.Fatal("load runtime api keys failed", zap.Error(err))
+		logger.Warn("load runtime api keys failed; continuing with config defaults", zap.Error(err))
 	}
 
 	// ── Database ────────────────────────────────────────────

@@ -94,6 +94,8 @@
 - 任一服务迁移执行失败时，直接终止部署
 - 只有 `no change` 会被视为“已经是最新版本”并继续执行
 
+同时，线上 docker 部署会在启动前自动从 `config.local.yaml` 生成 `config.docker.local.yaml`，只提取 `project-service.llm`、`script-service.llm`、`character-service.llm`、`character-service.gemini`、`character-service.claude`、`character-service.qwen`、`character-service.zhipu`，以及 `character-service.concurrency` 这几类运行时覆盖项。这样可以避免 docker 默认值把这些密钥配置漏掉；如果源配置里缺少关键 LLM 值，部署会直接失败，而不会让一个“能启动但提取必然失败”的环境进入线上。
+
 ---
 
 ## 迁移期间遇到的典型问题
@@ -323,6 +325,7 @@
 处理方式：
 
 - 在共享配置里显式补齐 `image-service.models` 下的 key、base、model 等配置
+- 至少要保证 `image-service.models.openai_base` 和 `image-service.models.openai_keys` 被写进 docker override，否则 DALL-E 会直接报 `no api key configured`
 - 重启 `image-service` 后，立即校验 provider 注册结果和 `model-status`，确认远端模型真正可用
 - 生产环境不要依赖“空模型自动兜底”，而要让业务入口传明确模型，或者至少明确一个线上可用的默认模型
 - 每次迁移后，都要实际发起一张测试图，确认从任务创建到资源回填全链路成功

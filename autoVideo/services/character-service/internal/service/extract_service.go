@@ -280,27 +280,59 @@ func (s *ExtractService) triggerStoryboardExtraction(ctx context.Context, projec
 	}
 
 	url := s.projectServiceURL + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(jwtToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+jwtToken)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if episodeID != nil {
-		req.Header.Set("X-Autovideo-Skip-Asset-Refresh", "true")
-	}
-
 	client := &http.Client{Timeout: 20 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(jwtToken) != "" {
+			req.Header.Set("Authorization", "Bearer "+jwtToken)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if episodeID != nil {
+			req.Header.Set("X-Autovideo-Skip-Asset-Refresh", "true")
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode < http.StatusBadRequest {
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("trigger storyboard extraction failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+			if resp.StatusCode < http.StatusInternalServerError {
+				return lastErr
+			}
+		}
+
+		if attempt == maxAttempts {
+			break
+		}
+		backoff := time.Duration(attempt) * 2 * time.Second
+		if s.logger != nil {
+			retryFields := append([]zap.Field{}, fields...)
+			retryFields = append(retryFields,
+				zap.Int("attempt", attempt),
+				zap.Duration("backoff", backoff),
+				zap.Error(lastErr),
+			)
+			s.logger.Warn("storyboard extraction callback failed; retrying", retryFields...)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("trigger storyboard extraction failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if lastErr != nil {
+		return lastErr
 	}
 
 	if s.logger != nil {

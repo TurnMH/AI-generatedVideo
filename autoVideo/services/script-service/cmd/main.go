@@ -41,7 +41,7 @@ func main() {
 		logger.Fatal("failed to load config", zap.Error(err))
 	}
 	if err := applyRuntimeConfig(cfg); err != nil {
-		logger.Fatal("failed to load runtime api keys from auth-service", zap.Error(err))
+		logger.Warn("failed to load runtime api keys from auth-service; continuing with config defaults", zap.Error(err))
 	}
 
 	// DB

@@ -186,6 +186,7 @@ export const taskAPI = {
     page_size?: number
   }) => api.get('/api/v1/tasks', { params }),
   get: (id: number) => api.get(`/api/v1/tasks/${id}`),
+  getProgress: (id: number) => api.get(`/api/v1/tasks/${id}/progress`),
   cancel: (id: number) => api.post(`/api/v1/tasks/${id}/cancel`),
   create: (data: { task_type: string; payload: object; priority?: number }) =>
     api.post('/api/v1/tasks', data),

@@ -27,6 +27,33 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+func scheduleStartupRecovery(log *zap.Logger, label string, delays []time.Duration, fn func() (int, error)) {
+	go func() {
+		for attempt, delay := range delays {
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				<-timer.C
+			}
+			resumed, err := fn()
+			if err != nil {
+				log.Error("startup recovery attempt failed",
+					zap.String("recovery", label),
+					zap.Int("attempt", attempt+1),
+					zap.Error(err),
+				)
+				continue
+			}
+			if resumed > 0 {
+				log.Info("startup recovery resumed jobs",
+					zap.String("recovery", label),
+					zap.Int("attempt", attempt+1),
+					zap.Int("count", resumed),
+				)
+			}
+		}
+	}()
+}
+
 // main —— 服务入口，初始化数据库、Kafka、路由并启动 HTTP 服务，支持优雅关闭
 func main() {
 	// ── Logger ────────────────────────────────────────────────────────────────
@@ -39,7 +66,7 @@ func main() {
 		log.Fatal("load config failed", zap.Error(err))
 	}
 	if err := applyRuntimeConfig(cfg); err != nil {
-		log.Fatal("load runtime api keys failed", zap.Error(err))
+		log.Warn("load runtime api keys failed; continuing with config defaults", zap.Error(err))
 	}
 
 	// jwtUserSecret: used to validate user-issued JWTs (from auth-service)
@@ -123,6 +150,7 @@ func main() {
 			cfg.Kafka.ConsumerTopic,
 			cfg.Kafka.ProducerTopic,
 			cfg.Image.BaseURL,
+			cfg.Image.DefaultModel,
 			cfg.ProjectService.BaseURL,
 			jwtUserSecret,
 			assetSvc,
@@ -164,11 +192,9 @@ func main() {
 		cfg.ProjectService.BaseURL, jwtUserSecret,
 		log,
 	)
-	if resumed, err := extractSvc.ResumeStaleExtractions(context.Background(), 20); err != nil {
-		log.Error("resume stale extractions", zap.Error(err))
-	} else if resumed > 0 {
-		log.Info("resumed interrupted extraction jobs", zap.Int("count", resumed))
-	}
+	scheduleStartupRecovery(log, "stale asset extractions", []time.Duration{0, 15 * time.Second, 45 * time.Second, 90 * time.Second}, func() (int, error) {
+		return extractSvc.ResumeStaleExtractions(context.Background(), 20)
+	})
 
 	assetHandler := handler.NewAssetHandler(assetSvc, extractSvc, log)
 

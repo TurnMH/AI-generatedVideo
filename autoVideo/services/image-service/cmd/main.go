@@ -27,13 +27,13 @@ import (
 
 // main —— 图片服务入口，初始化数据库、生成器、Kafka 消费者和 HTTP 路由并启动服务
 func main() {
-	cfg := config.Load()
-	if err := applyRuntimeConfig(cfg); err != nil {
-		panic(err)
-	}
-
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
+
+	cfg := config.Load()
+	if err := applyRuntimeConfig(cfg); err != nil {
+		logger.Warn("failed to load runtime api keys from auth-service; continuing with config defaults", zap.Error(err))
+	}
 
 	db, err := gorm.Open(postgres.Open(cfg.DB.DSN), &gorm.Config{})
 	if err != nil {

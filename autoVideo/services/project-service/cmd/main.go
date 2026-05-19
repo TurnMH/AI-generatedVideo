@@ -29,6 +29,33 @@ import (
 	pb "github.com/autovideo/project-service/proto"
 )
 
+func scheduleStartupRecovery(logger *zap.Logger, label string, delays []time.Duration, fn func() (int, error)) {
+	go func() {
+		for attempt, delay := range delays {
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				<-timer.C
+			}
+			resumed, err := fn()
+			if err != nil {
+				logger.Error("startup recovery attempt failed",
+					zap.String("recovery", label),
+					zap.Int("attempt", attempt+1),
+					zap.Error(err),
+				)
+				continue
+			}
+			if resumed > 0 {
+				logger.Info("startup recovery resumed pipelines",
+					zap.String("recovery", label),
+					zap.Int("attempt", attempt+1),
+					zap.Int("count", resumed),
+				)
+			}
+		}
+	}()
+}
+
 // main —— 程序入口，初始化数据库、服务、HTTP/gRPC 服务器和 Kafka，并阻塞等待优雅关闭
 func main() {
 	logger, _ := zap.NewProduction()
@@ -39,7 +66,7 @@ func main() {
 		logger.Fatal("failed to load config", zap.Error(err))
 	}
 	if err := applyRuntimeConfig(cfg); err != nil {
-		logger.Fatal("failed to load runtime api keys from auth-service", zap.Error(err))
+		logger.Warn("failed to load runtime api keys from auth-service; continuing with config defaults", zap.Error(err))
 	}
 
 	db, err := initDB(cfg.Database.DSN)
@@ -115,16 +142,12 @@ func main() {
 	episodeSvc.SetCharacterService(characterBaseURL, cfg.JWT.AccessSecret)
 	episodeSvc.SetScriptService(cfg.Script.BaseURL)
 	episodeSvc.SetVideoService(videoBaseURL)
-	if resumed, resumeErr := episodeSvc.ResumeInterruptedEpisodeGeneration(20); resumeErr != nil {
-		logger.Error("failed to resume interrupted episode generation", zap.Error(resumeErr))
-	} else if resumed > 0 {
-		logger.Info("resumed interrupted episode generation pipelines", zap.Int("count", resumed))
-	}
-	if resumed, resumeErr := episodeSvc.ResumeInterruptedAutoPreparation(20); resumeErr != nil {
-		logger.Error("failed to resume interrupted auto preparation", zap.Error(resumeErr))
-	} else if resumed > 0 {
-		logger.Info("resumed interrupted auto preparation pipelines", zap.Int("count", resumed))
-	}
+	scheduleStartupRecovery(logger, "interrupted episode generation", []time.Duration{0, 15 * time.Second, 45 * time.Second, 90 * time.Second}, func() (int, error) {
+		return episodeSvc.ResumeInterruptedEpisodeGeneration(20)
+	})
+	scheduleStartupRecovery(logger, "interrupted auto preparation", []time.Duration{0, 15 * time.Second, 45 * time.Second, 90 * time.Second}, func() (int, error) {
+		return episodeSvc.ResumeInterruptedAutoPreparation(20)
+	})
 	projectHandler := handler.NewProjectHandler(projectSvc, storageBaseURL, characterBaseURL, imageBaseURL, videoBaseURL, cfg.Script.BaseURL, cfg.JWT.AccessSecret)
 	episodeHandler := handler.NewEpisodeHandler(episodeSvc)
 	storyboardHandler := handler.NewStoryboardHandler(storyboardSvc, logger, characterBaseURL)

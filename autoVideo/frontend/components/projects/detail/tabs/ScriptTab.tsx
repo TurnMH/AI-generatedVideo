@@ -585,14 +585,36 @@ export function ScriptTab({
       if (!splitSettingsDirty) {
         setDraftTargetEpisodes(resolveDraftTargetEpisodes(uploadedProject?.target_episodes ?? 0, uploadedRecommendation, false))
       }
-      toast({
-        title: '上传成功，请选择模型后手动开始分集',
-        description: uploadedRecommendation ? `已推荐 ${uploadedRecommendation.count} 个分集，${uploadedRecommendation.reason}` : '可按需要手动填写目标分集数',
-        variant: 'success',
-      })
       globalMutate(['project', projectId])
+
+      const shouldAutoStart = splitConfigReady && !splitSettingsDirty
+      if (shouldAutoStart) {
+    setEpisodeGenerating(true)
+    setAssetGenerating(false)
+    await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: autoStoryboardAfterSplit })
+    toast({
+      title: '上传成功，已自动开始分集',
+      description: autoStoryboardAfterSplit ? '系统会继续自动衔接资源提取与分镜流程。' : '分集完成后可继续手动推进后续流程。',
+      variant: 'success',
+    })
+    if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()
+    mutateEpisodes()
+    mutateExtractAssets()
+    globalMutate(['project', projectId])
+    setTimeout(() => globalMutate(['project', projectId]), 1500)
+    setTimeout(() => globalMutate(['project', projectId]), 4000)
+    return
+  }
+
+    toast({
+      title: '上传成功，请选择模型后手动开始分集',
+      description: uploadedRecommendation ? `已推荐 ${uploadedRecommendation.count} 个分集，${uploadedRecommendation.reason}` : '可按需要手动填写目标分集数',
+      variant: 'success',
+    })
     } catch {
       toast({ title: '上传失败', variant: 'destructive' })
+    } finally {
+    setEpisodeGenerating(false)
     }
     if (fileRef.current) fileRef.current.value = ''
   }

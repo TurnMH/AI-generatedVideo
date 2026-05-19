@@ -119,6 +119,10 @@ func (s *EpisodeService) SetVideoService(baseURL string) {
 	s.videoBaseURL = strings.TrimRight(baseURL, "/")
 }
 
+func (s *EpisodeService) autoAssetPipelineReady() bool {
+	return s.characterBaseURL != "" && s.jwtSecret != ""
+}
+
 func (s *EpisodeService) buildServiceToken(projectID uint64) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	claims := map[string]interface{}{
@@ -151,7 +155,7 @@ type assetReference struct {
 }
 
 func (s *EpisodeService) deleteExistingAssets(ctx context.Context, projectID uint64) error {
-	if s.characterBaseURL == "" || s.jwtSecret == "" {
+	if !s.autoAssetPipelineReady() {
 		return nil
 	}
 	token, err := s.buildServiceToken(projectID)
@@ -176,7 +180,7 @@ func (s *EpisodeService) deleteExistingAssets(ctx context.Context, projectID uin
 }
 
 func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID, episodeID uint64) error {
-	if s.characterBaseURL == "" || s.jwtSecret == "" {
+	if !s.autoAssetPipelineReady() {
 		if s.logger != nil {
 			s.logger.Warn("skip episode asset extraction because character service is not configured",
 				zap.Uint64("project_id", projectID),
@@ -192,20 +196,53 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 		return err
 	}
 	url := fmt.Sprintf("%s/api/v1/projects/%d/assets/extract-episode/%d", s.characterBaseURL, projectID, episodeID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return err
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+		if reqErr != nil {
+			return reqErr
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, doErr := s.httpClient.Do(req)
+		if doErr != nil {
+			lastErr = doErr
+		} else {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode < http.StatusBadRequest {
+				lastErr = nil
+				break
+			}
+			lastErr = fmt.Errorf("extract episode assets failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+			if resp.StatusCode < http.StatusInternalServerError {
+				return lastErr
+			}
+		}
+
+		if attempt == maxAttempts {
+			break
+		}
+		backoff := time.Duration(attempt) * 2 * time.Second
+		if s.logger != nil {
+			s.logger.Warn("episode asset extraction dispatch failed; retrying",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("episode_id", episodeID),
+				zap.Int("attempt", attempt),
+				zap.Duration("backoff", backoff),
+				zap.Error(lastErr),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("extract episode assets failed: %s", strings.TrimSpace(string(body)))
+	if lastErr != nil {
+		return lastErr
 	}
 	if s.logger != nil {
 		s.logger.Info("triggered episode asset extraction",
@@ -218,7 +255,7 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 }
 
 func (s *EpisodeService) fetchAssetReferences(ctx context.Context, projectID uint64, episodeID *uint64) []assetReference {
-	if s.characterBaseURL == "" || s.jwtSecret == "" {
+	if !s.autoAssetPipelineReady() {
 		return nil
 	}
 	token, err := s.buildServiceToken(projectID)
@@ -1489,7 +1526,7 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 		message = fmt.Sprintf("自动处理提前结束（%d/%d 集），可手动继续资源与分镜", processedEpisodes, totalEpisodes)
 		phaseLabel = "自动处理已中断"
 		nextStep = "建议继续资源提取或从可用分集开始手动推进分镜"
-	} else if s.characterBaseURL != "" {
+	} else if s.autoAssetPipelineReady() {
 		finalStatus = "asset_generating"
 		message = fmt.Sprintf("剧本优化完成（%d/%d 集），资源与分镜正在后台继续", totalEpisodes, totalEpisodes)
 		phaseLabel = "资源与分镜正在后台继续"

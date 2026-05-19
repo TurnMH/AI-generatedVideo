@@ -26,6 +26,22 @@ ok()   { echo -e "\033[1;32m[ok]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[warn]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 
+render_docker_local_config() {
+  local source_file="$ROOT/config.local.yaml"
+  local output_file="$ROOT/config.docker.local.yaml"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    err "缺少 python3，无法生成 $output_file"
+  fi
+
+  if [ ! -f "$source_file" ]; then
+    err "缺少源配置：$source_file"
+  fi
+
+  log "生成 docker override 配置：$output_file"
+  python3 "$ROOT/scripts/render-docker-local-config.py" --source "$source_file" --output "$output_file"
+}
+
 rebuild_project_image() {
   local image="autovideo/project:${TAG}"
   local context="services/project-service"
@@ -37,6 +53,47 @@ rebuild_project_image() {
 
   log "显式重建 project 镜像（compose 为 image-only 服务）..."
   docker build -t "$image" "$context"
+}
+
+ensure_kafka_topics() {
+  local kafka_container="autovideo-kafka"
+  local -a topics=(
+    "storyboard.generate.request"
+    "storyboard.generate.result"
+    "script.analyze.request"
+    "script.analyze.result"
+    "script.quick_generate.request"
+    "script.quick_generate.result"
+    "asset.generate.request"
+    "asset.generate.result"
+    "image.generate.request"
+    "image.generate.result"
+    "video.generate.request"
+    "video.generate.result"
+    "music.generate.request"
+    "music.generate.result"
+    "task.completed"
+    "task.failed"
+    "task.progress"
+  )
+
+  log "等待 Kafka 就绪..."
+  until docker exec "$kafka_container" kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1; do
+    sleep 3
+  done
+  ok "Kafka ✓"
+
+  log "检查并创建必需的 Kafka topics..."
+  for topic in "${topics[@]}"; do
+    docker exec "$kafka_container" kafka-topics \
+      --bootstrap-server localhost:9092 \
+      --create \
+      --if-not-exists \
+      --topic "$topic" \
+      --partitions 1 \
+      --replication-factor 1 >/dev/null
+  done
+  ok "Kafka topics ✓"
 }
 
 # ── 检查 .env 文件 ────────────────────────────────────────────
@@ -56,6 +113,9 @@ log "使用配置：$ENV_FILE，镜像标签：$TAG"
 if ! command -v migrate >/dev/null 2>&1; then
   err "golang-migrate 未安装，终止部署"
 fi
+
+# ── 生成 docker override 配置，补齐运行时 LLM 密钥 ─────────────────────
+render_docker_local_config
 
 # ── 拉取最新代码（可选，CI 环境下通常已完成）──────────────────
 if [ "${CI:-false}" = "false" ]; then
@@ -77,6 +137,8 @@ fi
 # ── 启动/更新基础设施（幂等）────────────────────────────────────
 log "确保基础设施运行中..."
 docker compose -f "$COMPOSE_INFRA" --env-file "$ENV_FILE" up -d
+
+ensure_kafka_topics
 
 log "等待 PostgreSQL 就绪..."
 until docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -q 2>/dev/null; do

@@ -102,6 +102,7 @@ character-service:
     dsn: "host=postgres port=5432 user=postgres password=postgres dbname=character_db sslmode=disable TimeZone=Asia/Shanghai"
   image:
     base_url: "http://image:8005"
+    default_model: "doubao-seedream-4-0-250828"
   project_service:
     base_url: "http://project:8002"
 
