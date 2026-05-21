@@ -7,7 +7,7 @@ set -euo pipefail
 
 REMOTE_USER="root"
 REMOTE_HOST="47.236.188.141"
-REMOTE_PASS=''
+REMOTE_PASS='BsMD@!T8&8$$j#jJ'
 SSHPASS="/opt/homebrew/bin/sshpass"
 SSH_OPTS="-o ControlMaster=no -o ServerAliveInterval=30 -o StrictHostKeyChecking=no"
 REMOTE_ROOT="/home/autoVideo"
@@ -109,6 +109,12 @@ $SSHPASS -p "$REMOTE_PASS" rsync -az --delete -e "ssh $SSH_OPTS" \
   --exclude '.git' \
   --exclude '.DS_Store' \
   --exclude 'node_modules' \
+  --exclude 'web' \
+  --exclude 'web/**' \
+  --exclude 'web.staging' \
+  --exclude 'web.staging/**' \
+  --exclude 'web.previous' \
+  --exclude 'web.previous/**' \
   --exclude 'autoVideo/frontend/node_modules' \
   --exclude 'autoVideo/frontend/.next' \
   --exclude 'autoVideo/frontend/out' \

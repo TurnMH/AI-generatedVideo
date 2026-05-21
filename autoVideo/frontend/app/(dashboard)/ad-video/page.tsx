@@ -14,7 +14,6 @@ import {
   Repeat,
   RefreshCw,
   Sparkles,
-  Upload,
   Wand2,
 } from 'lucide-react'
 import { assetAPI, chatAPI, modelAPI, projectAPI, storageAPI, taskAPI, videoAPI } from '@/lib/api'
@@ -34,9 +33,15 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { AdAdvancedSettingsSection } from '@/components/ad-video/AdAdvancedSettingsSection'
+import { AdMarketGuidanceSection } from '@/components/ad-video/AdMarketGuidanceSection'
+import { AdMediaInputSection } from '@/components/ad-video/AdMediaInputSection'
+import { AdPrimaryActionsSection } from '@/components/ad-video/AdPrimaryActionsSection'
+import { AdReviewSection } from '@/components/ad-video/AdReviewSection'
 import { CurrentTaskPanel } from '@/components/ad-video/CurrentTaskPanel'
 import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel'
 import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
+import { StoryboardEditorSection } from '@/components/ad-video/StoryboardEditorSection'
 import { VIDEO_MOTION_OPTIONS, VIDEO_STYLE_PRESETS } from '@/lib/video-style-config'
 
 function parseLines(raw: string): string[] {
@@ -385,9 +390,16 @@ type AdGenerationTaskEntry = {
 type StoryboardPreviewItem = {
   index: number
   scene: string
+  sceneResolved: string
+  scenePlaceholder: string
   dialogue: string
+  dialogueResolved: string
+  dialoguePlaceholder: string
   referenceHint: string
+  referenceHintPlaceholder: string
   imageSource: string
+  hasDialogue: boolean
+  hasReferenceHint: boolean
 }
 
 type BrandVoiceTemplateKey = (typeof BRAND_VOICE_TEMPLATES)[number]['key']
@@ -422,6 +434,16 @@ function updateLineAtIndex(raw: string, index: number, nextValue: string): strin
   }
   lines[index] = nextValue
   return lines.join('\n')
+}
+
+function normalizeEditableLine(raw: string): string {
+  return String(raw || '')
+    .replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '')
+    .trim()
+}
+
+function countEditableSlots(lines: readonly string[]): number {
+  return lines.some((line) => normalizeEditableLine(line).length > 0) ? lines.length : 0
 }
 
 function distributeDialogues(lines: readonly string[], clipCount: number): string[] {
@@ -715,6 +737,9 @@ export default function AdVideoPage() {
 
 
   const imageUrls = useMemo(() => parseLines(imageUrlsText), [imageUrlsText])
+  const sceneDescriptionDraftLines = useMemo(() => splitEditableLines(sceneDescriptionsText), [sceneDescriptionsText])
+  const subtitleDraftLines = useMemo(() => splitEditableLines(subtitleText), [subtitleText])
+  const referenceImageHintDraftLines = useMemo(() => splitEditableLines(referenceImageHintsText), [referenceImageHintsText])
   const sceneDescriptions = useMemo(() => parseLines(sceneDescriptionsText), [sceneDescriptionsText])
   const subtitleLines = useMemo(() => splitSubtitleScript(subtitleText), [subtitleText])
   const referenceImageHints = useMemo(() => parseLines(referenceImageHintsText), [referenceImageHintsText])
@@ -783,49 +808,44 @@ export default function AdVideoPage() {
   const storyboardPreview = useMemo<StoryboardPreviewItem[]>(() => {
     const clipCount = Math.max(
       imageUrls.length,
-      sceneDescriptions.length,
-      subtitleLines.length,
-      referenceImageHints.length,
+      countEditableSlots(sceneDescriptionDraftLines),
+      countEditableSlots(subtitleDraftLines),
+      countEditableSlots(referenceImageHintDraftLines),
       selectedStoryboardTemplateMeta.sceneLines.length,
+      selectedStoryboardTemplateMeta.dialogueLines.length,
       selectedStoryboardTemplateMeta.referenceLines.length,
       localFiles.length,
       1,
     )
-    const fallbackSceneText = optimizedScript.trim() || adPrompt.trim()
-    const fallbackDialogueText = subtitleText.trim()
+    const fallbackSceneText = normalizeEditableLine(optimizedScript || adPrompt)
+    const fallbackDialogueText = normalizeEditableLine(subtitleText)
     return Array.from({ length: clipCount }, (_, index) => {
-      const scene = sceneDescriptions[index]
-        ?? sceneDescriptions[sceneDescriptions.length - 1]
-        ?? selectedStoryboardTemplateMeta.sceneLines[index]
-        ?? selectedStoryboardTemplateMeta.sceneLines[selectedStoryboardTemplateMeta.sceneLines.length - 1]
-        ?? fallbackSceneText
-        ?? ''
-      const dialogue = subtitleLines[index]
-        ?? subtitleLines[subtitleLines.length - 1]
-        ?? selectedStoryboardTemplateMeta.dialogueLines[index]
-        ?? selectedStoryboardTemplateMeta.dialogueLines[selectedStoryboardTemplateMeta.dialogueLines.length - 1]
-        ?? fallbackDialogueText
-        ?? ''
-      const referenceHint = referenceImageHints[index]
-        ?? referenceImageHints[referenceImageHints.length - 1]
-        ?? selectedStoryboardTemplateMeta.referenceLines[index]
-        ?? selectedStoryboardTemplateMeta.referenceLines[selectedStoryboardTemplateMeta.referenceLines.length - 1]
-        ?? ''
+      const scene = normalizeEditableLine(sceneDescriptionDraftLines[index] ?? '')
+      const scenePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.sceneLines[index] ?? '') || fallbackSceneText
+      const dialogue = normalizeEditableLine(subtitleDraftLines[index] ?? '')
+      const dialoguePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.dialogueLines[index] ?? '') || (index === 0 ? fallbackDialogueText : '')
+      const referenceHint = normalizeEditableLine(referenceImageHintDraftLines[index] ?? '')
+      const referenceHintPlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.referenceLines[index] ?? '')
       const imageSource = imageUrls[index]
         ?? localFiles[index]?.name
-        ?? imageUrls[imageUrls.length - 1]
-        ?? localFiles[localFiles.length - 1]?.name
         ?? '待补图片'
 
       return {
         index,
         scene,
+        sceneResolved: scene || scenePlaceholder,
+        scenePlaceholder,
         dialogue,
+        dialogueResolved: dialogue || dialoguePlaceholder,
+        dialoguePlaceholder,
         referenceHint,
+        referenceHintPlaceholder,
         imageSource,
+        hasDialogue: Boolean(dialogue),
+        hasReferenceHint: Boolean(referenceHint),
       }
     })
-  }, [adPrompt, imageUrls, localFiles, optimizedScript, referenceImageHints, sceneDescriptions, selectedStoryboardTemplateMeta, subtitleLines, subtitleText])
+  }, [adPrompt, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, subtitleDraftLines, subtitleText])
 
   const readChatReply = (payload: unknown): string => {
     const data = payload as {
@@ -845,10 +865,15 @@ export default function AdVideoPage() {
   }
 
   const normalizeReferenceHintLine = (text: string): string =>
-    text
-      .replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '')
+    String(text || '')
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)[0]
+      ?.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '')
       .replace(/^["'“”]+|["'“”]+$/g, '')
-      .trim()
+      .replace(/\s+/g, ' ')
+      .trim() ?? ''
 
   const buildReferenceHintPrompt = (shot: StoryboardPreviewItem, total: number) => [
     '你是广告分镜参考图提示词助手。',
@@ -862,8 +887,9 @@ export default function AdVideoPage() {
     `当前目标市场：${getTargetMarketLabel()}`,
     `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
     `镜头 ${shot.index + 1}/${total}`,
-    `分镜描述：${shot.scene || '暂无'}`,
-    `字幕 / 口播：${shot.dialogue || '暂无'}`,
+    `对应素材：${shot.imageSource || '暂无'}`,
+    `分镜描述：${shot.sceneResolved || '暂无'}`,
+    `字幕 / 口播：${shot.dialogueResolved || '暂无'}`,
     `现有参考提示：${shot.referenceHint || '暂无'}`,
   ].join('\n')
 
@@ -908,8 +934,9 @@ export default function AdVideoPage() {
         '',
         ...storyboardPreview.map((shot) => [
           `镜头 ${shot.index + 1}/${storyboardPreview.length}`,
-          `分镜描述：${shot.scene || '暂无'}`,
-          `字幕 / 口播：${shot.dialogue || '暂无'}`,
+          `对应素材：${shot.imageSource || '暂无'}`,
+          `分镜描述：${shot.sceneResolved || '暂无'}`,
+          `字幕 / 口播：${shot.dialogueResolved || '暂无'}`,
           `现有参考提示：${shot.referenceHint || '暂无'}`,
           '',
         ].join('\n')),
@@ -925,12 +952,15 @@ export default function AdVideoPage() {
         .filter(Boolean)
 
       if (replyLines.length === 0) throw new Error('AI 未返回有效参考图提示')
+      if (replyLines.length !== storyboardPreview.length) {
+        throw new Error(`AI 返回 ${replyLines.length} 条提示，与当前 ${storyboardPreview.length} 个镜头不一致`)
+      }
 
       setReferenceImageHintsText((prev) => {
         let next = prev
         storyboardPreview.forEach((shot, idx) => {
-          const fallback = replyLines[Math.min(idx, replyLines.length - 1)] ?? ''
-          if (fallback) next = updateLineAtIndex(next, shot.index, fallback)
+          const line = replyLines[idx] ?? ''
+          if (line) next = updateLineAtIndex(next, shot.index, line)
         })
         return next
       })
@@ -2757,628 +2787,107 @@ export default function AdVideoPage() {
             ) : null}
           </div>
 
-          <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-medium text-surface-800">市场 / 台词 / 导演备注</p>
-                <p className="text-xs text-surface-500">这些设置会进入文案优化、字幕烧录和视频生成提示词，直接影响市场匹配和口播一致性。</p>
-              </div>
-              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
-                指导式生成
-              </span>
-            </div>
+          <AdMarketGuidanceSection
+            targetMarketOptions={TARGET_MARKET_OPTIONS}
+            targetMarket={targetMarket}
+            onTargetMarketChange={setTargetMarket}
+            subtitleLanguageOptions={SUBTITLE_LANGUAGE_OPTIONS}
+            subtitleLanguage={subtitleLanguage}
+            onSubtitleLanguageChange={setSubtitleLanguage}
+            creativeModeOptions={CREATIVE_MODE_OPTIONS}
+            creativeMode={creativeMode}
+            onCreativeModeChange={setCreativeMode}
+            subtitleText={subtitleText}
+            onSubtitleTextChange={setSubtitleText}
+            subtitleLineCount={subtitleLines.length}
+            directorNote={directorNote}
+            onDirectorNoteChange={setDirectorNote}
+          />
 
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">目标市场</Label>
-                <Select value={targetMarket} onValueChange={setTargetMarket}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择市场" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TARGET_MARKET_OPTIONS.map((option) => (
-                      <SelectItem key={option.key} value={option.key}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <AdAdvancedSettingsSection
+            templates={AD_TEMPLATES}
+            selectedTemplate={selectedTemplate}
+            onSelectTemplate={applyTemplate}
+            availableVideoModels={availableVideoModels}
+            selectedVideoModel={selectedVideoModel}
+            onSelectVideoModel={setSelectedVideoModel}
+            styleOptions={VIDEO_STYLE_PRESETS}
+            selectedStylePreset={selectedStylePreset}
+            onSelectStylePreset={setSelectedStylePreset}
+            motionOptions={VIDEO_MOTION_OPTIONS}
+            selectedMotionMode={selectedMotionMode}
+            onSelectMotionMode={(value) => setSelectedMotionMode(value as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])}
+            clipDurationSec={clipDurationSec}
+            onClipDurationSecChange={setClipDurationSec}
+            selectedVideoMode={selectedVideoMode}
+            onSelectVideoMode={setSelectedVideoMode}
+            autoAvoidLowHourEnabled={autoAvoidLowHourEnabled}
+            onAutoAvoidLowHourEnabledChange={setAutoAvoidLowHourEnabled}
+            lowHourThreshold={lowHourThreshold}
+            onLowHourThresholdChange={setLowHourThreshold}
+            autoRetryEnabled={autoRetryEnabled}
+            onAutoRetryEnabledChange={setAutoRetryEnabled}
+          />
 
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">字幕语言</Label>
-                <Select value={subtitleLanguage} onValueChange={setSubtitleLanguage}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择字幕语言" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SUBTITLE_LANGUAGE_OPTIONS.map((option) => (
-                      <SelectItem key={option.key} value={option.key}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <AdMediaInputSection
+            imageUrlsText={imageUrlsText}
+            onImageUrlsTextChange={setImageUrlsText}
+            imageUrlCount={imageUrls.length}
+            sceneDescriptionsText={sceneDescriptionsText}
+            onSceneDescriptionsTextChange={setSceneDescriptionsText}
+            localFiles={localFiles}
+            onLocalFilesChange={handleLocalFiles}
+            enableLocalCompression={enableLocalCompression}
+            onEnableLocalCompressionChange={setEnableLocalCompression}
+            maxImageSide={maxImageSide}
+            onMaxImageSideChange={setMaxImageSide}
+            jpegQuality={jpegQuality}
+            onJpegQualityChange={setJpegQuality}
+            onRemoveLocalFile={removeLocalFile}
+          />
 
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">创意模式</Label>
-                <Select value={creativeMode} onValueChange={setCreativeMode}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择创意模式" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CREATIVE_MODE_OPTIONS.map((option) => (
-                      <SelectItem key={option.key} value={option.key}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="subtitle-text">字幕 / 口播台词</Label>
-                <Textarea
-                  id="subtitle-text"
-                  rows={7}
-                  placeholder="每行一句，生成时会自动分配到各镜头；支持中文、英文或中英双语。"
-                  value={subtitleText}
-                  onChange={(event) => setSubtitleText(event.target.value)}
-                />
-                <p className="text-xs text-surface-500">
-                  当前已识别 {subtitleLines.length} 条台词；生成时会同步进入字幕和支持原生音频的模型输入。
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="director-note">导演备注 / 禁止项</Label>
-                <Textarea
-                  id="director-note"
-                  rows={7}
-                  placeholder="例如：不要把品牌卖点改掉；前 5 秒必须交代市场利益点；字幕必须跟口播逐句对应。"
-                  value={directorNote}
-                  onChange={(event) => setDirectorNote(event.target.value)}
-                />
-                <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-600">
-                  当前市场约束会自动进入文案优化与视频生成提示词，避免导演式自动改写把市场带偏。
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
-            <div>
-              <p className="text-sm font-medium text-cyan-900">需要从已有视频提取文案？</p>
-              <p className="mt-1 text-xs text-cyan-700">可使用视频工具区，自动转写本地或在线视频的画面和解说，再复制回来使用。</p>
-            </div>
-            <Button asChild variant="outline" size="sm" className="h-8 border-cyan-200 text-cyan-800 hover:bg-cyan-100 hover:text-cyan-900">
-              <Link href="/tools/video">去工具区提取 &raquo;</Link>
-            </Button>
-          </div>
-
-
-          <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-medium text-surface-800">广告模板与高级参数</p>
-                <p className="text-xs text-surface-500">模板可快速套用投放场景，参数会直接影响最终视频生成质量与风格。</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {AD_TEMPLATES.map((template) => {
-                const active = selectedTemplate === template.key
-                return (
-                  <button
-                    key={template.key}
-                    type="button"
-                    onClick={() => applyTemplate(template.key)}
-                    className={[
-                      'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                      active
-                        ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                        : 'border-surface-200 bg-white text-surface-600 hover:border-cyan-200 hover:bg-cyan-50/40',
-                    ].join(' ')}
-                  >
-                    {template.label}
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              <div className="space-y-1 xl:col-span-2">
-                <Label className="text-xs text-surface-700">视频模型</Label>
-                <Select value={selectedVideoModel} onValueChange={setSelectedVideoModel}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择视频模型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableVideoModels.length > 0 ? (
-                      availableVideoModels.map((model) => (
-                        <SelectItem key={model.id} value={model.model_key}>
-                          {model.name}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="__no_model__" disabled>暂无可用模型</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">风格</Label>
-                <Select value={selectedStylePreset} onValueChange={setSelectedStylePreset}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择风格" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VIDEO_STYLE_PRESETS.map((style) => (
-                      <SelectItem key={style.key} value={style.key}>
-                        {style.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">运镜</Label>
-                <Select value={selectedMotionMode} onValueChange={(value) => setSelectedMotionMode(value as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择运镜" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VIDEO_MOTION_OPTIONS.map((motion) => (
-                      <SelectItem key={motion.key} value={motion.key}>
-                        {motion.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">片段时长（秒）</Label>
-                <Input
-                  type="number"
-                  min={2}
-                  max={10}
-                  value={clipDurationSec}
-                  onChange={(e) => setClipDurationSec(Number(e.target.value || 5))}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">生成模式</Label>
-                <Select value={selectedVideoMode} onValueChange={(value) => setSelectedVideoMode(value as 'frame_animation' | 'api_generation')}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="frame_animation">frame_animation</SelectItem>
-                    <SelectItem value="api_generation">api_generation</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="rounded-lg border border-surface-200 bg-surface-50 p-3 text-xs text-surface-600">
-                当前参数会用于：项目默认 storyboard_config + 本次 videoAPI.generate 请求。
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex items-center gap-2 text-xs text-surface-600">
-                <Switch checked={autoAvoidLowHourEnabled} onCheckedChange={setAutoAvoidLowHourEnabled} />
-                低成功率时段自动切换推荐/备选模型
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">低成功率阈值（%）</Label>
-                <Input
-                  type="number"
-                  min={20}
-                  max={95}
-                  value={lowHourThreshold}
-                  onChange={(e) => setLowHourThreshold(Number(e.target.value || 65))}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-xs text-surface-600">
-              <Switch checked={autoRetryEnabled} onCheckedChange={setAutoRetryEnabled} />
-              失败时自动切换备用模型重试（最多 1 次）
-            </div>
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="image-urls" className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4" />
-                指定图片 URL（每行一个）
-              </Label>
-              <Textarea
-                id="image-urls"
-                rows={8}
-                placeholder={'https://cdn.example.com/ad-shot-1.jpg\nhttps://cdn.example.com/ad-shot-2.jpg'}
-                value={imageUrlsText}
-                onChange={(e) => setImageUrlsText(e.target.value)}
+          <AdReviewSection
+            reviewReady={reviewReady}
+            reviewConfirmed={reviewConfirmed}
+            adReviewChecklist={adReviewChecklist}
+            blockingReviewItems={blockingReviewItems}
+            advisoryReviewItems={advisoryReviewItems}
+            onReviewConfirmedChange={setReviewConfirmed}
+            storyboardTemplates={STORYBOARD_TEMPLATES}
+            selectedStoryboardTemplate={selectedStoryboardTemplate}
+            selectedStoryboardTemplateMeta={selectedStoryboardTemplateMeta}
+            onSelectStoryboardTemplate={applyStoryboardTemplate}
+            brandVoiceTemplates={BRAND_VOICE_TEMPLATES}
+            selectedBrandVoiceTemplate={selectedBrandVoiceTemplate}
+            selectedBrandVoiceLabel={getBrandVoiceLabel()}
+            onSelectBrandVoiceTemplate={setSelectedBrandVoiceTemplate}
+            optimizedScript={optimizedScript}
+            adPrompt={adPrompt}
+            brandVoiceBrief={brandVoiceBrief}
+            brandVoiceNotesText={brandVoiceNotesText}
+            onBrandVoiceNotesTextChange={setBrandVoiceNotesText}
+            selectedBrandVoiceTemplateMeta={selectedBrandVoiceTemplateMeta}
+            storyboardEditor={(
+              <StoryboardEditorSection
+                storyboardPreview={storyboardPreview}
+                referenceHintGeneratingAll={referenceHintGeneratingAll}
+                referenceHintGeneratingIndex={referenceHintGeneratingIndex}
+                onFillAllReferenceHints={fillReferenceHintsForAll}
+                onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
+                onSceneChange={(index, value) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))}
+                onReferenceHintChange={(index, value) => setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))}
+                onDialogueChange={(index, value) => setSubtitleText((prev) => updateLineAtIndex(prev, index, value))}
               />
-              <p className="text-xs text-surface-500">已识别 {imageUrls.length} 张图片 URL</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="scene-lines">分镜描述（可选，每行对应一张图）</Label>
-              <Textarea
-                id="scene-lines"
-                rows={8}
-                placeholder={'开场特写：冰块与饮料碰撞，突出清凉感\n中景：年轻人聚会举杯，传达社交氛围'}
-                value={sceneDescriptionsText}
-                onChange={(e) => setSceneDescriptionsText(e.target.value)}
-              />
-              <p className="text-xs text-surface-500">
-                未填写时会默认使用广告文案作为场景描述。
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-surface-800">本地图片上传与处理</p>
-                <p className="text-xs text-surface-500">支持上传本地图后自动压缩并写入项目，再参与广告片段生成。</p>
-              </div>
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-xs font-medium text-surface-700 hover:bg-surface-100">
-                <Upload className="h-3.5 w-3.5" />
-                上传图片
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => handleLocalFiles(event.target.files)}
-                />
-              </label>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="flex items-center gap-2 text-xs text-surface-600">
-                <Switch checked={enableLocalCompression} onCheckedChange={setEnableLocalCompression} />
-                上传前压缩处理
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="max-side" className="text-xs text-surface-500">最长边（px）</Label>
-                <Input
-                  id="max-side"
-                  type="number"
-                  min={640}
-                  max={4096}
-                  value={maxImageSide}
-                  onChange={(e) => setMaxImageSide(Number(e.target.value || 1920))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="jpeg-quality" className="text-xs text-surface-500">JPEG 质量（1-100）</Label>
-                <Input
-                  id="jpeg-quality"
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={jpegQuality}
-                  onChange={(e) => setJpegQuality(Number(e.target.value || 88))}
-                />
-              </div>
-            </div>
-
-            {localFiles.length > 0 ? (
-              <div className="space-y-2">
-                <p className="text-xs text-surface-500">已添加 {localFiles.length} 张本地图片</p>
-                <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-surface-200 bg-surface-50 p-2">
-                  {localFiles.map((file, idx) => (
-                    <div key={`${file.name}-${idx}`} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1 text-xs">
-                      <span className="truncate text-surface-700">{file.name}</span>
-                      <button
-                        type="button"
-                        className="text-rose-500 hover:text-rose-600"
-                        onClick={() => removeLocalFile(idx)}
-                      >
-                        删除
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="space-y-4 rounded-xl border border-surface-200 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-medium text-surface-800">本地审核与分镜预览</p>
-                <p className="text-xs text-surface-500">先检查广告文案、素材、台词和分镜，再勾选确认后生成。编辑卡片会同步回上方文本区。</p>
-              </div>
-              <span className={[
-                'rounded-full border px-2.5 py-1 text-[11px] font-medium',
-                reviewReady
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : reviewConfirmed
-                    ? 'border-amber-200 bg-amber-50 text-amber-700'
-                    : 'border-surface-200 bg-surface-50 text-surface-600',
-              ].join(' ')}>
-                {reviewReady ? '已确认，可生成' : reviewConfirmed ? '等待补全项' : '等待审核确认'}
-              </span>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {adReviewChecklist.map((item) => (
-                <div
-                  key={item.key}
-                  className={[
-                    'rounded-xl border p-3',
-                    item.passed
-                      ? 'border-emerald-200 bg-emerald-50/60'
-                      : item.blocking
-                        ? 'border-rose-200 bg-rose-50/60'
-                        : 'border-amber-200 bg-amber-50/60',
-                  ].join(' ')}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-medium text-surface-800">{item.label}</p>
-                    <span className={[
-                      'rounded-full border px-2 py-0.5 text-[11px] font-medium',
-                      item.passed
-                        ? 'border-emerald-200 bg-white/80 text-emerald-700'
-                        : item.blocking
-                          ? 'border-rose-200 bg-white/80 text-rose-700'
-                          : 'border-amber-200 bg-white/80 text-amber-700',
-                    ].join(' ')}>
-                      {item.passed ? '通过' : item.blocking ? '缺失' : '待优化'}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs leading-5 text-surface-600">{item.detail}</p>
-                </div>
-              ))}
-            </div>
-
-            {blockingReviewItems.length > 0 ? (
-              <p className="text-xs text-rose-600">先补全：{blockingReviewItems.map((item) => item.label).join('、')}</p>
-            ) : advisoryReviewItems.length > 0 ? (
-              <p className="text-xs text-amber-600">建议先优化：{advisoryReviewItems.map((item) => item.label).join('、')}</p>
-            ) : (
-              <p className="text-xs text-emerald-600">当前审核项已满足，可以进入生成。</p>
             )}
+          />
 
-            <div className="flex items-start gap-3 rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
-              <Switch checked={reviewConfirmed} onCheckedChange={setReviewConfirmed} />
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-cyan-900">我已确认市场、台词和分镜无误</p>
-                <p className="text-xs text-cyan-700">勾选后才能提交生成；修改任意输入后会自动取消确认。</p>
-              </div>
-            </div>
-
-            <div className="space-y-3 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium text-cyan-900">分镜模板库</p>
-                  <p className="text-xs text-cyan-700">一键套用镜头结构、台词节奏和参考图提示，再在卡片里做局部微调。</p>
-                </div>
-                <span className="rounded-full border border-cyan-200 bg-white px-2.5 py-1 text-[11px] font-medium text-cyan-700">
-                  当前：{selectedStoryboardTemplateMeta.label}
-                </span>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {STORYBOARD_TEMPLATES.map((template) => {
-                  const active = selectedStoryboardTemplate === template.key
-                  return (
-                    <button
-                      key={template.key}
-                      type="button"
-                      onClick={() => applyStoryboardTemplate(template.key)}
-                      className={[
-                        'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                        active
-                          ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                          : 'border-surface-200 bg-white text-surface-600 hover:border-cyan-200 hover:bg-cyan-50/40',
-                      ].join(' ')}
-                    >
-                      {template.label}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="rounded-lg border border-cyan-100 bg-white px-3 py-3 text-xs text-cyan-700">
-                <p className="font-medium text-cyan-900">{selectedStoryboardTemplateMeta.label}</p>
-                <p className="mt-1 leading-5">{selectedStoryboardTemplateMeta.hint}</p>
-                <p className="mt-2 text-[11px] leading-5 text-cyan-600">
-                  场景建议 {selectedStoryboardTemplateMeta.sceneLines.length} 条 · 台词建议 {selectedStoryboardTemplateMeta.dialogueLines.length} 条 · 参考图建议 {selectedStoryboardTemplateMeta.referenceLines.length} 条
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3 rounded-xl border border-violet-100 bg-violet-50/40 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium text-violet-900">品牌语气模板</p>
-                  <p className="text-xs text-violet-700">模板会进入文案优化和视频生成提示词，并影响当前文案的表达方向。</p>
-                </div>
-                <span className="rounded-full border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-700">
-                  当前：{getBrandVoiceLabel()}
-                </span>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {BRAND_VOICE_TEMPLATES.map((template) => {
-                  const active = selectedBrandVoiceTemplate === template.key
-                  return (
-                    <button
-                      key={template.key}
-                      type="button"
-                      onClick={() => setSelectedBrandVoiceTemplate(template.key)}
-                      className={[
-                        'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                        active
-                          ? 'border-violet-300 bg-violet-50 text-violet-800'
-                          : 'border-surface-200 bg-white text-surface-600 hover:border-violet-200 hover:bg-violet-50/40',
-                      ].join(' ')}
-                    >
-                      {template.label}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-lg border border-surface-200 bg-white p-3">
-                  <p className="text-xs font-medium text-surface-700">切换前预览</p>
-                  <div className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-surface-600">
-                    {optimizedScript.trim() || adPrompt.trim() || '请先填写广告文案，以便对比品牌语气模板。'}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-violet-200 bg-white p-3">
-                  <p className="text-xs font-medium text-violet-800">切换后预览</p>
-                  <div className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-violet-700">
-                    {brandVoiceBrief}
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs text-violet-800">品牌语气补充说明</Label>
-                <Textarea
-                  rows={3}
-                  value={brandVoiceNotesText}
-                  onChange={(event) => setBrandVoiceNotesText(event.target.value)}
-                  placeholder="例如：更克制、更高级，不要太热闹；品牌口径要统一；避免过度促销腔。"
-                />
-                <p className="text-[11px] leading-5 text-violet-600">这里写更细的口吻要求，模板会保留，你可以只改局部表达。</p>
-              </div>
-
-              <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2 text-xs text-violet-700">
-                <p className="font-medium text-violet-900">{selectedBrandVoiceTemplateMeta.label}</p>
-                <p className="mt-1 leading-5">{selectedBrandVoiceTemplateMeta.hint}</p>
-                <p className="mt-2 text-[11px] leading-5 text-violet-600">{selectedBrandVoiceTemplateMeta.contrast}</p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium text-surface-800">分镜可视化编辑</p>
-                  <p className="text-xs text-surface-500">每张卡片都对应一段镜头，修改会同步回上方分镜描述和字幕文本。</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
-                    {storyboardPreview.length} 个镜头
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={fillReferenceHintsForAll}
-                    disabled={referenceHintGeneratingAll || referenceHintGeneratingIndex !== null || storyboardPreview.length === 0}
-                    className="h-8 gap-2 border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
-                  >
-                    {referenceHintGeneratingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    AI 补全全部参考图
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-2">
-                {storyboardPreview.map((shot) => (
-                  <div key={shot.index} className="rounded-2xl border border-surface-200 bg-surface-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.2em] text-surface-500">镜头 {shot.index + 1}</p>
-                        <p className="mt-1 text-sm font-medium text-surface-800">{shot.imageSource}</p>
-                      </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
-                          {shot.dialogue ? '台词已填' : '待补台词'}
-                        </span>
-                        <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
-                          {shot.referenceHint ? '参考图已填' : '待补参考图'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-surface-700">分镜描述</Label>
-                        <Textarea
-                          rows={3}
-                          value={shot.scene}
-                          onChange={(event) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <Label className="text-xs text-surface-700">镜头参考图</Label>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => fillReferenceHintAtIndex(shot)}
-                            disabled={referenceHintGeneratingAll || referenceHintGeneratingIndex === shot.index}
-                            className="h-7 gap-1 px-2 text-[11px] text-cyan-700 hover:bg-cyan-50 hover:text-cyan-900"
-                          >
-                            {referenceHintGeneratingIndex === shot.index ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Sparkles className="h-3 w-3" />
-                            )}
-                            AI 补全
-                          </Button>
-                        </div>
-                        <Input
-                          value={shot.referenceHint}
-                          placeholder={selectedStoryboardTemplateMeta.referenceLines[shot.index] ?? selectedStoryboardTemplateMeta.referenceLines[selectedStoryboardTemplateMeta.referenceLines.length - 1] ?? '例如：白底产品特写 / 手持使用场景'}
-                          onChange={(event) => setReferenceImageHintsText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
-                        />
-                        <p className="text-[11px] leading-5 text-surface-500">可填参考图风格、构图、主体或检索关键词，不需要真实上传图片。</p>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-surface-700">字幕 / 口播</Label>
-                        <Textarea
-                          rows={3}
-                          value={shot.dialogue}
-                          onChange={(event) => setSubtitleText((prev) => updateLineAtIndex(prev, shot.index, event.target.value))}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Button
-              type="button"
-              onClick={handleCreateFromText}
-              disabled={creatingByText || creatingByImages}
-              className="h-11 gap-2"
-            >
-              {creatingByText ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              保存草稿并继续编辑
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleGenerateByImages}
-              disabled={creatingByImages || creatingByText || !reviewReady}
-              className="h-11 gap-2 border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
-            >
-              {creatingByImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              审核通过后异步生成
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
+          <AdPrimaryActionsSection
+            creatingByText={creatingByText}
+            creatingByImages={creatingByImages}
+            reviewReady={reviewReady}
+            onCreateFromText={handleCreateFromText}
+            onGenerateByImages={handleGenerateByImages}
+          />
 
           <GenerationQueuePanel
             generationTasks={generationTasks}

@@ -167,6 +167,7 @@ type quickGenerateTaskMsg struct {
 		Requirements    string `json:"requirements"`
 		TargetWords     int    `json:"target_words"`
 		ChapterCount    int    `json:"chapter_count"`
+		ModelName       string `json:"model_name"`
 	} `json:"payload"`
 }
 
@@ -243,6 +244,7 @@ func (s *kafkaService) StartQuickGenerateConsumer(ctx context.Context, llmClient
 				Requirements:    p.Requirements,
 				TargetWords:     p.TargetWords,
 				ChapterCount:    p.ChapterCount,
+				ModelName:       p.ModelName,
 			})
 			llmCancel()
 

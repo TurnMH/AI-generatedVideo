@@ -27,11 +27,16 @@ warn() { echo -e "\033[1;33m[warn]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 
 render_docker_local_config() {
-  local source_file="$ROOT/config.local.yaml"
-  local output_file="$ROOT/config.docker.local.yaml"
+  local source_file="${AUTOVIDEO_CONFIG_SOURCE_FILE:-$ROOT/config.local.yaml}"
+  local output_file="${AUTOVIDEO_CONFIG_OUTPUT_FILE:-$ROOT/config.docker.local.yaml}"
+  local python_bin="${AUTOVIDEO_PYTHON:-python3}"
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    err "缺少 python3，无法生成 $output_file"
+  if ! command -v "$python_bin" >/dev/null 2>&1; then
+    err "缺少 $python_bin，无法生成 $output_file"
+  fi
+
+  if ! "$python_bin" -c 'import yaml' >/dev/null 2>&1; then
+    err "$python_bin 缺少 PyYAML，无法生成 $output_file"
   fi
 
   if [ ! -f "$source_file" ]; then
@@ -39,7 +44,159 @@ render_docker_local_config() {
   fi
 
   log "生成 docker override 配置：$output_file"
-  python3 "$ROOT/scripts/render-docker-local-config.py" --source "$source_file" --output "$output_file"
+  "$python_bin" - "$source_file" "$output_file" <<'PY'
+import copy
+import sys
+from pathlib import Path
+
+import yaml
+
+
+REQUIRED_PATHS = [
+  ("image-service", "models", "openai_base"),
+  ("image-service", "models", "openai_keys"),
+  ("video-service", "models"),
+  ("video-service", "ffmpeg"),
+  ("video-service", "concurrency"),
+  ("storage-service", "storage", "cdn_base_url"),
+  ("project-service", "llm", "base_url"),
+  ("project-service", "llm", "api_key"),
+  ("project-service", "llm", "model"),
+  ("character-service", "llm", "base_url"),
+  ("character-service", "llm", "api_key"),
+  ("character-service", "llm", "model"),
+  ("script-service", "llm", "openai", "base_url"),
+  ("script-service", "llm", "openai", "api_key"),
+  ("script-service", "llm", "openai", "model"),
+]
+
+
+def read_yaml(path: Path) -> dict:
+  try:
+    with path.open("r", encoding="utf-8") as handle:
+      data = yaml.safe_load(handle)
+  except FileNotFoundError:
+    raise SystemExit(f"source config not found: {path}")
+  except yaml.YAMLError as exc:
+    raise SystemExit(f"failed to parse yaml from {path}: {exc}")
+  if data is None:
+    return {}
+  if not isinstance(data, dict):
+    raise SystemExit(f"unexpected yaml root in {path}: expected mapping")
+  return data
+
+
+def get_nested(data: dict, path: tuple[str, ...]):
+  node = data
+  for part in path:
+    if not isinstance(node, dict) or part not in node:
+      return None
+    node = node[part]
+  return node
+
+
+def pick_sections(source: dict) -> dict:
+  override: dict[str, dict] = {}
+
+  selection_map: dict[str, tuple[str, ...]] = {
+    "project-service": ("llm", "concurrency"),
+    "script-service": ("llm",),
+    "character-service": ("llm", "gemini", "claude", "qwen", "zhipu", "concurrency"),
+    "image-service": ("models",),
+    "video-service": ("models", "ffmpeg", "concurrency"),
+    "storage-service": ("storage",),
+  }
+
+  for service_name, keys in selection_map.items():
+    service_source = source.get(service_name)
+    if not isinstance(service_source, dict):
+      continue
+
+    service_override: dict[str, object] = {}
+    for key in keys:
+      value = service_source.get(key)
+      if value is not None:
+        service_override[key] = copy.deepcopy(value)
+
+    if service_override:
+      override[service_name] = service_override
+
+  root_llm: dict[str, object] = {}
+  project_llm = source.get("project-service", {}).get("llm") if isinstance(source.get("project-service"), dict) else None
+  script_llm = source.get("script-service", {}).get("llm") if isinstance(source.get("script-service"), dict) else None
+  character_llm = source.get("character-service", {}).get("llm") if isinstance(source.get("character-service"), dict) else None
+
+  if isinstance(script_llm, dict):
+    for key in ("provider",):
+      value = script_llm.get(key)
+      if value is not None:
+        root_llm[key] = copy.deepcopy(value)
+    for key in ("openai", "claude", "qwen", "zhipu"):
+      value = script_llm.get(key)
+      if value is not None:
+        root_llm[key] = copy.deepcopy(value)
+
+  if isinstance(project_llm, dict):
+    for key in ("base_url", "api_key", "model", "timeout", "fallback_base_url", "fallback_api_key", "fallback_model"):
+      value = project_llm.get(key)
+      if value is not None:
+        root_llm[key] = copy.deepcopy(value)
+
+  if isinstance(character_llm, dict):
+    for key in ("base_url", "api_key", "model", "vision_model", "timeout"):
+      value = character_llm.get(key)
+      if value is not None:
+        root_llm[key] = copy.deepcopy(value)
+
+  if root_llm:
+    override["llm"] = root_llm
+
+  character_concurrency = source.get("character-service", {}).get("concurrency") if isinstance(source.get("character-service"), dict) else None
+  if isinstance(character_concurrency, dict) and character_concurrency:
+    override["concurrency"] = copy.deepcopy(character_concurrency)
+
+  character_image = source.get("character-service", {}).get("image") if isinstance(source.get("character-service"), dict) else None
+  default_model = character_image.get("default_model") if isinstance(character_image, dict) else None
+  if isinstance(default_model, str) and default_model.strip():
+    service_override = override.setdefault("character-service", {})
+    image_override = service_override.setdefault("image", {})
+    image_override["default_model"] = default_model.strip()
+
+  return override
+
+
+def validate_required_values(source: dict) -> None:
+  missing: list[str] = []
+  for path in REQUIRED_PATHS:
+    value = get_nested(source, path)
+    if value is None:
+      missing.append(".".join(path))
+      continue
+    if isinstance(value, str) and not value.strip():
+      missing.append(".".join(path))
+      continue
+    if isinstance(value, (list, tuple, dict)) and len(value) == 0:
+      missing.append(".".join(path))
+  if missing:
+    joined = ", ".join(missing)
+    raise SystemExit(f"missing required runtime LLM values in config.local.yaml: {joined}")
+
+
+source_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+source = read_yaml(source_path)
+validate_required_values(source)
+override = pick_sections(source)
+
+if not override:
+  raise SystemExit("no override sections were selected from config.local.yaml")
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+with output_path.open("w", encoding="utf-8") as handle:
+  yaml.safe_dump(override, handle, sort_keys=False, allow_unicode=True, default_flow_style=False)
+
+print(f"rendered {output_path} from {source_path}")
+PY
 }
 
 rebuild_project_image() {
@@ -95,6 +252,10 @@ ensure_kafka_topics() {
   done
   ok "Kafka topics ✓"
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 # ── 检查 .env 文件 ────────────────────────────────────────────
 ENV_FILE="infra/.env.${ENV}"

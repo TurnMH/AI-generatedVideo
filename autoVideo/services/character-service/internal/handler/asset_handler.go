@@ -33,6 +33,23 @@ type AssetHandler struct {
 	geminiModel  string
 }
 
+type geminiChannel struct {
+	base string
+	key  string
+}
+
+type geminiMessage struct {
+	Role    string
+	Content string
+}
+
+type geminiOutputPart struct {
+	Type     string `json:"type"`               // "text" | "image"
+	Text     string `json:"text,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	Data     string `json:"data,omitempty"`     // base64
+}
+
 // NewAssetHandler —— 创建资产处理器实例，返回 *AssetHandler
 func NewAssetHandler(svc *service.AssetService, extractSvc *service.ExtractService, logger *zap.Logger) *AssetHandler {
 	return &AssetHandler{svc: svc, extractSvc: extractSvc, logger: logger, extractSem: make(chan struct{}, maxConcurrentEpisodeExtractions)}
@@ -43,6 +60,155 @@ func (h *AssetHandler) SetGemini(bases, keys []string, model string) {
 	h.geminiBases = bases
 	h.geminiKeys = keys
 	h.geminiModel = model
+}
+
+func buildGeminiChannels(bases, keys []string) []geminiChannel {
+	channels := make([]geminiChannel, 0, len(keys))
+	for i, key := range keys {
+		if key == "" {
+			continue
+		}
+		base := ""
+		if i < len(bases) {
+			base = bases[i]
+		} else if len(bases) > 0 {
+			base = bases[len(bases)-1]
+		}
+		base = normalizeGeminiBase(base)
+		if base == "" {
+			base = "https://generativelanguage.googleapis.com"
+		}
+		channels = append(channels, geminiChannel{base: base, key: key})
+	}
+	return channels
+}
+
+func normalizeGeminiBase(base string) string {
+	base = strings.TrimSpace(strings.TrimRight(base, "/"))
+	switch {
+	case strings.HasSuffix(base, "/v1beta"):
+		base = strings.TrimSuffix(base, "/v1beta")
+	case strings.HasSuffix(base, "/v1"):
+		base = strings.TrimSuffix(base, "/v1")
+	}
+	return strings.TrimRight(base, "/")
+}
+
+func fetchGeminiPartsFromChannel(ctx context.Context, client *http.Client, channel geminiChannel, model string, messages []geminiMessage) ([]geminiOutputPart, error) {
+	type geminiPart struct {
+		Text string `json:"text"`
+	}
+	type geminiContent struct {
+		Role  string       `json:"role"`
+		Parts []geminiPart `json:"parts"`
+	}
+	type generationConfig struct {
+		ResponseModalities []string `json:"responseModalities"`
+	}
+	type geminiReq struct {
+		Contents         []geminiContent `json:"contents"`
+		GenerationConfig generationConfig `json:"generationConfig"`
+	}
+
+	contents := make([]geminiContent, 0, len(messages))
+	for _, m := range messages {
+		role := m.Role
+		if role == "assistant" {
+			role = "model"
+		}
+		if role != "user" && role != "model" {
+			continue
+		}
+		contents = append(contents, geminiContent{
+			Role:  role,
+			Parts: []geminiPart{{Text: m.Content}},
+		})
+	}
+
+	body, err := json.Marshal(geminiReq{
+		Contents: contents,
+		GenerationConfig: generationConfig{
+			ResponseModalities: []string{"TEXT", "IMAGE"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request failed: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", channel.base, model, channel.key)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request failed: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+			return nil, fmt.Errorf("Gemini 响应超时，请稍后重试")
+		}
+		return nil, fmt.Errorf("gemini call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var geminiResp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text       string `json:"text"`
+					InlineData *struct {
+						MimeType string `json:"mimeType"`
+						Data     string `json:"data"` // base64
+					} `json:"inlineData"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
+		return nil, fmt.Errorf("parse gemini response failed: %w", err)
+	}
+	if geminiResp.Error != nil {
+		return nil, fmt.Errorf("%s", geminiResp.Error.Message)
+	}
+	if len(geminiResp.Candidates) == 0 {
+		return nil, fmt.Errorf("gemini returned no candidates")
+	}
+
+	parts := make([]geminiOutputPart, 0, len(geminiResp.Candidates[0].Content.Parts))
+	for _, p := range geminiResp.Candidates[0].Content.Parts {
+		if p.InlineData != nil {
+			parts = append(parts, geminiOutputPart{Type: "image", MimeType: p.InlineData.MimeType, Data: p.InlineData.Data})
+		} else if p.Text != "" {
+			parts = append(parts, geminiOutputPart{Type: "text", Text: p.Text})
+		}
+	}
+	return parts, nil
+}
+
+func fetchGeminiPartsFromChannels(ctx context.Context, client *http.Client, channels []geminiChannel, model string, messages []geminiMessage, logger *zap.Logger) ([]geminiOutputPart, error) {
+	var lastErr error
+	for _, channel := range channels {
+		parts, err := fetchGeminiPartsFromChannel(ctx, client, channel, model, messages)
+		if err == nil {
+			return parts, nil
+		}
+		lastErr = err
+		if logger != nil {
+			logger.Warn("gemini channel failed", zap.String("base", channel.base), zap.Error(err))
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no Gemini channels configured")
+	}
+	return nil, lastErr
 }
 
 // ListAssets —— 获取项目下的资产列表，支持按类型、状态筛选和分页
@@ -575,7 +741,8 @@ func (h *AssetHandler) ChatFree(c *gin.Context) {
 // ChatGemini —— 调用 Gemini 多模态接口，支持同时输出文本和图片（TEXT+IMAGE）
 // ChatGemini POST /api/v1/chat/gemini
 func (h *AssetHandler) ChatGemini(c *gin.Context) {
-	if len(h.geminiBases) == 0 || len(h.geminiKeys) == 0 {
+	channels := buildGeminiChannels(h.geminiBases, h.geminiKeys)
+	if len(channels) == 0 {
 		response.Error(c, http.StatusServiceUnavailable, "Gemini 渠道未配置")
 		return
 	}
@@ -595,127 +762,26 @@ func (h *AssetHandler) ChatGemini(c *gin.Context) {
 		return
 	}
 
-	// Pick first available base+key
-	base := strings.TrimRight(h.geminiBases[0], "/")
-	apiKey := h.geminiKeys[0]
 	model := h.geminiModel
 	if model == "" {
 		model = "gemini-2.0-flash-exp"
 	}
-
-	// Build Gemini generateContent request
-	type geminiPart struct {
-		Text string `json:"text"`
-	}
-	type geminiContent struct {
-		Role  string       `json:"role"`
-		Parts []geminiPart `json:"parts"`
-	}
-	type generationConfig struct {
-		ResponseModalities []string `json:"responseModalities"`
-	}
-	type geminiReq struct {
-		Contents         []geminiContent  `json:"contents"`
-		GenerationConfig generationConfig `json:"generationConfig"`
-	}
-
-	var contents []geminiContent
+	messages := make([]geminiMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
-		role := m.Role
-		if role == "assistant" {
-			role = "model"
-		}
-		if role != "user" && role != "model" {
-			continue // skip system for now
-		}
-		contents = append(contents, geminiContent{
-			Role:  role,
-			Parts: []geminiPart{{Text: m.Content}},
-		})
+		messages = append(messages, geminiMessage{Role: m.Role, Content: m.Content})
 	}
 
-	body, err := json.Marshal(geminiReq{
-		Contents: contents,
-		GenerationConfig: generationConfig{
-			ResponseModalities: []string{"TEXT", "IMAGE"},
-		},
-	})
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "marshal request failed")
-		return
-	}
-
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", base, model, apiKey)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	parts, err := fetchGeminiPartsFromChannels(ctx, &http.Client{Timeout: 90 * time.Second}, channels, model, messages, h.logger)
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := (&http.Client{Timeout: 90 * time.Second}).Do(httpReq)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "超时") {
 			response.Error(c, http.StatusGatewayTimeout, "Gemini 响应超时，请稍后重试")
 			return
 		}
-		response.Error(c, http.StatusInternalServerError, fmt.Sprintf("gemini call: %s", err.Error()))
+		response.Error(c, http.StatusBadGateway, err.Error())
 		return
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		response.Error(c, http.StatusBadGateway, fmt.Sprintf("gemini error %d: %s", resp.StatusCode, string(respBody)))
-		return
-	}
-
-	// Parse response — parts can be text or inlineData (base64 image)
-	var geminiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text       string `json:"text"`
-					InlineData *struct {
-						MimeType string `json:"mimeType"`
-						Data     string `json:"data"` // base64
-					} `json:"inlineData"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
-		response.Error(c, http.StatusInternalServerError, "parse gemini response failed")
-		return
-	}
-	if geminiResp.Error != nil {
-		response.Error(c, http.StatusBadGateway, geminiResp.Error.Message)
-		return
-	}
-	if len(geminiResp.Candidates) == 0 {
-		response.Error(c, http.StatusBadGateway, "gemini returned no candidates")
-		return
-	}
-
-	type OutputPart struct {
-		Type     string `json:"type"`               // "text" | "image"
-		Text     string `json:"text,omitempty"`
-		MimeType string `json:"mime_type,omitempty"`
-		Data     string `json:"data,omitempty"`     // base64
-	}
-	var parts []OutputPart
-	for _, p := range geminiResp.Candidates[0].Content.Parts {
-		if p.InlineData != nil {
-			parts = append(parts, OutputPart{Type: "image", MimeType: p.InlineData.MimeType, Data: p.InlineData.Data})
-		} else if p.Text != "" {
-			parts = append(parts, OutputPart{Type: "text", Text: p.Text})
-		}
 	}
 	response.Success(c, gin.H{"parts": parts})
 }

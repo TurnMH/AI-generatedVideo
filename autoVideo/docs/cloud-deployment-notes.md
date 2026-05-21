@@ -94,7 +94,7 @@
 - 任一服务迁移执行失败时，直接终止部署
 - 只有 `no change` 会被视为“已经是最新版本”并继续执行
 
-同时，线上 docker 部署会在启动前自动从 `config.local.yaml` 生成 `config.docker.local.yaml`，只提取 `project-service.llm`、`script-service.llm`、`character-service.llm`、`character-service.gemini`、`character-service.claude`、`character-service.qwen`、`character-service.zhipu`，以及 `character-service.concurrency` 这几类运行时覆盖项。这样可以避免 docker 默认值把这些密钥配置漏掉；如果源配置里缺少关键 LLM 值，部署会直接失败，而不会让一个“能启动但提取必然失败”的环境进入线上。
+同时，线上 docker 部署会在启动前自动从 `config.local.yaml` 生成 `config.docker.local.yaml`，只提取 `project-service.llm`、`project-service.concurrency`、`script-service.llm`、`character-service.llm`、`character-service.gemini`、`character-service.claude`、`character-service.qwen`、`character-service.zhipu`、`character-service.concurrency`，以及 `video-service.models`、`video-service.ffmpeg`、`video-service.concurrency` 这几类运行时覆盖项。这样可以避免 docker 默认值把这些密钥和视频生成器配置漏掉；如果源配置里缺少关键值，部署会直接失败，而不会让一个“能启动但视频参数为空”的环境进入线上。
 
 ---
 

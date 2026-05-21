@@ -625,6 +625,19 @@ export interface DubbingTask {
   updated_at: string
 }
 
+export interface DubbingTaskResponse {
+  code: number
+  data: DubbingTask
+}
+
+export interface DubbingTaskCreateResponse {
+  code: number
+  data: {
+    message?: string
+    task_id?: number
+  }
+}
+
 export const dubbingAPI = {
   generate: (
     projectId: number,
@@ -633,7 +646,7 @@ export const dubbingAPI = {
     voiceModel?: string,
     options?: { voice_rate?: string; voice_pitch?: string; voice_volume?: string }
   ) =>
-    api.post(`/api/v1/projects/${projectId}/dubbing/generate`, {
+    api.post<DubbingTaskCreateResponse>(`/api/v1/projects/${projectId}/dubbing/generate`, {
       episode_id: episodeId,
       text,
       voice_model: voiceModel || 'default',
@@ -683,7 +696,7 @@ export const dubbingAPI = {
   listTasks: (projectId: number) =>
     api.get<{ code: number; data: DubbingTask[] }>(`/api/v1/projects/${projectId}/dubbing/tasks`),
   getTask: (projectId: number, taskId: number) =>
-    api.get<{ code: number; data: DubbingTask }>(`/api/v1/projects/${projectId}/dubbing/tasks/${taskId}`),
+    api.get<DubbingTaskResponse>(`/api/v1/projects/${projectId}/dubbing/tasks/${taskId}`),
   retryTask: (projectId: number, taskId: number, text?: string) =>
     api.post(`/api/v1/projects/${projectId}/dubbing/tasks/${taskId}/retry`, text ? { text } : {}),
   retryTasksBatch: (

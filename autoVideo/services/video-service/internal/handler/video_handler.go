@@ -92,6 +92,8 @@ type generateReq struct {
 	SceneDescription  string             `json:"scene_description"`
 	RenderConfig      model.RenderConfig `json:"render_config"`
 	ClipDurationSec   float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
+	SerialScene       bool               `json:"serial_scene"`
+	SceneGroupKeys    []string           `json:"scene_group_keys"`
 }
 
 type extractVideoContentReq struct {
@@ -106,6 +108,10 @@ type extractVideoContentReq struct {
 func (h *VideoHandler) Generate(c *gin.Context) {
 	var req generateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if err := validateSerialScenePayload(req.ImageURLs, req.SceneGroupKeys, req.SerialScene); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -159,6 +165,8 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 		RenderConfig:     req.RenderConfig,
 		DurationSec:      req.ClipDurationSec,
 		Status:           model.StatusPending,
+		SerialScene:      req.SerialScene,
+		SceneGroupKeys:   model.StringArray(req.SceneGroupKeys),
 	}
 
 	ctx := c.Request.Context()
@@ -458,11 +466,15 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 	if req.RenderConfig == nil {
 		req.RenderConfig = model.RenderConfig{}
 	}
+	req.RenderConfig = normalizeRenderConfig(req.RenderConfig)
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
 	}
 	if len(req.Dialogues) > 0 {
 		req.RenderConfig["dialogues"] = req.Dialogues
+		if strings.TrimSpace(req.SubtitleText) == "" {
+			req.SubtitleText = strings.Join(req.Dialogues, "\n")
+		}
 	}
 	if len(req.Durations) > 0 {
 		req.RenderConfig["durations"] = req.Durations
@@ -706,6 +718,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 			UserID:           userID,
 			ImageURLs:        model.StringArray(ep.ImageURLs),
 			AudioURL:         ep.AudioURL,
+			SubtitleText:     strings.Join(ep.Dialogues, "\n"),
 			StylePreset:      setDefault(req.StylePreset, "anime-2d"),
 			MotionMode:       setDefault(req.MotionMode, "gentle"),
 			ModelName:        setDefault(req.ModelName, "kling"),
