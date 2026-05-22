@@ -39,6 +39,7 @@ import { AdMediaInputSection } from '@/components/ad-video/AdMediaInputSection'
 import { AdPrimaryActionsSection } from '@/components/ad-video/AdPrimaryActionsSection'
 import { AdReviewSection } from '@/components/ad-video/AdReviewSection'
 import { CurrentTaskPanel } from '@/components/ad-video/CurrentTaskPanel'
+import { FourStepWorkbench } from '@/components/ad-video/FourStepWorkbench'
 import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel'
 import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
 import { StoryboardEditorSection } from '@/components/ad-video/StoryboardEditorSection'
@@ -1405,6 +1406,73 @@ export default function AdVideoPage() {
             ? '你可以先检查分镜提示词和图片预览，再决定是否生成图片。'
             : '准备项目会先创建项目、脚本和素材上下文。'
 
+  const fourStepItems = [
+    {
+      key: 'prepare',
+      stepNo: 1,
+      title: '准备项目',
+      status: (taskStatus === 'failed' && !projectReady) ? 'failed' as const : projectReady ? 'done' as const : preparingProject ? 'active' as const : 'todo' as const,
+      summary: projectReady
+        ? `项目 ${activeProjectId} 已准备好，脚本和素材上下文已就位。`
+        : '先创建项目、上传脚本，并把当前图片素材整理进项目上下文。',
+      nextAction: projectReady ? '这一步完成后，下一步是手动生成图片。' : prepareProjectHint,
+      artifact: projectReady
+        ? `项目ID ${activeProjectId} · ${lastGenerationContext?.projectTitle || '已建立项目上下文'}`
+        : '尚未创建项目',
+    },
+    {
+      key: 'storyboard',
+      stepNo: 2,
+      title: '生成图片',
+      status: (taskStatus === 'failed' && !storyboardReady && projectReady) ? 'failed' as const : storyboardReady ? 'done' as const : (creatingByImages || storyboardGenerating) ? 'active' as const : 'todo' as const,
+      summary: storyboardReady
+        ? '分镜图片阶段已触发。你可以先检查分镜图/提示词，再决定是否继续。'
+        : '这一阶段只负责分镜图片，不会自动提交视频任务。',
+      nextAction: storyboardReady ? '图片阶段完成后，由你手动决定何时生成视频。' : generateStoryboardHint,
+      artifact: storyboardReady
+        ? `已触发时间 ${storyboardGeneratedAt ? new Date(storyboardGeneratedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '已记录'} · 镜头 ${storyboardPreview.length} 个`
+        : `待生成 · 当前图片 URL ${imageUrls.length} 张 / 本地图片 ${localFiles.length} 张`,
+    },
+    {
+      key: 'video',
+      stepNo: 3,
+      title: '生成视频',
+      status: taskStatus === 'failed' && (taskError.includes('视频') || taskError.includes('提交') || taskError.includes('启动生成'))
+        ? 'failed' as const
+        : videoReady
+          ? (taskStatus === 'pending' || taskStatus === 'processing' ? 'active' as const : 'done' as const)
+          : submittingVideo
+            ? 'active' as const
+            : 'todo' as const,
+      summary: activeTaskId
+        ? `视频任务 #${activeTaskId} 已创建${taskClipProgress.total > 0 ? `，片段 ${taskClipProgress.done}/${taskClipProgress.total}` : ''}。`
+        : '视频任务与图片阶段完全分开，只有你手动点击后才会提交。',
+      nextAction: activeTaskId ? '如果任务已创建，接下来由你手动决定何时点击合成。' : generateVideoHint,
+      artifact: activeTaskId
+        ? `任务ID ${activeTaskId} · 状态 ${taskStatus}`
+        : `待提交 · 视频模型 ${selectedVideoModel || '系统默认'}`,
+    },
+    {
+      key: 'compose',
+      stepNo: 4,
+      title: '手动合成',
+      status: taskStatus === 'failed' && taskError.includes('合成')
+        ? 'failed' as const
+        : taskStatus === 'succeeded'
+          ? 'done' as const
+          : composingVideo
+            ? 'active' as const
+            : 'todo' as const,
+      summary: taskStatus === 'succeeded'
+        ? '合成完成，已经拿到可预览/下载的成片输出。'
+        : '最后一步只在你手动点击后才会执行，不会自动触发。',
+      nextAction: taskStatus === 'succeeded' ? '现在可以预览、下载，或重新调整前面某一步。' : composeVideoHint,
+      artifact: taskOutputUrl
+        ? '已存在输出链接，可直接预览或下载。'
+        : '当前还没有成片输出',
+    },
+  ]
+
   const handleLocalFiles = (files: FileList | null) => {
     if (!files) return
     const next = Array.from(files).filter((file) => file.type.startsWith('image/'))
@@ -2706,6 +2774,8 @@ export default function AdVideoPage() {
             onGenerateVideo={handleGenerateVideoManually}
             onComposeVideo={handleComposeVideoManually}
           />
+
+          <FourStepWorkbench items={fourStepItems} />
 
           <GenerationQueuePanel
             generationTasks={generationTasks}
