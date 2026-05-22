@@ -44,7 +44,6 @@ import { FourStepWorkbench } from '@/components/ad-video/FourStepWorkbench'
 import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel'
 import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
 import { StoryboardEditorSection } from '@/components/ad-video/StoryboardEditorSection'
-import { WorkflowSidebar } from '@/components/ad-video/WorkflowSidebar'
 import { VIDEO_MOTION_OPTIONS, VIDEO_STYLE_PRESETS } from '@/lib/video-style-config'
 import {
   AD_TEMPLATES,
@@ -1167,13 +1166,6 @@ export default function AdVideoPage() {
 
   const getBrandVoiceLabel = () => BRAND_VOICE_TEMPLATES.find((item) => item.key === selectedBrandVoiceTemplate)?.label ?? BRAND_VOICE_TEMPLATES[0].label
 
-  const buildStepStatus = (done: boolean, active: boolean, failed = false): 'done' | 'active' | 'todo' | 'failed' => {
-    if (failed) return 'failed'
-    if (done) return 'done'
-    if (active) return 'active'
-    return 'todo'
-  }
-
   const buildHistoryLabel = () => {
     const titleText = title.trim() || '未命名广告'
     return `${titleText} · ${getBrandVoiceLabel()} · ${getTargetMarketLabel()}`
@@ -1242,119 +1234,6 @@ export default function AdVideoPage() {
   const projectReady = Boolean(activeProjectId && projectPreparedAt)
   const storyboardReady = Boolean(storyboardGeneratedAt)
   const videoReady = Boolean(activeTaskId || taskStatus === 'pending' || taskStatus === 'processing' || taskStatus === 'succeeded' || taskStatus === 'failed')
-
-  const workflowSteps = useMemo(() => {
-    const hasPrompt = adPrompt.trim().length >= 10
-    const hasOptimized = optimizedScript.trim().length >= 10
-    const hasSceneDraft = storyboardPreview.some((shot) => Boolean(shot.sceneResolved || shot.dialogueResolved))
-    const hasAnyImageSource = imageUrls.length > 0 || localFiles.length > 0
-    const hasGeneratedStoryboard = Boolean(storyboardGeneratedAt)
-    const latestTask = generationTasks[0]
-    const queueFailed = latestTask?.status === 'failed'
-    const queueRunning = creatingByImages || latestTask?.status === 'running' || latestTask?.status === 'submitting'
-
-    return [
-      {
-        key: 'copy',
-        label: '原始文案 / 优化文案',
-        detail: hasOptimized
-          ? `已完成优化，可直接用于口播与字幕。${selectedOptimizeModel ? ` 当前模型：${selectedOptimizeModel}` : ''}`
-          : hasPrompt
-            ? '原始文案已填写；可先优化成最终口播稿。'
-            : '先填写原始广告文案，再决定是否启用优化。',
-        status: buildStepStatus(hasOptimized, optimizingCopy || (autoOptimizeCopy && creatingByImages && !hasOptimized), taskStatus === 'failed' && taskError.includes('文案优化')),
-      },
-      {
-        key: 'storyboard-review',
-        label: '分镜与台词确认',
-        detail: reviewReady
-          ? '分镜模板、镜头描述、字幕和参考提示词已确认。'
-          : hasSceneDraft
-            ? '请继续检查每个镜头的分镜描述、台词和参考图提示词。'
-            : '优化完成后，请在分镜区确认镜头与台词。',
-        status: buildStepStatus(reviewReady, !reviewReady && (hasSceneDraft || hasOptimized)),
-      },
-      {
-        key: 'storyboard-images',
-        label: '分镜图片生成',
-        detail: hasGeneratedStoryboard
-          ? `分镜图生成已启动${storyboardGeneratedAt ? `（${new Date(storyboardGeneratedAt).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}，后续优先使用生成结果或已有图片。`
-          : hasAnyImageSource
-            ? '当前已有真实图片素材；若需统一风格，仍可先启动分镜图生成。'
-            : '当前无真实图片，下一步会先按提示词生成分镜图。',
-        status: buildStepStatus(hasGeneratedStoryboard || hasAnyImageSource, storyboardGenerating || (creatingByImages && !hasGeneratedStoryboard), queueFailed && (taskError.includes('分镜') || taskError.includes('图片'))),
-      },
-      {
-        key: 'video-submit',
-        label: '手动视频生成',
-        detail: activeTaskId
-          ? `视频任务 #${activeTaskId} 已创建，可继续手动合成。`
-          : activeProjectId
-            ? `项目 ${activeProjectId} 已准备好，等待你手动点击生成视频。`
-            : '请先准备项目，再手动提交视频生成。',
-        status: buildStepStatus(videoReady, submittingVideo || queueRunning, queueFailed && (taskError.includes('视频') || taskError.includes('提交') || taskError.includes('启动生成'))),
-      },
-      {
-        key: 'compose',
-        label: '手动合成',
-        detail: activeTaskId
-          ? '视频任务已存在，可按你的节奏手动点击合成。'
-          : '生成视频任务后，这里才会进入可手动合成状态。',
-        status: buildStepStatus(taskStatus === 'succeeded', composingVideo, taskStatus === 'failed' && taskError.includes('合成')),
-      },
-      {
-        key: 'result',
-        label: '成片输出 / 任务结果',
-        detail: taskStatus === 'succeeded'
-          ? '成片已生成，可直接预览、下载或继续复投。'
-          : taskStatus === 'failed'
-            ? (taskError || '当前任务失败，请查看上方日志。')
-            : '提交成功后会在这里显示结果、日志和下载入口。',
-        status: buildStepStatus(taskStatus === 'succeeded', taskStatus === 'pending' || taskStatus === 'processing', taskStatus === 'failed'),
-      },
-    ]
-  }, [adPrompt, optimizedScript, storyboardPreview, imageUrls.length, localFiles.length, storyboardGeneratedAt, generationTasks, creatingByImages, selectedOptimizeModel, optimizingCopy, autoOptimizeCopy, taskStatus, taskError, reviewReady, storyboardGenerating, activeProjectId, activeTaskId, lastGenerationContext, submittingVideo, composingVideo, videoReady])
-
-  const workflowProgressValue = useMemo(() => {
-    const doneCount = workflowSteps.filter((step) => step.status === 'done').length
-    const activeCount = workflowSteps.filter((step) => step.status === 'active').length
-    return Math.min(100, ((doneCount + activeCount * 0.5) / Math.max(workflowSteps.length, 1)) * 100)
-  }, [workflowSteps])
-
-  const workflowProgressDetail = useMemo(() => {
-    const current = workflowSteps.find((step) => step.status === 'active' || step.status === 'failed')
-      ?? workflowSteps.find((step) => step.status === 'todo')
-      ?? workflowSteps[workflowSteps.length - 1]
-    return current?.detail ?? '请先填写广告文案并确认前置条件。'
-  }, [workflowSteps])
-
-  const workflowTaskProgressValue = useMemo(() => {
-    if (taskStatus === 'succeeded') return 100
-    if (taskStatus === 'processing') {
-      if (taskClipProgress.total > 0) {
-        return Math.max(5, Math.min(95, (taskClipProgress.done / Math.max(taskClipProgress.total, 1)) * 100))
-      }
-      return 72
-    }
-    if (storyboardGenerating) return 55
-    if (creatingByImages || taskStatus === 'pending') return 40
-    return null
-  }, [creatingByImages, storyboardGenerating, taskClipProgress.done, taskClipProgress.total, taskStatus])
-
-  const workflowTaskProgressDetail = useMemo(() => {
-    if (taskStatus === 'failed') return taskError || '当前任务失败'
-    if (taskStatus === 'succeeded') return '当前广告任务已完成，可预览或下载成片。'
-    if (storyboardGenerating) return '正在手动生成分镜图片。'
-    if (submittingVideo) return '正在手动提交视频生成任务。'
-    if (composingVideo) return '正在手动触发合成。'
-    if (taskStatus === 'processing') return '视频任务已创建，后台正在生成片段并等待合成结果。'
-    if (creatingByImages || taskStatus === 'pending') return '当前是手动流程：先图片，再视频，再合成。'
-    return null
-  }, [creatingByImages, storyboardGenerating, submittingVideo, composingVideo, taskError, taskStatus])
-
-  const workflowResourceSummary = useMemo(() => {
-    return `镜头 ${storyboardPreview.length} 个 · 图片 URL ${imageUrls.length} 张 · 本地图片 ${localFiles.length} 张 · 台词 ${subtitleLines.length} 条`
-  }, [storyboardPreview.length, imageUrls.length, localFiles.length, subtitleLines.length])
 
   const canPrepareProject = reviewReady
   const canGenerateStoryboard = reviewReady && projectReady
@@ -2576,7 +2455,7 @@ export default function AdVideoPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div>
         <Card className="overflow-hidden rounded-[24px] border-surface-200 shadow-sm">
           <CardContent className="bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
           <Tabs defaultValue="copy" className="space-y-4">
@@ -3030,14 +2909,6 @@ export default function AdVideoPage() {
           </CardContent>
         </Card>
 
-        <WorkflowSidebar
-          steps={workflowSteps}
-          progressValue={workflowProgressValue}
-          progressDetail={workflowProgressDetail}
-          taskProgressValue={workflowTaskProgressValue}
-          taskProgressDetail={workflowTaskProgressDetail}
-          resourceSummary={workflowResourceSummary}
-        />
       </div>
     </div>
   )

@@ -88,15 +88,22 @@ export function AdPrimaryActionsSection({
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
-        <div className="rounded-xl border border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-600">
-          <p className="font-medium text-surface-800">当前改为手动三段式流程</p>
-          <p className="mt-1 leading-5">
-            先优化/确认分镜文案，再手动点“准备项目”→“生成图片”→“生成视频”，最后再单独点“合成”。
-          </p>
-          <p className="mt-2 text-[11px] text-surface-500">
-            状态：审核 {reviewReady ? '已通过' : '未完成'} · 项目 {projectReady ? '已准备' : '未准备'} · 分镜图 {storyboardReady ? '已触发/已就绪' : '未生成'} · 视频任务 {videoReady ? '已创建' : '未创建'}
-          </p>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-start">
+        <div className="rounded-xl border border-surface-200 bg-surface-50 px-4 py-3">
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-surface-600">
+              审核 {reviewReady ? '已通过' : '未完成'}
+            </span>
+            <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-surface-600">
+              项目 {projectReady ? '已准备' : '未准备'}
+            </span>
+            <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-surface-600">
+              分镜图 {storyboardReady ? '已触发/已就绪' : '未生成'}
+            </span>
+            <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-surface-600">
+              视频任务 {videoReady ? '已创建' : '未创建'}
+            </span>
+          </div>
         </div>
 
         <div className="space-y-1">
