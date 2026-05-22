@@ -307,9 +307,13 @@ export default function AdVideoPage() {
     )
     const fallbackSceneText = normalizeEditableLine(optimizedScript || adPrompt)
     const fallbackDialogueText = normalizeEditableLine(subtitleText)
+    const fallbackSceneLines = fallbackSceneText.split(/\n+/).filter(Boolean)
     return Array.from({ length: clipCount }, (_, index) => {
       const scene = normalizeEditableLine(sceneDescriptionDraftLines[index] ?? '')
-      const scenePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.sceneLines[index] ?? '') || fallbackSceneText
+      const perClipFallback = fallbackSceneLines.length > 1
+        ? (fallbackSceneLines[index] ?? fallbackSceneLines[fallbackSceneLines.length - 1] ?? '')
+        : (index === 0 ? fallbackSceneText : '')
+      const scenePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.sceneLines[index] ?? '') || perClipFallback
       const dialogue = normalizeEditableLine(subtitleDraftLines[index] ?? '')
       const dialoguePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.dialogueLines[index] ?? '') || (index === 0 ? fallbackDialogueText : '')
       const referenceHint = normalizeEditableLine(referenceImageHintDraftLines[index] ?? '')

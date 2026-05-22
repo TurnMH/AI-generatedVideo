@@ -128,12 +128,12 @@ export function StoryboardEditorSection({
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-[160px_minmax(220px,1fr)_minmax(220px,1fr)_minmax(220px,1fr)]">
+            <div className="mt-4 space-y-4">
               <div className="overflow-hidden rounded-xl border border-violet-100 bg-white">
                 {shot.imagePreviewUrl ? (
                   <img src={shot.imagePreviewUrl} alt={`镜头 ${shot.index + 1} 参考图`} className="h-36 w-full object-cover" />
                 ) : (
-                  <div className="flex h-36 items-center justify-center px-4 text-center text-xs leading-5 text-violet-600">
+                  <div className="flex h-24 items-center justify-center px-4 text-center text-xs leading-5 text-violet-600">
                     暂无真实图片；后续将优先按图片描述词生成分镜图。
                   </div>
                 )}
@@ -166,7 +166,7 @@ export function StoryboardEditorSection({
                 />
                 <div className="rounded-lg border border-cyan-100 bg-white px-3 py-2">
                   <p className="text-[11px] font-medium text-cyan-800">当前有效图片描述词</p>
-                  <p className="mt-1 text-[11px] leading-5 text-cyan-700">{shot.referenceHintResolved}</p>
+                  <p className="mt-1 max-h-24 overflow-y-auto text-[11px] leading-5 text-cyan-700 whitespace-pre-wrap">{shot.referenceHintResolved}</p>
                 </div>
               </div>
 
@@ -180,7 +180,7 @@ export function StoryboardEditorSection({
                 />
                 <div className="rounded-lg border border-violet-100 bg-white px-3 py-2">
                   <p className="text-[11px] font-medium text-violet-800">当前有效视频描述词</p>
-                  <p className="mt-1 text-[11px] leading-5 text-violet-700">{shot.sceneResolved}</p>
+                  <p className="mt-1 max-h-24 overflow-y-auto text-[11px] leading-5 text-violet-700 whitespace-pre-wrap">{shot.sceneResolved}</p>
                 </div>
               </div>
 
