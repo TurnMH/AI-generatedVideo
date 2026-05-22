@@ -2881,13 +2881,6 @@ export default function AdVideoPage() {
             </div>
           ) : null}
 
-          <GenerationQueuePanel
-            generationTasks={generationTasks}
-            activeGenerationTaskId={activeGenerationTaskId}
-            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
-            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
-          />
-
           {draftSavedAt ? (
             <p className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</p>
           ) : null}
@@ -2903,6 +2896,13 @@ export default function AdVideoPage() {
             onSave={handleSaveHistorySnapshot}
             onSelect={setSelectedHistoryEntryId}
             onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
+          />
+
+          <GenerationQueuePanel
+            generationTasks={generationTasks}
+            activeGenerationTaskId={activeGenerationTaskId}
+            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
           />
             </TabsContent>
           </Tabs>

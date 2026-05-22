@@ -56,11 +56,11 @@ export function GenerationQueuePanel({
     <div className="space-y-4 rounded-xl border border-violet-100 bg-violet-50/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-medium text-violet-900">异步生成列表</p>
-          <p className="text-xs text-violet-700">点击后会先加入列表，再在后台依次完成文案优化、素材上传和视频提交。</p>
+          <p className="text-sm font-medium text-violet-900">最近提交记录</p>
+          <p className="text-xs text-violet-700">这里只保留最近几次异步提交的排队/提交记录，当前应优先看上方“当前任务状态”。</p>
         </div>
         <span className="rounded-full border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-700">
-          当前任务 {generationTasks.length}
+          最近记录 {generationTasks.length}
         </span>
       </div>
 
@@ -119,7 +119,7 @@ export function GenerationQueuePanel({
           })}
         </div>
       ) : (
-        <p className="text-xs text-violet-600">还没有提交任何异步生成任务。</p>
+        <p className="text-xs text-violet-600">还没有最近提交记录。</p>
       )}
     </div>
   )
