@@ -135,7 +135,7 @@ export type AdGenerationTaskEntry = {
   imageCount: number
 }
 
-export type StoryboardPreviewStatus = 'blocked' | 'attention' | 'ready' | 'generating' | 'submitted'
+export type StoryboardPreviewStatus = 'blocked' | 'attention' | 'ready' | 'pending' | 'generating' | 'succeeded' | 'failed' | 'submitted'
 
 export type StoryboardPreviewTone = 'slate' | 'amber' | 'blue' | 'emerald'
 

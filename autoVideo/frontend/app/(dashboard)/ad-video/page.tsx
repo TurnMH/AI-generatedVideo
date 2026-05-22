@@ -855,23 +855,28 @@ export default function AdVideoPage() {
       let backendFailureDetail = ''
 
       if (matchedStoryboard?.status === 'completed') {
-        storyboardStatus = 'submitted'
+        storyboardStatus = 'succeeded'
         storyboardStatusTone = 'emerald'
         storyboardStatusLabel = '已生成'
         storyboardStatusDetail = `已拿到真实分镜结果 #${matchedStoryboard.sequence_number}，可继续检查画面并进入下一阶段。`
       } else if (matchedStoryboard?.status === 'failed') {
-        storyboardStatus = 'attention'
+        storyboardStatus = 'failed'
         storyboardStatusTone = 'amber'
         storyboardStatusLabel = '生成失败'
         backendFailureDetail = matchedStoryboard.error_msg?.trim() || ''
         storyboardStatusDetail = backendFailureDetail
           ? `真实分镜生成失败：${backendFailureDetail}`
           : '真实分镜生成失败，建议调整当前镜头后重试。'
-      } else if (matchedStoryboard?.status === 'generating' || matchedStoryboard?.status === 'pending') {
+      } else if (matchedStoryboard?.status === 'generating') {
         storyboardStatus = 'generating'
         storyboardStatusTone = 'blue'
         storyboardStatusLabel = '生成中'
         storyboardStatusDetail = '已映射到项目里的真实分镜任务，当前镜头仍在生成中。'
+      } else if (matchedStoryboard?.status === 'pending') {
+        storyboardStatus = 'pending'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '排队中'
+        storyboardStatusDetail = '真实分镜任务已创建，当前镜头正在等待后端开始生成。'
       } else if (storyboardGenerating || creatingByImages) {
         storyboardStatus = 'generating'
         storyboardStatusTone = 'blue'
@@ -927,6 +932,24 @@ export default function AdVideoPage() {
       }
     })
   }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardBySequence, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
+
+  const storyboardShotSummary = useMemo(() => {
+    const summary = {
+      total: storyboardPreview.length,
+      blocked: 0,
+      attention: 0,
+      ready: 0,
+      pending: 0,
+      generating: 0,
+      succeeded: 0,
+      failed: 0,
+      submitted: 0,
+    }
+    storyboardPreview.forEach((shot) => {
+      summary[shot.storyboardStatus] += 1
+    })
+    return summary
+  }, [storyboardPreview])
 
   const refreshStoryboardAtIndex = async (shot: StoryboardPreviewItem) => {
     if (!activeProjectId || !shot.realStoryboardId) return
@@ -2749,6 +2772,7 @@ export default function AdVideoPage() {
                 storyboardPreview={storyboardPreview}
                 referenceHintGeneratingAll={referenceHintGeneratingAll}
                 referenceHintGeneratingIndex={referenceHintGeneratingIndex}
+                storyboardShotSummary={storyboardShotSummary}
                 imageModels={availableImageModels}
                 selectedImageModel={selectedImageModel}
                 onSelectedImageModelChange={setSelectedImageModel}

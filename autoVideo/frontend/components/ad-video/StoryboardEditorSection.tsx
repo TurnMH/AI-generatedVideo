@@ -23,6 +23,17 @@ const storyboardStatusClass: Record<StoryboardEditorShot['storyboardStatusTone']
 
 type StoryboardEditorSectionProps = {
   storyboardPreview: StoryboardEditorShot[]
+  storyboardShotSummary: {
+    total: number
+    blocked: number
+    attention: number
+    ready: number
+    pending: number
+    generating: number
+    succeeded: number
+    failed: number
+    submitted: number
+  }
   referenceHintGeneratingAll: boolean
   referenceHintGeneratingIndex: number | null
   imageModels: Array<{ id: number; name: string; model_key: string }>
@@ -44,6 +55,7 @@ type StoryboardEditorSectionProps = {
 
 export function StoryboardEditorSection({
   storyboardPreview,
+  storyboardShotSummary,
   referenceHintGeneratingAll,
   referenceHintGeneratingIndex,
   imageModels,
@@ -68,6 +80,17 @@ export function StoryboardEditorSection({
         <div>
           <p className="text-sm font-medium text-surface-800">分镜可视化编辑</p>
           <p className="text-xs text-surface-500">现在按“一条分镜占据一行”展示；图片描述词与视频描述词分开维护，避免混在一个字段里。</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5 text-[10px] text-surface-600">总计 {storyboardShotSummary.total}</span>
+            {storyboardShotSummary.succeeded > 0 ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">已生成 {storyboardShotSummary.succeeded}</span> : null}
+            {storyboardShotSummary.failed > 0 ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">失败 {storyboardShotSummary.failed}</span> : null}
+            {storyboardShotSummary.generating > 0 ? <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700">生成中 {storyboardShotSummary.generating}</span> : null}
+            {storyboardShotSummary.pending > 0 ? <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700">排队中 {storyboardShotSummary.pending}</span> : null}
+            {storyboardShotSummary.ready > 0 ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">可生成 {storyboardShotSummary.ready}</span> : null}
+            {storyboardShotSummary.attention > 0 ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">待补一项 {storyboardShotSummary.attention}</span> : null}
+            {storyboardShotSummary.blocked > 0 ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">信息不足 {storyboardShotSummary.blocked}</span> : null}
+            {storyboardShotSummary.submitted > 0 ? <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700">已提交 {storyboardShotSummary.submitted}</span> : null}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
