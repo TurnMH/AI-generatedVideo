@@ -327,14 +327,47 @@ export default function AdVideoPage() {
       const imageStatusLabel = remoteImageUrl || localFile
         ? '已有可用图片'
         : '将按提示词生成分镜图'
+      const resolvedScene = scene || scenePlaceholder
+      const resolvedDialogue = dialogue || dialoguePlaceholder
+      const storyboardBlockingItems: string[] = []
+      if (!resolvedScene) storyboardBlockingItems.push('待补视频描述词')
+      if (!resolvedReferenceHint || resolvedReferenceHint === '待补参考图提示词') storyboardBlockingItems.push('待补图片提示词')
+      if (!resolvedDialogue) storyboardBlockingItems.push('待补台词')
+
+      let storyboardStatus: StoryboardPreviewItem['storyboardStatus'] = 'ready'
+      let storyboardStatusTone: StoryboardPreviewItem['storyboardStatusTone'] = 'emerald'
+      let storyboardStatusLabel = '可生成'
+      let storyboardStatusDetail = '当前镜头信息已齐，可用于手动提交分镜图片生成。'
+
+      if (storyboardGenerating || creatingByImages) {
+        storyboardStatus = 'generating'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '生成中'
+        storyboardStatusDetail = '分镜图片生成请求已发起，当前仍处于广告页级别的整体提交阶段。'
+      } else if (storyboardGeneratedAt) {
+        storyboardStatus = 'submitted'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '已提交'
+        storyboardStatusDetail = '该轮分镜图片生成已触发；当前广告页尚未提供逐镜头回填结果，请结合上方当前任务与后续历史记录确认。'
+      } else if (storyboardBlockingItems.length >= 2) {
+        storyboardStatus = 'blocked'
+        storyboardStatusTone = 'amber'
+        storyboardStatusLabel = '信息不足'
+        storyboardStatusDetail = '当前镜头仍缺少关键信息，建议先补齐后再生成，避免得到空泛或失真的分镜图。'
+      } else if (storyboardBlockingItems.length === 1) {
+        storyboardStatus = 'attention'
+        storyboardStatusTone = 'amber'
+        storyboardStatusLabel = '待补一项'
+        storyboardStatusDetail = `当前还差 1 项：${storyboardBlockingItems[0]}。补齐后更适合提交分镜生成。`
+      }
 
       return {
         index,
         scene,
-        sceneResolved: scene || scenePlaceholder,
+        sceneResolved: resolvedScene,
         scenePlaceholder,
         dialogue,
-        dialogueResolved: dialogue || dialoguePlaceholder,
+        dialogueResolved: resolvedDialogue,
         dialoguePlaceholder,
         referenceHint,
         referenceHintResolved: resolvedReferenceHint,
@@ -344,9 +377,14 @@ export default function AdVideoPage() {
         imageStatusLabel,
         hasDialogue: Boolean(dialogue),
         hasReferenceHint: Boolean(referenceHint),
+        storyboardStatus,
+        storyboardStatusLabel,
+        storyboardStatusDetail,
+        storyboardStatusTone,
+        storyboardBlockingItems,
       }
     })
-  }, [adPrompt, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, subtitleDraftLines, subtitleText])
+  }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
 
   const readChatReply = (payload: unknown): string => {
     const data = payload as {

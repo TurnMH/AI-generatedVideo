@@ -1,4 +1,4 @@
-import { Loader2, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, Sparkles } from 'lucide-react'
 import type { StoryboardPreviewItem } from '@/components/ad-video/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,6 +13,13 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 
 type StoryboardEditorShot = StoryboardPreviewItem
+
+const storyboardStatusClass: Record<StoryboardEditorShot['storyboardStatusTone'], string> = {
+  slate: 'border-surface-200 bg-white text-surface-600',
+  amber: 'border-amber-200 bg-amber-50 text-amber-800',
+  blue: 'border-cyan-200 bg-cyan-50 text-cyan-800',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+}
 
 type StoryboardEditorSectionProps = {
   storyboardPreview: StoryboardEditorShot[]
@@ -118,6 +125,12 @@ export function StoryboardEditorSection({
                 <p className="mt-1 text-sm font-medium text-surface-800">{shot.imageSource}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <span className={[
+                  'rounded-full border px-2 py-1 text-[11px] font-medium',
+                  storyboardStatusClass[shot.storyboardStatusTone],
+                ].join(' ')}>
+                  {shot.storyboardStatusLabel}
+                </span>
                 <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
                   {shot.hasDialogue ? '台词已填' : '待补台词'}
                 </span>
@@ -125,6 +138,42 @@ export function StoryboardEditorSection({
                   {shot.hasReferenceHint ? '图片词已填' : '待补图片词'}
                 </span>
                 <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">{shot.imageStatusLabel}</span>
+              </div>
+            </div>
+
+            <div className={[
+              'mt-3 rounded-xl border px-3 py-2',
+              shot.storyboardStatusTone === 'amber'
+                ? 'border-amber-200 bg-amber-50/70'
+                : shot.storyboardStatusTone === 'blue'
+                  ? 'border-cyan-200 bg-cyan-50/70'
+                  : shot.storyboardStatusTone === 'emerald'
+                    ? 'border-emerald-200 bg-emerald-50/70'
+                    : 'border-surface-200 bg-white',
+            ].join(' ')}>
+              <div className="flex items-start gap-2">
+                {shot.storyboardStatusTone === 'amber' ? (
+                  <AlertCircle className="mt-0.5 h-4 w-4 text-amber-600" />
+                ) : shot.storyboardStatusTone === 'emerald' ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                ) : shot.storyboardStatusTone === 'blue' ? (
+                  <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-cyan-600" />
+                ) : (
+                  <Sparkles className="mt-0.5 h-4 w-4 text-surface-500" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-surface-800">分镜状态</p>
+                  <p className="mt-1 text-[11px] leading-5 text-surface-600">{shot.storyboardStatusDetail}</p>
+                  {shot.storyboardBlockingItems.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {shot.storyboardBlockingItems.map((item) => (
+                        <span key={`${shot.index}-${item}`} className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] text-amber-700">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
 

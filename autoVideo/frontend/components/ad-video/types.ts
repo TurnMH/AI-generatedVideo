@@ -135,6 +135,10 @@ export type AdGenerationTaskEntry = {
   imageCount: number
 }
 
+export type StoryboardPreviewStatus = 'blocked' | 'attention' | 'ready' | 'generating' | 'submitted'
+
+export type StoryboardPreviewTone = 'slate' | 'amber' | 'blue' | 'emerald'
+
 export type StoryboardPreviewItem = {
   index: number
   scene: string
@@ -151,6 +155,11 @@ export type StoryboardPreviewItem = {
   imageStatusLabel: string
   hasDialogue: boolean
   hasReferenceHint: boolean
+  storyboardStatus: StoryboardPreviewStatus
+  storyboardStatusLabel: string
+  storyboardStatusDetail: string
+  storyboardStatusTone: StoryboardPreviewTone
+  storyboardBlockingItems: string[]
 }
 
 export type BrandVoiceTemplateKey = string
