@@ -2251,8 +2251,26 @@ export default function AdVideoPage() {
             </div>
           </div>
 
+          <AdMarketGuidanceSection
+            targetMarketOptions={TARGET_MARKET_OPTIONS}
+            targetMarket={targetMarket}
+            onTargetMarketChange={setTargetMarket}
+            subtitleLanguageOptions={SUBTITLE_LANGUAGE_OPTIONS}
+            subtitleLanguage={subtitleLanguage}
+            onSubtitleLanguageChange={setSubtitleLanguage}
+            creativeModeOptions={CREATIVE_MODE_OPTIONS}
+            creativeMode={creativeMode}
+            onCreativeModeChange={setCreativeMode}
+            subtitleText={subtitleText}
+            onSubtitleTextChange={setSubtitleText}
+            subtitleLineCount={subtitleLines.length}
+            directorNote={directorNote}
+            onDirectorNoteChange={setDirectorNote}
+          />
+
           <div className="space-y-2">
             <Label htmlFor="ad-prompt">广告文案</Label>
+            <p className="text-xs leading-5 text-surface-500">请先确认上方的目标市场、字幕语言、创意模式、台词与导演备注，再进行广告文案优化。</p>
             <Textarea
               id="ad-prompt"
               rows={7}
@@ -2298,23 +2316,6 @@ export default function AdVideoPage() {
               </div>
             ) : null}
           </div>
-
-          <AdMarketGuidanceSection
-            targetMarketOptions={TARGET_MARKET_OPTIONS}
-            targetMarket={targetMarket}
-            onTargetMarketChange={setTargetMarket}
-            subtitleLanguageOptions={SUBTITLE_LANGUAGE_OPTIONS}
-            subtitleLanguage={subtitleLanguage}
-            onSubtitleLanguageChange={setSubtitleLanguage}
-            creativeModeOptions={CREATIVE_MODE_OPTIONS}
-            creativeMode={creativeMode}
-            onCreativeModeChange={setCreativeMode}
-            subtitleText={subtitleText}
-            onSubtitleTextChange={setSubtitleText}
-            subtitleLineCount={subtitleLines.length}
-            directorNote={directorNote}
-            onDirectorNoteChange={setDirectorNote}
-          />
 
           <AdAdvancedSettingsSection
             templates={AD_TEMPLATES}
