@@ -190,6 +190,7 @@ export default function AdVideoPage() {
   const [selectedStoryboardTemplate, setSelectedStoryboardTemplate] = useState<string>(STORYBOARD_TEMPLATES[0].key)
   const [selectedBrandVoiceTemplate, setSelectedBrandVoiceTemplate] = useState<BrandVoiceTemplateKey>(BRAND_VOICE_TEMPLATES[0].key)
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
+  const [selectedReferenceHintModel, setSelectedReferenceHintModel] = useState('')
   const [selectedStylePreset, setSelectedStylePreset] = useState('live-action-short')
   const [selectedMotionMode, setSelectedMotionMode] = useState<(typeof VIDEO_MOTION_OPTIONS)[number]['key']>('dynamic')
   const [selectedVideoMode, setSelectedVideoMode] = useState<'frame_animation' | 'api_generation'>('frame_animation')
@@ -374,10 +375,10 @@ export default function AdVideoPage() {
     if (referenceHintGeneratingAll || referenceHintGeneratingIndex !== null) return
     setReferenceHintGeneratingIndex(shot.index)
     try {
-      const res = await chatAPI.sendGemini([
+      const res = await chatAPI.send([
         { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
         { role: 'user', content: buildReferenceHintPrompt(shot, storyboardPreview.length) },
-      ]) as unknown as { data?: unknown }
+      ], selectedReferenceHintModel || undefined) as unknown as { data?: unknown }
       const reply = normalizeReferenceHintLine(readChatReply(res.data))
       if (!reply) throw new Error('AI 未返回有效参考图提示')
       setReferenceImageHintsText((prev) => updateLineAtIndex(prev, shot.index, reply))
@@ -419,10 +420,10 @@ export default function AdVideoPage() {
         ].join('\n')),
       ].join('\n')
 
-      const res = await chatAPI.sendGemini([
+      const res = await chatAPI.send([
         { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
         { role: 'user', content: prompt },
-      ]) as unknown as { data?: unknown }
+      ], selectedReferenceHintModel || undefined) as unknown as { data?: unknown }
       const replyLines = readChatReply(res.data)
         .split(/\r?\n/)
         .map(normalizeReferenceHintLine)
@@ -572,6 +573,7 @@ export default function AdVideoPage() {
     selectedStoryboardTemplate,
     selectedBrandVoiceTemplate,
     selectedVideoModel,
+    selectedReferenceHintModel,
     selectedStylePreset,
     selectedMotionMode,
     selectedVideoMode,
@@ -607,6 +609,7 @@ export default function AdVideoPage() {
     selectedBrandVoiceTemplate,
     selectedVideoMode,
     selectedVideoModel,
+    selectedReferenceHintModel,
     subtitleLanguage,
     subtitleText,
     targetMarket,
@@ -636,6 +639,7 @@ export default function AdVideoPage() {
       setSelectedBrandVoiceTemplate(state.selectedBrandVoiceTemplate as BrandVoiceTemplateKey)
     }
     if (typeof state.selectedVideoModel === 'string') setSelectedVideoModel(state.selectedVideoModel)
+    if (typeof state.selectedReferenceHintModel === 'string') setSelectedReferenceHintModel(state.selectedReferenceHintModel)
     if (typeof state.selectedStylePreset === 'string') setSelectedStylePreset(state.selectedStylePreset)
     if (state.selectedMotionMode && VIDEO_MOTION_OPTIONS.some((item) => item.key === state.selectedMotionMode)) {
       setSelectedMotionMode(state.selectedMotionMode as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])
@@ -777,6 +781,10 @@ export default function AdVideoPage() {
     () => (((optimizeModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> })?.data ?? [])
       .filter((item) => item.is_active && item.model_key)),
     [optimizeModelsData]
+  )
+  const availableReferenceHintModels = useMemo(
+    () => availableOptimizeModels,
+    [availableOptimizeModels]
   )
 
   const { data: projectTasksRaw } = useSWR(
@@ -1045,6 +1053,12 @@ export default function AdVideoPage() {
       setSelectedOptimizeModel(availableOptimizeModels[0].model_key)
     }
   }, [availableOptimizeModels, selectedOptimizeModel])
+
+  useEffect(() => {
+    if (!selectedReferenceHintModel && availableReferenceHintModels.length > 0) {
+      setSelectedReferenceHintModel(availableReferenceHintModels[0].model_key)
+    }
+  }, [availableReferenceHintModels, selectedReferenceHintModel])
 
   useEffect(() => {
     if (availableVideoModels.length === 0) {
@@ -2385,6 +2399,9 @@ export default function AdVideoPage() {
                 storyboardPreview={storyboardPreview}
                 referenceHintGeneratingAll={referenceHintGeneratingAll}
                 referenceHintGeneratingIndex={referenceHintGeneratingIndex}
+                referenceHintModels={availableReferenceHintModels}
+                selectedReferenceHintModel={selectedReferenceHintModel}
+                onSelectedReferenceHintModelChange={setSelectedReferenceHintModel}
                 onFillAllReferenceHints={fillReferenceHintsForAll}
                 onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
                 onSceneChange={(index, value) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))}

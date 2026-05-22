@@ -3,6 +3,13 @@ import type { StoryboardPreviewItem } from '@/components/ad-video/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 
 type StoryboardEditorShot = StoryboardPreviewItem
@@ -11,6 +18,9 @@ type StoryboardEditorSectionProps = {
   storyboardPreview: StoryboardEditorShot[]
   referenceHintGeneratingAll: boolean
   referenceHintGeneratingIndex: number | null
+  referenceHintModels: Array<{ id: number; name: string; model_key: string }>
+  selectedReferenceHintModel: string
+  onSelectedReferenceHintModelChange: (value: string) => void
   onFillAllReferenceHints: () => void
   onFillReferenceHintAtIndex: (shot: StoryboardEditorShot) => void
   onSceneChange: (index: number, value: string) => void
@@ -22,6 +32,9 @@ export function StoryboardEditorSection({
   storyboardPreview,
   referenceHintGeneratingAll,
   referenceHintGeneratingIndex,
+  referenceHintModels,
+  selectedReferenceHintModel,
+  onSelectedReferenceHintModelChange,
   onFillAllReferenceHints,
   onFillReferenceHintAtIndex,
   onSceneChange,
@@ -39,6 +52,19 @@ export function StoryboardEditorSection({
           <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
             {storyboardPreview.length} 个镜头
           </span>
+          <div className="flex items-center gap-2 rounded-lg border border-cyan-200 bg-white px-2 py-1">
+            <Label className="text-[11px] text-cyan-800">提示词模型</Label>
+            <Select value={selectedReferenceHintModel} onValueChange={onSelectedReferenceHintModelChange}>
+              <SelectTrigger className="h-7 w-[210px] border-0 bg-transparent px-1 text-xs shadow-none focus:ring-0">
+                <SelectValue placeholder="选择提示词模型" />
+              </SelectTrigger>
+              <SelectContent>
+                {referenceHintModels.length > 0 ? referenceHintModels.map((model) => (
+                  <SelectItem key={`ref-hint-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
+                )) : <SelectItem value="__none" disabled>暂无可用文本模型</SelectItem>}
+              </SelectContent>
+            </Select>
+          </div>
           <Button
             type="button"
             size="sm"
@@ -104,7 +130,7 @@ export function StoryboardEditorSection({
                   placeholder={shot.referenceHintPlaceholder || '例如：白底产品特写 / 手持使用场景'}
                   onChange={(event) => onReferenceHintChange(shot.index, event.target.value)}
                 />
-                <p className="text-[11px] leading-5 text-surface-500">这里填写参考图风格、构图、主体或检索关键词，供后续找图、选图或生成提示词使用，不会自动上传真实图片。</p>
+                <p className="text-[11px] leading-5 text-surface-500">这里填写参考图风格、构图、主体或检索关键词，供后续找图、选图或生成提示词使用，不会自动上传真实图片。上方可单独选择用于生成提示词的文本模型。</p>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-surface-700">字幕 / 口播</Label>
