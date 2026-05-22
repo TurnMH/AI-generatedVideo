@@ -52,7 +52,7 @@ export function StoryboardEditorSection({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-medium text-surface-800">分镜可视化编辑</p>
-          <p className="text-xs text-surface-500">每张卡片都对应一段镜头，修改会同步回上方分镜描述和字幕文本。</p>
+          <p className="text-xs text-surface-500">现在按“一条分镜占据一行”展示；图片描述词与视频描述词分开维护，避免混在一个字段里。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
@@ -109,86 +109,93 @@ export function StoryboardEditorSection({
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="space-y-3">
         {storyboardPreview.map((shot) => (
           <div key={shot.index} className="rounded-2xl border border-surface-200 bg-surface-50 p-4">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-surface-500">镜头 {shot.index + 1}</p>
                 <p className="mt-1 text-sm font-medium text-surface-800">{shot.imageSource}</p>
               </div>
-              <div className="flex flex-col items-end gap-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
                   {shot.hasDialogue ? '台词已填' : '待补台词'}
                 </span>
                 <span className="rounded-full border border-surface-200 bg-white px-2 py-1 text-[11px] font-medium text-surface-600">
-                  {shot.hasReferenceHint ? '参考图已填' : '待补参考图'}
+                  {shot.hasReferenceHint ? '图片词已填' : '待补图片词'}
                 </span>
+                <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">{shot.imageStatusLabel}</span>
               </div>
             </div>
-            <div className="mt-3 space-y-3">
-              <div className="grid gap-3 rounded-xl border border-dashed border-violet-200 bg-violet-50/40 p-3 md:grid-cols-[180px,1fr]">
-                <div className="overflow-hidden rounded-lg border border-violet-100 bg-white">
-                  {shot.imagePreviewUrl ? (
-                    <img src={shot.imagePreviewUrl} alt={`镜头 ${shot.index + 1} 参考图`} className="h-40 w-full object-cover" />
-                  ) : (
-                    <div className="flex h-40 items-center justify-center px-4 text-center text-xs leading-5 text-violet-600">
-                      暂无真实图片；确认提示词后会优先按所选图片模型生成分镜图。
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">{shot.imageStatusLabel}</span>
-                    <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">当前有效提示词</span>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[160px_minmax(220px,1fr)_minmax(220px,1fr)_minmax(220px,1fr)]">
+              <div className="overflow-hidden rounded-xl border border-violet-100 bg-white">
+                {shot.imagePreviewUrl ? (
+                  <img src={shot.imagePreviewUrl} alt={`镜头 ${shot.index + 1} 参考图`} className="h-36 w-full object-cover" />
+                ) : (
+                  <div className="flex h-36 items-center justify-center px-4 text-center text-xs leading-5 text-violet-600">
+                    暂无真实图片；后续将优先按图片描述词生成分镜图。
                   </div>
-                  <p className="rounded-lg border border-violet-100 bg-white px-3 py-2 text-xs leading-5 text-violet-800">{shot.referenceHintResolved}</p>
-                  <p className="text-[11px] leading-5 text-violet-600">当前分镜区会同时展示“提示词”和“图片来源”。如果没有真实图，后续应按这里的提示词先生成分镜图，再推进视频生成。</p>
-                </div>
+                )}
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">分镜描述</Label>
-                <Textarea
-                  rows={3}
-                  value={shot.scene}
-                  placeholder={shot.scenePlaceholder || '未填写时会使用广告文案兜底'}
-                  onChange={(event) => onSceneChange(shot.index, event.target.value)}
-                />
-              </div>
-              <div className="space-y-1">
+
+              <div className="space-y-2 rounded-xl border border-cyan-200 bg-cyan-50/50 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <Label className="text-xs text-surface-700">镜头参考图</Label>
+                  <Label className="text-xs font-medium text-cyan-900">分镜图片描述词</Label>
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
                     onClick={() => onFillReferenceHintAtIndex(shot)}
                     disabled={referenceHintGeneratingAll || referenceHintGeneratingIndex === shot.index}
-                    className="h-7 gap-1 px-2 text-[11px] text-cyan-700 hover:bg-cyan-50 hover:text-cyan-900"
+                    className="h-7 gap-1 px-2 text-[11px] text-cyan-700 hover:bg-cyan-100 hover:text-cyan-900"
                   >
                     {referenceHintGeneratingIndex === shot.index ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
                       <Sparkles className="h-3 w-3" />
                     )}
-                    AI 补全提示词
+                    AI 补全图片词
                   </Button>
                 </div>
-                <Input
+                <Textarea
+                  rows={5}
                   value={shot.referenceHint}
-                  placeholder={shot.referenceHintPlaceholder || '例如：白底产品特写 / 手持使用场景'}
+                  placeholder={shot.referenceHintPlaceholder || '例如：人物半身，暖色逆光，办公桌前，科技感金融界面，真实摄影风格'}
                   onChange={(event) => onReferenceHintChange(shot.index, event.target.value)}
                 />
-                <p className="text-[11px] leading-5 text-surface-500">这里填写参考图风格、构图、主体或检索关键词，供后续找图、选图或生成提示词使用，不会自动上传真实图片。上方可单独选择用于生成提示词的文本模型。</p>
+                <div className="rounded-lg border border-cyan-100 bg-white px-3 py-2">
+                  <p className="text-[11px] font-medium text-cyan-800">当前有效图片描述词</p>
+                  <p className="mt-1 text-[11px] leading-5 text-cyan-700">{shot.referenceHintResolved}</p>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-surface-700">字幕 / 口播</Label>
+
+              <div className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+                <Label className="text-xs font-medium text-violet-900">分镜视频描述词</Label>
                 <Textarea
-                  rows={3}
+                  rows={5}
+                  value={shot.scene}
+                  placeholder={shot.scenePlaceholder || '例如：镜头缓慢推进到人物表情，字幕从左下淡入，强调正在观看学习内容'}
+                  onChange={(event) => onSceneChange(shot.index, event.target.value)}
+                />
+                <div className="rounded-lg border border-violet-100 bg-white px-3 py-2">
+                  <p className="text-[11px] font-medium text-violet-800">当前有效视频描述词</p>
+                  <p className="mt-1 text-[11px] leading-5 text-violet-700">{shot.sceneResolved}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-xl border border-surface-200 bg-white p-3">
+                <Label className="text-xs font-medium text-surface-800">字幕 / 口播</Label>
+                <Textarea
+                  rows={5}
                   value={shot.dialogue}
                   placeholder={shot.dialoguePlaceholder || '每行一句，支持逐镜头微调'}
                   onChange={(event) => onDialogueChange(shot.index, event.target.value)}
                 />
+                <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+                  <p className="text-[11px] font-medium text-surface-700">当前有效台词</p>
+                  <p className="mt-1 text-[11px] leading-5 text-surface-600">{shot.dialogueResolved}</p>
+                </div>
               </div>
             </div>
           </div>
