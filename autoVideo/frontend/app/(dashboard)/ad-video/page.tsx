@@ -766,7 +766,7 @@ export default function AdVideoPage() {
   )
   const { data: optimizeModelsData } = useSWR(
     'ad-copy-optimize-models',
-    () => modelAPI.list({ sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> }>
+    () => modelAPI.list({ type: 'llm', sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> }>
   )
   const allVideoModels = useMemo(
     () => (((videoModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean }> })?.data ?? [])
@@ -775,8 +775,7 @@ export default function AdVideoPage() {
   )
   const availableOptimizeModels = useMemo(
     () => (((optimizeModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> })?.data ?? [])
-      .filter((item) => item.is_active && item.model_key)
-      .filter((item) => item.type !== 'video')),
+      .filter((item) => item.is_active && item.model_key)),
     [optimizeModelsData]
   )
 
