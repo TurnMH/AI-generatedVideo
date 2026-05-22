@@ -1350,6 +1350,61 @@ export default function AdVideoPage() {
     return `镜头 ${storyboardPreview.length} 个 · 图片 URL ${imageUrls.length} 张 · 本地图片 ${localFiles.length} 张 · 台词 ${subtitleLines.length} 条`
   }, [storyboardPreview.length, imageUrls.length, localFiles.length, subtitleLines.length])
 
+  const canPrepareProject = reviewReady && !projectReady
+  const canGenerateStoryboard = reviewReady && projectReady
+  const canGenerateVideo = reviewReady && projectReady && storyboardReady
+  const canComposeVideo = Boolean(activeTaskId)
+
+  const prepareProjectHint = !reviewReady
+    ? '先完成分镜审核确认，才能创建项目。'
+    : projectReady
+      ? '项目已准备完成，无需重复创建。'
+      : '会创建项目、上传脚本并准备素材。'
+
+  const generateStoryboardHint = !projectReady
+    ? '请先完成“准备项目”。'
+    : !reviewReady
+      ? '请先完成审核确认。'
+      : storyboardReady
+        ? '已触发过分镜图生成，可继续检查结果。'
+        : '只生成分镜图片，不会自动提交视频。'
+
+  const generateVideoHint = !projectReady
+    ? '请先准备项目。'
+    : !storyboardReady
+      ? '请先手动生成图片。'
+      : '只提交视频任务，不会自动帮你合成。'
+
+  const composeVideoHint = !activeTaskId
+    ? '请先手动生成视频并等待任务出现。'
+    : '当前只会触发合成，不会回退重跑前面步骤。'
+
+  const nextActionLabel = taskStatus === 'succeeded'
+    ? '成片已完成，可直接预览或下载。'
+    : taskStatus === 'failed'
+      ? '先看失败原因，再决定重试哪一步。'
+      : composingVideo
+        ? '正在执行合成，先等待结果返回。'
+        : activeTaskId
+          ? '现在可以继续观察视频任务，或手动点合成。'
+          : storyboardReady
+            ? '分镜图阶段已完成，下一步是手动生成视频。'
+            : projectReady
+              ? '项目已准备完成，下一步是手动生成图片。'
+              : '先准备项目，再进入后续手动生成。'
+
+  const nextActionHint = taskStatus === 'succeeded'
+    ? '如果结果满意，可以直接导出；如果不满意，再手动重跑某个阶段。'
+    : taskStatus === 'failed'
+      ? (taskError || '请结合日志面板定位失败点。')
+      : activeTaskId
+        ? '当前不会自动合成；需要你自己决定何时点“手动点合成”。'
+        : storyboardReady
+          ? '这一步之后不再自动串行，是否生成视频由你手动决定。'
+          : projectReady
+            ? '你可以先检查分镜提示词和图片预览，再决定是否生成图片。'
+            : '准备项目会先创建项目、脚本和素材上下文。'
+
   const handleLocalFiles = (files: FileList | null) => {
     if (!files) return
     const next = Array.from(files).filter((file) => file.type.startsWith('image/'))
@@ -2637,6 +2692,14 @@ export default function AdVideoPage() {
             projectReady={projectReady}
             storyboardReady={storyboardReady}
             videoReady={videoReady}
+            canPrepareProject={canPrepareProject}
+            canGenerateStoryboard={canGenerateStoryboard}
+            canGenerateVideo={canGenerateVideo}
+            canComposeVideo={canComposeVideo}
+            prepareProjectHint={prepareProjectHint}
+            generateStoryboardHint={generateStoryboardHint}
+            generateVideoHint={generateVideoHint}
+            composeVideoHint={composeVideoHint}
             onCreateFromText={handleCreateFromText}
             onPrepareProject={handlePrepareProject}
             onGenerateStoryboard={handleGenerateByImages}
@@ -2670,6 +2733,8 @@ export default function AdVideoPage() {
                 activeOptimizeTaskId={activeOptimizeTaskId}
                 manualRerunLoading={manualRerunLoading}
                 exportingPackage={exportingPackage}
+                nextActionLabel={nextActionLabel}
+                nextActionHint={nextActionHint}
                 onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
                 onOpenOutput={openOutput}
                 onRerunAnotherVersion={handleRerunAnotherVersion}

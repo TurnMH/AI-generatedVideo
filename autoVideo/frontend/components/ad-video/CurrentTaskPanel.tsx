@@ -21,6 +21,8 @@ interface CurrentTaskPanelProps {
   activeOptimizeTaskId: number | null
   manualRerunLoading: boolean
   exportingPackage: boolean
+  nextActionLabel?: string
+  nextActionHint?: string
   onOpenProject: (projectId: number) => void
   onOpenOutput: () => void
   onRerunAnotherVersion: () => void
@@ -39,6 +41,8 @@ export function CurrentTaskPanel({
   activeOptimizeTaskId,
   manualRerunLoading,
   exportingPackage,
+  nextActionLabel,
+  nextActionHint,
   onOpenProject,
   onOpenOutput,
   onRerunAnotherVersion,
@@ -71,9 +75,14 @@ export function CurrentTaskPanel({
         </div>
       </div>
 
-      {taskStatus === 'failed' && taskError ? (
-        <p className="mt-2 text-xs text-rose-600">{taskError}</p>
-      ) : null}
+      <div className="mt-3 rounded-lg border border-cyan-200 bg-white/80 p-3">
+        <p className="text-xs font-medium text-cyan-900">下一步建议</p>
+        <p className="mt-1 text-sm text-cyan-800">{nextActionLabel || '继续查看当前任务状态'}</p>
+        {nextActionHint ? <p className="mt-1 text-[11px] leading-5 text-cyan-700">{nextActionHint}</p> : null}
+        {taskStatus === 'failed' && taskError ? (
+          <p className="mt-2 text-[11px] text-rose-600">失败原因：{taskError}</p>
+        ) : null}
+      </div>
 
       {autoRetryAttempts > 0 ? (
         <p className="mt-2 text-xs text-cyan-700">已执行自动重试次数：{autoRetryAttempts}</p>
