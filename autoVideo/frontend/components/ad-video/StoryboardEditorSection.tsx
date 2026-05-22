@@ -18,6 +18,9 @@ type StoryboardEditorSectionProps = {
   storyboardPreview: StoryboardEditorShot[]
   referenceHintGeneratingAll: boolean
   referenceHintGeneratingIndex: number | null
+  imageModels: Array<{ id: number; name: string; model_key: string }>
+  selectedImageModel: string
+  onSelectedImageModelChange: (value: string) => void
   referenceHintModels: Array<{ id: number; name: string; model_key: string }>
   selectedReferenceHintModel: string
   onSelectedReferenceHintModelChange: (value: string) => void
@@ -32,6 +35,9 @@ export function StoryboardEditorSection({
   storyboardPreview,
   referenceHintGeneratingAll,
   referenceHintGeneratingIndex,
+  imageModels,
+  selectedImageModel,
+  onSelectedImageModelChange,
   referenceHintModels,
   selectedReferenceHintModel,
   onSelectedReferenceHintModelChange,
@@ -52,19 +58,6 @@ export function StoryboardEditorSection({
           <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
             {storyboardPreview.length} 个镜头
           </span>
-          <div className="flex items-center gap-2 rounded-lg border border-cyan-200 bg-white px-2 py-1">
-            <Label className="text-[11px] text-cyan-800">提示词模型</Label>
-            <Select value={selectedReferenceHintModel} onValueChange={onSelectedReferenceHintModelChange}>
-              <SelectTrigger className="h-7 w-[210px] border-0 bg-transparent px-1 text-xs shadow-none focus:ring-0">
-                <SelectValue placeholder="选择提示词模型" />
-              </SelectTrigger>
-              <SelectContent>
-                {referenceHintModels.length > 0 ? referenceHintModels.map((model) => (
-                  <SelectItem key={`ref-hint-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
-                )) : <SelectItem value="__none" disabled>暂无可用文本模型</SelectItem>}
-              </SelectContent>
-            </Select>
-          </div>
           <Button
             type="button"
             size="sm"
@@ -76,6 +69,43 @@ export function StoryboardEditorSection({
             {referenceHintGeneratingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             AI 补全全部参考图提示词
           </Button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-violet-900">图片生成逻辑</p>
+            <p className="text-[11px] leading-5 text-violet-700">若你没有提供真实图片，系统会优先依据“镜头参考图提示词”配合所选图片模型生成镜头图，再交给视频模型合成；如果你已上传真实图片，则优先使用你的图片素材。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-white px-2 py-1">
+              <Label className="text-[11px] text-violet-800">图片模型</Label>
+              <Select value={selectedImageModel} onValueChange={onSelectedImageModelChange}>
+                <SelectTrigger className="h-7 w-[210px] border-0 bg-transparent px-1 text-xs shadow-none focus:ring-0">
+                  <SelectValue placeholder="选择图片模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  {imageModels.length > 0 ? imageModels.map((model) => (
+                    <SelectItem key={`image-model-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
+                  )) : <SelectItem value="__none" disabled>暂无可用图片模型</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-cyan-200 bg-white px-2 py-1">
+              <Label className="text-[11px] text-cyan-800">提示词模型</Label>
+              <Select value={selectedReferenceHintModel} onValueChange={onSelectedReferenceHintModelChange}>
+                <SelectTrigger className="h-7 w-[210px] border-0 bg-transparent px-1 text-xs shadow-none focus:ring-0">
+                  <SelectValue placeholder="选择提示词模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  {referenceHintModels.length > 0 ? referenceHintModels.map((model) => (
+                    <SelectItem key={`ref-hint-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
+                  )) : <SelectItem value="__none" disabled>暂无可用文本模型</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
       </div>
 

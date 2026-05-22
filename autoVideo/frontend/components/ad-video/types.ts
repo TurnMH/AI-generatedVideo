@@ -85,6 +85,7 @@ export type AdVideoDraftSnapshot = {
   selectedStoryboardTemplate: string
   selectedBrandVoiceTemplate: string
   selectedVideoModel: string
+  selectedImageModel: string
   selectedReferenceHintModel: string
   selectedStylePreset: string
   selectedMotionMode: (typeof VIDEO_MOTION_OPTIONS)[number]['key']

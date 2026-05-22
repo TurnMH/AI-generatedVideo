@@ -190,6 +190,7 @@ export default function AdVideoPage() {
   const [selectedStoryboardTemplate, setSelectedStoryboardTemplate] = useState<string>(STORYBOARD_TEMPLATES[0].key)
   const [selectedBrandVoiceTemplate, setSelectedBrandVoiceTemplate] = useState<BrandVoiceTemplateKey>(BRAND_VOICE_TEMPLATES[0].key)
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
+  const [selectedImageModel, setSelectedImageModel] = useState('')
   const [selectedReferenceHintModel, setSelectedReferenceHintModel] = useState('')
   const [selectedStylePreset, setSelectedStylePreset] = useState('live-action-short')
   const [selectedMotionMode, setSelectedMotionMode] = useState<(typeof VIDEO_MOTION_OPTIONS)[number]['key']>('dynamic')
@@ -573,6 +574,7 @@ export default function AdVideoPage() {
     selectedStoryboardTemplate,
     selectedBrandVoiceTemplate,
     selectedVideoModel,
+    selectedImageModel,
     selectedReferenceHintModel,
     selectedStylePreset,
     selectedMotionMode,
@@ -609,6 +611,7 @@ export default function AdVideoPage() {
     selectedBrandVoiceTemplate,
     selectedVideoMode,
     selectedVideoModel,
+    selectedImageModel,
     selectedReferenceHintModel,
     subtitleLanguage,
     subtitleText,
@@ -639,6 +642,7 @@ export default function AdVideoPage() {
       setSelectedBrandVoiceTemplate(state.selectedBrandVoiceTemplate as BrandVoiceTemplateKey)
     }
     if (typeof state.selectedVideoModel === 'string') setSelectedVideoModel(state.selectedVideoModel)
+    if (typeof state.selectedImageModel === 'string') setSelectedImageModel(state.selectedImageModel)
     if (typeof state.selectedReferenceHintModel === 'string') setSelectedReferenceHintModel(state.selectedReferenceHintModel)
     if (typeof state.selectedStylePreset === 'string') setSelectedStylePreset(state.selectedStylePreset)
     if (state.selectedMotionMode && VIDEO_MOTION_OPTIONS.some((item) => item.key === state.selectedMotionMode)) {
@@ -772,6 +776,10 @@ export default function AdVideoPage() {
     'ad-copy-optimize-models',
     () => modelAPI.list({ type: 'llm', sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> }>
   )
+  const { data: imageModelsData } = useSWR(
+    'ad-storyboard-image-models',
+    () => modelAPI.list({ type: 'image', sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> }>
+  )
   const allVideoModels = useMemo(
     () => (((videoModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean }> })?.data ?? [])
       .filter((item) => item.is_active && item.model_key)),
@@ -781,6 +789,11 @@ export default function AdVideoPage() {
     () => (((optimizeModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> })?.data ?? [])
       .filter((item) => item.is_active && item.model_key)),
     [optimizeModelsData]
+  )
+  const availableImageModels = useMemo(
+    () => (((imageModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> })?.data ?? [])
+      .filter((item) => item.is_active && item.model_key)),
+    [imageModelsData]
   )
   const availableReferenceHintModels = useMemo(
     () => availableOptimizeModels,
@@ -1053,6 +1066,12 @@ export default function AdVideoPage() {
       setSelectedOptimizeModel(availableOptimizeModels[0].model_key)
     }
   }, [availableOptimizeModels, selectedOptimizeModel])
+
+  useEffect(() => {
+    if (!selectedImageModel && availableImageModels.length > 0) {
+      setSelectedImageModel(availableImageModels[0].model_key)
+    }
+  }, [availableImageModels, selectedImageModel])
 
   useEffect(() => {
     if (!selectedReferenceHintModel && availableReferenceHintModels.length > 0) {
@@ -1563,12 +1582,14 @@ export default function AdVideoPage() {
         step: '正在上传素材并创建项目',
       })
       appendAdTaskLog('正在上传素材并创建项目', 'progress')
+      const selectedImageModelRecord = availableImageModels.find((item) => item.model_key === selectedImageModel)
       const createRes = (await projectAPI.create({
         title: projectTitle,
-        description: `由视频广告生成器创建；目标市场：${getTargetMarketLabel()}；字幕语言：${getSubtitleLanguageLabel()}；创意模式：${getCreativeModeLabel()}；品牌语气：${getBrandVoiceLabel()}；分镜模板：${selectedStoryboardTemplateMeta.label}`,
+        description: `由视频广告生成器创建；目标市场：${getTargetMarketLabel()}；字幕语言：${getSubtitleLanguageLabel()}；创意模式：${getCreativeModeLabel()}；品牌语气：${getBrandVoiceLabel()}；分镜模板：${selectedStoryboardTemplateMeta.label}；图片模型：${selectedImageModelRecord?.name ?? '系统默认'}`,
         project_type: 'video',
         style_tags: ensureProjectMediaTag(DEFAULT_AD_TAGS, 'video'),
         target_episodes: 1,
+        image_model_id: selectedImageModelRecord?.id,
         video_mode: selectedVideoMode,
         storyboard_config: {
           style_preset: selectedStylePreset,
@@ -2399,6 +2420,9 @@ export default function AdVideoPage() {
                 storyboardPreview={storyboardPreview}
                 referenceHintGeneratingAll={referenceHintGeneratingAll}
                 referenceHintGeneratingIndex={referenceHintGeneratingIndex}
+                imageModels={availableImageModels}
+                selectedImageModel={selectedImageModel}
+                onSelectedImageModelChange={setSelectedImageModel}
                 referenceHintModels={availableReferenceHintModels}
                 selectedReferenceHintModel={selectedReferenceHintModel}
                 onSelectedReferenceHintModelChange={setSelectedReferenceHintModel}
