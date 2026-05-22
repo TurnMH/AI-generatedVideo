@@ -43,577 +43,53 @@ import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel
 import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
 import { StoryboardEditorSection } from '@/components/ad-video/StoryboardEditorSection'
 import { VIDEO_MOTION_OPTIONS, VIDEO_STYLE_PRESETS } from '@/lib/video-style-config'
-
-function parseLines(raw: string): string[] {
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
-
-function isHttpUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url)
-}
-
-function isSupportedVideoFile(file: File): boolean {
-  const mime = String(file.type || '').toLowerCase()
-  if (mime.startsWith('video/')) return true
-  const name = String(file.name || '').toLowerCase()
-  return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name)
-}
-
-const DEFAULT_AD_TAGS = ['广告', '品牌宣传', '短视频营销']
-
-const AD_TEMPLATES = [
-  {
-    key: 'ecommerce-sale',
-    label: '电商促销',
-    hint: '强调优惠与转化，适合活动节点投放',
-    promptSeed: '产品主打卖点清晰、限时促销、结尾强 CTA，节奏快，镜头以产品特写+真人使用场景为主。',
-    style: 'live-action-short',
-    motion: 'dynamic',
-    duration: 4,
-  },
-  {
-    key: 'brand-story',
-    label: '品牌故事',
-    hint: '强化品牌感与情绪价值，适合品牌曝光',
-    promptSeed: '突出品牌理念与情绪共鸣，通过人物故事线带出产品价值，结尾口号有记忆点。',
-    style: 'live-action-film',
-    motion: 'cinematic',
-    duration: 5,
-  },
-  {
-    key: 'app-growth',
-    label: '应用拉新',
-    hint: '问题-解决方案-下载引导结构，适合信息流',
-    promptSeed: '展示用户痛点与使用前后对比，强调功能亮点与一键下载，引导立即行动。',
-    style: 'live-action-short',
-    motion: 'gentle',
-    duration: 3,
-  },
-] as const
-
-const STORYBOARD_TEMPLATES = [
-  {
-    key: 'product-reveal',
-    label: '产品开场',
-    hint: '适合先展示产品本体，再用使用场景和收尾 CTA 完成转化。',
-    sceneLines: [
-      '开场产品特写：直接展示品牌主视觉与核心卖点。',
-      '功能细节镜头：突出材质、界面或使用方式。',
-      '真实使用场景：让目标用户看到自己在画面里的样子。',
-      '收尾 CTA：强化优惠、购买或下载行动。',
-    ],
-    dialogueLines: [
-      '先把最强卖点讲出来。',
-      '再补一条能感知到的功能优势。',
-      '把用户放进真实使用场景里。',
-      '最后明确行动号召。',
-    ],
-    referenceLines: [
-      '白底产品特写 / 主视觉海报',
-      '功能细节近景 / 包装或界面截图',
-      '人物手持使用 / 场景化照片',
-      '品牌结尾海报 / 优惠 CTA 图',
-    ],
-  },
-  {
-    key: 'pain-solution',
-    label: '痛点解决',
-    hint: '适合先抛出痛点，再给出解决方案和结果对比。',
-    sceneLines: [
-      '痛点开场：展示用户当前遇到的困扰。',
-      '方案登场：让产品作为解决方案出现。',
-      '结果对比：突出使用前后变化。',
-      '行动号召：引导立即体验或购买。',
-    ],
-    dialogueLines: [
-      '这个问题是不是你也遇到过？',
-      '我们用这个方案直接解决。',
-      '前后变化一眼就能看懂。',
-      '现在就去试试。',
-    ],
-    referenceLines: [
-      '问题场景抓拍 / 用户痛点画面',
-      '产品解决方案图 / 功能演示截图',
-      '前后对比拼图 / 结果对照图',
-      '下载页 / 购买按钮 / 优惠弹窗',
-    ],
-  },
-  {
-    key: 'social-proof',
-    label: '口碑转化',
-    hint: '适合用评价、测评和真实反馈增强信任。',
-    sceneLines: [
-      '用户口碑开场：先给出好评或评分。',
-      '真实测评镜头：展示产品在手里的状态。',
-      '结果反馈：补充用户使用后的感受。',
-      '品牌收尾：统一品牌信息与 CTA。',
-    ],
-    dialogueLines: [
-      '大家都在夸的点，先看这里。',
-      '实测一下，效果很直接。',
-      '用户反馈和结果都很清晰。',
-      '想要同款，马上行动。',
-    ],
-    referenceLines: [
-      '评分截图 / 评论区高赞图',
-      '实拍测评 / 近景手持图',
-      '用户反馈截图 / 对比图',
-      '品牌收口海报 / CTA 图',
-    ],
-  },
-] as const
-
-const BRAND_VOICE_TEMPLATES = [
-  {
-    key: 'premium',
-    label: '高端质感',
-    hint: '适合强调质感、克制和品牌信任的广告。',
-    directive: '品牌语气要克制、干净、稍有留白，突出高级感和可信度。',
-    contrast: '更适合美妆、消费电子、高客单价品牌。',
-  },
-  {
-    key: 'youthful',
-    label: '年轻活力',
-    hint: '适合轻快、社交感和即时反馈强的广告。',
-    directive: '品牌语气要轻快、口语化、带一点社交感，结尾 CTA 要直接。',
-    contrast: '更适合饮料、零食、APP 拉新和短视频投放。',
-  },
-  {
-    key: 'expert',
-    label: '专业可信',
-    hint: '适合功能说明、工具类和知识型产品。',
-    directive: '品牌语气要专业、清楚、避免夸张，用事实和功能点建立信任。',
-    contrast: '更适合工具、科技、教育和 B2B 内容。',
-  },
-  {
-    key: 'promo',
-    label: '促销直给',
-    hint: '适合活动投放、限时促销和转化导向广告。',
-    directive: '品牌语气要直接、明确、转化导向强，少修辞，多利益点和行动号召。',
-    contrast: '更适合活动节点、优惠券和强 CTA 场景。',
-  },
-] as const
-
-type OptimizedAdResult = {
-  title: string
-  content: string
-  outline: string[]
-  tags: string[]
-}
-
-type VideoTaskSnapshot = {
-  id: number
-  status: string
-  model_name?: string
-  result_url?: string
-  hls_url?: string
-  error_msg?: string
-  created_at?: string
-  updated_at?: string
-  clips?: Array<{ status?: string }>
-  image_urls?: string[]
-}
-
-type TaskProgressRecord = {
-  id?: number
-  task_id: number
-  progress: number
-  message: string
-  status: string
-  timestamp: number
-  created_at?: string
-}
-
-type GenerationContext = {
-  projectId: number
-  projectTitle: string
-  prompt: string
-  imageUrls: string[]
-  sceneDescriptions: string[]
-  storyboardTemplate: string
-  referenceImageHints: string[]
-  brandVoiceTemplate: string
-  brandVoiceNotes: string
-  modelName: string
-  stylePreset: string
-  motionMode: (typeof VIDEO_MOTION_OPTIONS)[number]['key']
-  videoMode: 'frame_animation' | 'api_generation'
-  clipDurationSec: number
-  targetMarket: string
-  subtitleLanguage: string
-  creativeMode: string
-  directorNote: string
-  subtitleText: string
-  dialogues: string[]
-  startedAt: string
-}
-
-type RetryRecord = {
-  timestamp: string
-  fromModel: string
-  toModel: string
-  reason: string
-  status: 'submitted' | 'failed'
-}
-
-type AdTaskLogEntry = {
-  at: string
-  level: 'info' | 'progress' | 'success' | 'warning' | 'error'
-  message: string
-}
-
-const TARGET_MARKET_OPTIONS = [
-  {
-    key: 'cn-mainland',
-    label: '中国大陆',
-    prompt: '使用大陆短视频广告口吻，优先本地化消费场景、直接卖点和明确 CTA，避免泛国际化表达。',
-  },
-  {
-    key: 'global-en',
-    label: '海外英语',
-    prompt: 'Use natural market-local English copy, avoid literal translation, and keep the CTA concise and persuasive.',
-  },
-  {
-    key: 'sea',
-    label: '东南亚',
-    prompt: '使用容易理解的本地化营销文案，强调价格感、利益点和直接转化，不要过度文艺化。',
-  },
-] as const
-
-const SUBTITLE_LANGUAGE_OPTIONS = [
-  {
-    key: 'zh-CN',
-    label: '中文',
-    prompt: '字幕、口播与镜头文案全部使用中文，句子短一点，便于烧录和 TTS 对齐。',
-  },
-  {
-    key: 'en-US',
-    label: '英文',
-    prompt: 'Subtitle and spoken lines should be in natural English; avoid direct translation and keep the lines short.',
-  },
-  {
-    key: 'bilingual',
-    label: '中英双语',
-    prompt: '字幕按中英双语输出，优先保证中文卖点不丢失，同时保留英文可投放版本。',
-  },
-] as const
-
-const CREATIVE_MODE_OPTIONS = [
-  {
-    key: 'market-first',
-    label: '市场优先',
-    prompt: '优先匹配目标市场，不要把脚本自动改成过于泛化的广告腔。',
-  },
-  {
-    key: 'script-preserved',
-    label: '文案保真',
-    prompt: '尽量保留用户原文的卖点和节奏，只做必要的整理，不要重写核心卖点。',
-  },
-  {
-    key: 'director-led',
-    label: '导演强化',
-    prompt: '允许强化镜头感和节奏，但不要偏离品牌信息和目标市场。',
-  },
-] as const
-
-const AD_VIDEO_DRAFT_STORAGE_KEY = 'autovideo:ad-video-draft:v1'
-const AD_VIDEO_HISTORY_STORAGE_KEY = 'autovideo:ad-video-history:v1'
-
-type AdVideoDraftSnapshot = {
-  title: string
-  adPrompt: string
-  optimizedScript: string
-  imageUrlsText: string
-  sceneDescriptionsText: string
-  referenceImageHintsText: string
-  brandVoiceNotesText: string
-  targetMarket: string
-  subtitleLanguage: string
-  creativeMode: string
-  directorNote: string
-  subtitleText: string
-  selectedTemplate: string
-  selectedStoryboardTemplate: string
-  selectedBrandVoiceTemplate: string
-  selectedVideoModel: string
-  selectedStylePreset: string
-  selectedMotionMode: (typeof VIDEO_MOTION_OPTIONS)[number]['key']
-  selectedVideoMode: 'frame_animation' | 'api_generation'
-  clipDurationSec: number
-  autoOptimizeCopy: boolean
-  enableLocalCompression: boolean
-  maxImageSide: number
-  jpegQuality: number
-  autoAvoidLowHourEnabled: boolean
-  lowHourThreshold: number
-  autoRetryEnabled: boolean
-}
-
-type AdReviewChecklistItem = {
-  key: string
-  label: string
-  passed: boolean
-  detail: string
-  blocking: boolean
-}
-
-type AdVideoHistoryEntry = {
-  id: string
-  savedAt: string
-  label: string
-  state: AdVideoDraftSnapshot
-}
-
-type AdGenerationTaskStatus = 'queued' | 'optimizing' | 'uploading' | 'submitting' | 'running' | 'succeeded' | 'failed'
-
-type AdGenerationTaskEntry = {
-  id: string
-  createdAt: string
-  updatedAt: string
-  label: string
-  status: AdGenerationTaskStatus
-  step: string
-  projectId?: number
-  outputUrl?: string
-  error?: string
-  title: string
-  marketLabel: string
-  brandVoiceLabel: string
-  storyboardLabel: string
-  subtitleCount: number
-  imageCount: number
-}
-
-type StoryboardPreviewItem = {
-  index: number
-  scene: string
-  sceneResolved: string
-  scenePlaceholder: string
-  dialogue: string
-  dialogueResolved: string
-  dialoguePlaceholder: string
-  referenceHint: string
-  referenceHintPlaceholder: string
-  imageSource: string
-  hasDialogue: boolean
-  hasReferenceHint: boolean
-}
-
-type BrandVoiceTemplateKey = (typeof BRAND_VOICE_TEMPLATES)[number]['key']
-
-function splitSubtitleScript(raw: string): string[] {
-  const normalized = String(raw || '').replace(/\r\n/g, '\n').trim()
-  if (!normalized) return []
-
-  const directLines = normalized
-    .split('\n')
-    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim())
-    .filter(Boolean)
-
-  if (directLines.length > 0) {
-    return directLines
-  }
-
-  return normalized
-    .split(/[。！？!?；;]+/)
-    .map((line) => line.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim())
-    .filter(Boolean)
-}
-
-function splitEditableLines(raw: string): string[] {
-  return String(raw || '').replace(/\r\n/g, '\n').split('\n')
-}
-
-function updateLineAtIndex(raw: string, index: number, nextValue: string): string {
-  const lines = splitEditableLines(raw)
-  while (lines.length <= index) {
-    lines.push('')
-  }
-  lines[index] = nextValue
-  return lines.join('\n')
-}
-
-function normalizeEditableLine(raw: string): string {
-  return String(raw || '')
-    .replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '')
-    .trim()
-}
-
-function countEditableSlots(lines: readonly string[]): number {
-  return lines.some((line) => normalizeEditableLine(line).length > 0) ? lines.length : 0
-}
-
-function distributeDialogues(lines: readonly string[], clipCount: number): string[] {
-  if (clipCount <= 0) return []
-
-  const normalized = lines.map((line) => line.trim()).filter(Boolean)
-  if (normalized.length === 0) {
-    return Array.from({ length: clipCount }, () => '')
-  }
-
-  if (normalized.length === 1) {
-    return Array.from({ length: clipCount }, () => normalized[0])
-  }
-
-  const result: string[] = []
-  for (let index = 0; index < clipCount; index += 1) {
-    const start = Math.floor((index * normalized.length) / clipCount)
-    const end = Math.max(start + 1, Math.floor(((index + 1) * normalized.length) / clipCount))
-    const chunk = normalized.slice(start, end)
-    result.push(chunk.join(' ').trim() || normalized[Math.min(start, normalized.length - 1)] || '')
-  }
-  return result
-}
-
-function buildMarketDirective(
-  marketKey: string,
-  subtitleLanguageKey: string,
-  creativeModeKey: string,
-  directorNote: string,
-  brandVoiceKey: string,
-  brandVoiceNotes: string,
-): string {
-  const marketOption = TARGET_MARKET_OPTIONS.find((item) => item.key === marketKey) ?? TARGET_MARKET_OPTIONS[0]
-  const subtitleLanguageOption = SUBTITLE_LANGUAGE_OPTIONS.find((item) => item.key === subtitleLanguageKey) ?? SUBTITLE_LANGUAGE_OPTIONS[0]
-  const creativeModeOption = CREATIVE_MODE_OPTIONS.find((item) => item.key === creativeModeKey) ?? CREATIVE_MODE_OPTIONS[0]
-  const brandVoiceOption = BRAND_VOICE_TEMPLATES.find((item) => item.key === brandVoiceKey) ?? BRAND_VOICE_TEMPLATES[0]
-  const note = directorNote.trim()
-  const voiceNote = brandVoiceNotes.trim()
-
-  return [
-    `目标市场：${marketOption.label}`,
-    marketOption.prompt,
-    `字幕语言：${subtitleLanguageOption.label}`,
-    subtitleLanguageOption.prompt,
-    `创意模式：${creativeModeOption.label}`,
-    creativeModeOption.prompt,
-    `品牌语气：${brandVoiceOption.label}`,
-    brandVoiceOption.directive,
-    brandVoiceOption.contrast,
-    voiceNote ? `品牌语气补充：${voiceNote}` : '',
-    note ? `导演备注：${note}` : '',
-    '要求：字幕、口播和镜头说明要一一对应，保持品牌卖点，不要把本地市场脚本自动改写成泛化风格。',
-  ].filter(Boolean).join('\n')
-}
-
-function getTargetMarketLabelSafe(marketKey: string): string {
-  return TARGET_MARKET_OPTIONS.find((item) => item.key === marketKey)?.label ?? TARGET_MARKET_OPTIONS[0].label
-}
-
-function readAdVideoDraft(): { savedAt: string | null; state: Partial<AdVideoDraftSnapshot> | null } {
-  if (typeof window === 'undefined') {
-    return { savedAt: null, state: null }
-  }
-
-  try {
-    const raw = window.localStorage.getItem(AD_VIDEO_DRAFT_STORAGE_KEY)
-    if (!raw) {
-      return { savedAt: null, state: null }
-    }
-
-    const parsed = JSON.parse(raw) as { savedAt?: string; state?: Partial<AdVideoDraftSnapshot> }
-    return {
-      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
-      state: parsed && typeof parsed === 'object' ? (parsed.state ?? null) : null,
-    }
-  } catch {
-    return { savedAt: null, state: null }
-  }
-}
-
-function writeAdVideoDraft(state: AdVideoDraftSnapshot): string {
-  if (typeof window === 'undefined') {
-    return ''
-  }
-
-  const savedAt = new Date().toISOString()
-  window.localStorage.setItem(AD_VIDEO_DRAFT_STORAGE_KEY, JSON.stringify({
-    savedAt,
-    state,
-  }))
-  return savedAt
-}
-
-function readAdVideoHistory(): AdVideoHistoryEntry[] {
-  if (typeof window === 'undefined') {
-    return []
-  }
-
-  try {
-    const raw = window.localStorage.getItem(AD_VIDEO_HISTORY_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((entry) => entry && typeof entry === 'object') as AdVideoHistoryEntry[]
-  } catch {
-    return []
-  }
-}
-
-function writeAdVideoHistory(entries: AdVideoHistoryEntry[]) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.localStorage.setItem(AD_VIDEO_HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 8)))
-}
-
-function clearAdVideoDraft() {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  window.localStorage.removeItem(AD_VIDEO_DRAFT_STORAGE_KEY)
-}
-
-function normalizeFailureReason(raw?: string): string {
-  const text = String(raw || '').trim()
-  if (!text) return '未知失败'
-  if (/timeout|timed out|超时/i.test(text)) return '超时'
-  if (/quota|limit|额度|频率|429/i.test(text)) return '额度/频率限制'
-  if (/auth|token|unauthorized|forbidden|401|403/i.test(text)) return '鉴权失败'
-  if (/network|connect|dns|socket|网关|502|503|504/i.test(text)) return '网络/网关异常'
-  if (/invalid|参数|bad request|400/i.test(text)) return '参数无效'
-  return text.slice(0, 40)
-}
-
-function percentile(sortedValues: number[], p: number): number {
-  if (sortedValues.length === 0) return 0
-  const rank = Math.ceil((p / 100) * sortedValues.length) - 1
-  const index = Math.min(sortedValues.length - 1, Math.max(0, rank))
-  return sortedValues[index]
-}
-
-function estimateCostFactor(modelName: string): number {
-  const key = modelName.toLowerCase()
-  if (key.includes('sora') || key.includes('seedance') || key.includes('kling')) return 1.45
-  if (key.includes('vidu') || key.includes('doubao') || key.includes('wan')) return 1.2
-  if (key.includes('comfyui') || key.includes('local')) return 0.5
-  return 1.0
-}
-
-function normalizeImageUrlFromAsset(asset: Partial<Asset> | null | undefined): string {
-  if (!asset) return ''
-  const direct = String(asset.image_url ?? '').trim()
-  if (direct) return direct
-
-  const selected = String((asset.metadata as Record<string, unknown> | undefined)?.selected_generated_image_url ?? '').trim()
-  if (selected) return selected
-
-  const generated = (asset.metadata as Record<string, unknown> | undefined)?.generated_images
-  if (Array.isArray(generated)) {
-    for (const item of generated) {
-      if (item && typeof item === 'object') {
-        const url = String((item as Record<string, unknown>).url ?? '').trim()
-        if (url) return url
-      }
-    }
-  }
-  return ''
-}
+import {
+  AD_TEMPLATES,
+  AD_VIDEO_HISTORY_STORAGE_KEY,
+  AD_VIDEO_DRAFT_STORAGE_KEY,
+  BRAND_VOICE_TEMPLATES,
+  CREATIVE_MODE_OPTIONS,
+  DEFAULT_AD_TAGS,
+  STORYBOARD_TEMPLATES,
+  SUBTITLE_LANGUAGE_OPTIONS,
+  TARGET_MARKET_OPTIONS,
+} from '@/components/ad-video/constants'
+import type {
+  AdGenerationTaskEntry,
+  AdReviewChecklistItem,
+  AdTaskLogEntry,
+  AdVideoDraftSnapshot,
+  AdVideoHistoryEntry,
+  BrandVoiceTemplateKey,
+  GenerationContext,
+  OptimizedAdResult,
+  RetryRecord,
+  StoryboardPreviewItem,
+  TaskProgressRecord,
+  VideoTaskSnapshot,
+} from '@/components/ad-video/types'
+import {
+  buildMarketDirective,
+  clearAdVideoDraft,
+  countEditableSlots,
+  distributeDialogues,
+  estimateCostFactor,
+  getTargetMarketLabelSafe,
+  isHttpUrl,
+  isSupportedVideoFile,
+  normalizeEditableLine,
+  normalizeFailureReason,
+  normalizeImageUrlFromAsset,
+  parseLines,
+  percentile,
+  readAdVideoDraft,
+  readAdVideoHistory,
+  splitEditableLines,
+  splitSubtitleScript,
+  updateLineAtIndex,
+  writeAdVideoDraft,
+  writeAdVideoHistory,
+} from '@/components/ad-video/utils'
 
 async function compressImage(file: File, maxSide: number, quality: number): Promise<File> {
   if (!file.type.startsWith('image/')) return file
@@ -668,6 +144,7 @@ export default function AdVideoPage() {
   const [title, setTitle] = useState('')
   const [adPrompt, setAdPrompt] = useState('')
   const [optimizedScript, setOptimizedScript] = useState('')
+  const [selectedOptimizeModel, setSelectedOptimizeModel] = useState('')
   const [imageUrlsText, setImageUrlsText] = useState('')
   const [sceneDescriptionsText, setSceneDescriptionsText] = useState('')
   const [localFiles, setLocalFiles] = useState<File[]>([])
@@ -1287,10 +764,20 @@ export default function AdVideoPage() {
     'ad-video-models',
     () => modelAPI.list({ type: 'video', sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean }> }>
   )
+  const { data: optimizeModelsData } = useSWR(
+    'ad-copy-optimize-models',
+    () => modelAPI.list({ sort_by: 'priority' }) as unknown as Promise<{ data: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> }>
+  )
   const allVideoModels = useMemo(
     () => (((videoModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean }> })?.data ?? [])
       .filter((item) => item.is_active && item.model_key)),
     [videoModelsData]
+  )
+  const availableOptimizeModels = useMemo(
+    () => (((optimizeModelsData as { data?: Array<{ id: number; name: string; model_key: string; is_active: boolean; type?: string }> })?.data ?? [])
+      .filter((item) => item.is_active && item.model_key)
+      .filter((item) => item.type !== 'video')),
+    [optimizeModelsData]
   )
 
   const { data: projectTasksRaw } = useSWR(
@@ -1555,6 +1042,12 @@ export default function AdVideoPage() {
   }, [availableVideoModels, selectedVideoModel])
 
   useEffect(() => {
+    if (!selectedOptimizeModel && availableOptimizeModels.length > 0) {
+      setSelectedOptimizeModel(availableOptimizeModels[0].model_key)
+    }
+  }, [availableOptimizeModels, selectedOptimizeModel])
+
+  useEffect(() => {
     if (availableVideoModels.length === 0) {
       setBatchModelKeys((prev) => (prev.length === 0 ? prev : []))
       return
@@ -1577,7 +1070,7 @@ export default function AdVideoPage() {
     })
   }, [availableVideoModels])
 
-  const applyTemplate = (templateKey: (typeof AD_TEMPLATES)[number]['key']) => {
+  const applyTemplate = (templateKey: string) => {
     const template = AD_TEMPLATES.find((item) => item.key === templateKey)
     if (!template) return
     setSelectedTemplate(template.key)
@@ -1853,18 +1346,24 @@ export default function AdVideoPage() {
         task_type: 'script_quick_generate',
         payload: {
           mode: 'script',
+          model_name: selectedOptimizeModel || undefined,
           premise,
           genre: '广告短片',
           platform: `${marketLabel}短视频投放`,
-          delivery_format: '分镜脚本+逐句口播+字幕分行+结尾CTA',
-          episode_duration: '45-60秒',
+          delivery_format: '最终口播稿+逐句分行字幕+分镜建议+结尾CTA',
+          episode_duration: '55-60秒',
           tone: creativeMode === 'script-preserved'
             ? '保留原文卖点和节奏，减少导演改写'
             : creativeMode === 'director-led'
               ? '强化镜头感、节奏感和转化导向，但保持市场一致性'
               : '本地化、口语化、直给卖点，避免泛化广告腔',
           requirements: [
-            '输出可直接用于广告视频生成，包含镜头建议、产品卖点、情绪转折和行动号召',
+            '请先将用户原稿优化为可直接用于中文广告口播的最终文案，再输出分镜建议。',
+            '口播文案必须适合 TTS，句子简短清楚，避免书面腔和空泛营销话术。',
+            '禁止收益承诺、保证盈利、喊单、暗示稳赚等金融违规表达。',
+            '必须保留“投资教育/认知提升/免费/不营销/不推销产品/BAND链接CTA”这些核心信息。',
+            '请优先输出：1) 最终口播稿；2) 逐句分行字幕；3) 分镜建议；4) 结尾CTA。',
+            '最终口播目标时长 55-60 秒。',
             `目标市场：${marketLabel}`,
             `字幕语言：${subtitleLanguageLabel}`,
             `创意模式：${creativeModeLabel}`,
@@ -1872,15 +1371,15 @@ export default function AdVideoPage() {
             subtitleLineHint,
             marketBrief,
           ].join('\n'),
-          target_words: 750,
-          chapter_count: 5,
+          target_words: 900,
+          chapter_count: 6,
         },
       }) as unknown as { data?: { id?: number } }
 
       const optimizeTaskId = Number(taskRes?.data?.id ?? 0)
       if (!optimizeTaskId) throw new Error('文案优化任务创建失败')
       setActiveOptimizeTaskId(optimizeTaskId)
-      appendAdTaskLog(`文案优化任务已创建 #${optimizeTaskId}`, 'progress')
+      appendAdTaskLog(`文案优化任务已创建 #${optimizeTaskId}${selectedOptimizeModel ? ` · 模型 ${selectedOptimizeModel}` : ''}`, 'progress')
 
       const result = await new Promise<OptimizedAdResult>((resolve, reject) => {
         let elapsed = 0
@@ -2767,6 +2266,19 @@ export default function AdVideoPage() {
                 <Switch checked={autoOptimizeCopy} onCheckedChange={setAutoOptimizeCopy} />
                 生成前自动优化文案
               </div>
+              <div className="flex items-center gap-2 text-xs text-surface-600">
+                <span>优化模型</span>
+                <Select value={selectedOptimizeModel} onValueChange={setSelectedOptimizeModel}>
+                  <SelectTrigger className="h-8 w-[220px] bg-white text-xs">
+                    <SelectValue placeholder="选择优化模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableOptimizeModels.length > 0 ? availableOptimizeModels.map((model) => (
+                      <SelectItem key={`opt-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
+                    )) : <SelectItem value="__none" disabled>暂无可用优化模型</SelectItem>}
+                  </SelectContent>
+                </Select>
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -2783,6 +2295,7 @@ export default function AdVideoPage() {
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
                 <p className="text-xs font-medium text-emerald-700">优化后文案（已用于生成）</p>
                 <p className="mt-1 line-clamp-4 text-xs leading-5 text-emerald-800">{optimizedScript}</p>
+                {selectedOptimizeModel ? <p className="mt-2 text-[11px] text-emerald-700">优化模型：{selectedOptimizeModel}</p> : null}
               </div>
             ) : null}
           </div>
