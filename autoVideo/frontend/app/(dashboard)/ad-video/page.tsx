@@ -215,6 +215,8 @@ export default function AdVideoPage() {
   const [activeOptimizeTaskId, setActiveOptimizeTaskId] = useState<number | null>(null)
   const [referenceHintGeneratingAll, setReferenceHintGeneratingAll] = useState(false)
   const [referenceHintGeneratingIndex, setReferenceHintGeneratingIndex] = useState<number | null>(null)
+  const [storyboardRefreshingIndex, setStoryboardRefreshingIndex] = useState<number | null>(null)
+  const [storyboardRetryingIndex, setStoryboardRetryingIndex] = useState<number | null>(null)
   const [storyboardGenerating, setStoryboardGenerating] = useState(false)
   const [storyboardGeneratedAt, setStoryboardGeneratedAt] = useState<string | null>(null)
   const [reviewConfirmed, setReviewConfirmed] = useState(false)
@@ -775,7 +777,7 @@ export default function AdVideoPage() {
     }
   )
 
-  const { data: projectStoryboardsRaw } = useSWR(
+  const { data: projectStoryboardsRaw, mutate: mutateProjectStoryboards } = useSWR(
     activeProjectId ? ['ad-video-project-storyboards', activeProjectId] : null,
     () => storyboardAPI.listAll(activeProjectId as number, { include_versions: true }) as Promise<{ data?: Storyboard[] }>,
     {
@@ -849,6 +851,8 @@ export default function AdVideoPage() {
       let storyboardStatusTone: StoryboardPreviewItem['storyboardStatusTone'] = 'emerald'
       let storyboardStatusLabel = '可生成'
       let storyboardStatusDetail = '当前镜头信息已齐，可用于手动提交分镜图片生成。'
+      let frontendBlockingDetail = ''
+      let backendFailureDetail = ''
 
       if (matchedStoryboard?.status === 'completed') {
         storyboardStatus = 'submitted'
@@ -859,8 +863,9 @@ export default function AdVideoPage() {
         storyboardStatus = 'attention'
         storyboardStatusTone = 'amber'
         storyboardStatusLabel = '生成失败'
-        storyboardStatusDetail = matchedStoryboard.error_msg?.trim()
-          ? `真实分镜生成失败：${matchedStoryboard.error_msg.trim()}`
+        backendFailureDetail = matchedStoryboard.error_msg?.trim() || ''
+        storyboardStatusDetail = backendFailureDetail
+          ? `真实分镜生成失败：${backendFailureDetail}`
           : '真实分镜生成失败，建议调整当前镜头后重试。'
       } else if (matchedStoryboard?.status === 'generating' || matchedStoryboard?.status === 'pending') {
         storyboardStatus = 'generating'
@@ -881,11 +886,13 @@ export default function AdVideoPage() {
         storyboardStatus = 'blocked'
         storyboardStatusTone = 'amber'
         storyboardStatusLabel = '信息不足'
+        frontendBlockingDetail = `缺少 ${storyboardBlockingItems.join('、')}`
         storyboardStatusDetail = '当前镜头仍缺少关键信息，建议先补齐后再生成，避免得到空泛或失真的分镜图。'
       } else if (storyboardBlockingItems.length === 1) {
         storyboardStatus = 'attention'
         storyboardStatusTone = 'amber'
         storyboardStatusLabel = '待补一项'
+        frontendBlockingDetail = `缺少 ${storyboardBlockingItems[0]}`
         storyboardStatusDetail = `当前还差 1 项：${storyboardBlockingItems[0]}。补齐后更适合提交分镜生成。`
       }
 
@@ -910,6 +917,8 @@ export default function AdVideoPage() {
         storyboardStatusDetail,
         storyboardStatusTone,
         storyboardBlockingItems,
+        frontendBlockingDetail,
+        backendFailureDetail,
         realStoryboardId: matchedStoryboard?.id,
         realStoryboardSequence: matchedStoryboard?.sequence_number,
         realStoryboardStatus: matchedStoryboard?.status,
@@ -918,6 +927,45 @@ export default function AdVideoPage() {
       }
     })
   }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardBySequence, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
+
+  const refreshStoryboardAtIndex = async (shot: StoryboardPreviewItem) => {
+    if (!activeProjectId || !shot.realStoryboardId) return
+    setStoryboardRefreshingIndex(shot.index)
+    try {
+      await mutateProjectStoryboards()
+      toast({ title: `镜头 ${shot.index + 1} 已刷新`, variant: 'success' })
+    } catch (error) {
+      toast({
+        title: '刷新分镜结果失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    } finally {
+      setStoryboardRefreshingIndex(null)
+    }
+  }
+
+  const retryStoryboardAtIndex = async (shot: StoryboardPreviewItem) => {
+    if (!activeProjectId || !shot.realStoryboardId) return
+    setStoryboardRetryingIndex(shot.index)
+    try {
+      await storyboardAPI.retry(activeProjectId, shot.realStoryboardId, selectedImageModel || undefined)
+      await mutateProjectStoryboards()
+      toast({
+        title: `镜头 ${shot.index + 1} 已提交重试`,
+        description: '稍后可点击刷新结果查看真实状态回填。',
+        variant: 'success',
+      })
+    } catch (error) {
+      toast({
+        title: '单镜头重试失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    } finally {
+      setStoryboardRetryingIndex(null)
+    }
+  }
 
   const sessionTasks = useMemo(() => {
     if (!sessionAnchorAt) return projectTasks
@@ -2709,6 +2757,10 @@ export default function AdVideoPage() {
                 onSelectedReferenceHintModelChange={setSelectedReferenceHintModel}
                 onFillAllReferenceHints={fillReferenceHintsForAll}
                 onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
+                onRetryStoryboardAtIndex={retryStoryboardAtIndex}
+                onRefreshStoryboardAtIndex={refreshStoryboardAtIndex}
+                storyboardRefreshingIndex={storyboardRefreshingIndex}
+                storyboardRetryingIndex={storyboardRetryingIndex}
                 onSceneChange={(index, value) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))}
                 onReferenceHintChange={(index, value) => setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))}
                 onDialogueChange={(index, value) => setSubtitleText((prev) => updateLineAtIndex(prev, index, value))}

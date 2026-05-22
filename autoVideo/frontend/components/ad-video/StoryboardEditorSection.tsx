@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Loader2, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import type { StoryboardPreviewItem } from '@/components/ad-video/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +33,10 @@ type StoryboardEditorSectionProps = {
   onSelectedReferenceHintModelChange: (value: string) => void
   onFillAllReferenceHints: () => void
   onFillReferenceHintAtIndex: (shot: StoryboardEditorShot) => void
+  onRetryStoryboardAtIndex: (shot: StoryboardEditorShot) => void
+  onRefreshStoryboardAtIndex: (shot: StoryboardEditorShot) => void
+  storyboardRefreshingIndex: number | null
+  storyboardRetryingIndex: number | null
   onSceneChange: (index: number, value: string) => void
   onReferenceHintChange: (index: number, value: string) => void
   onDialogueChange: (index: number, value: string) => void
@@ -50,6 +54,10 @@ export function StoryboardEditorSection({
   onSelectedReferenceHintModelChange,
   onFillAllReferenceHints,
   onFillReferenceHintAtIndex,
+  onRetryStoryboardAtIndex,
+  onRefreshStoryboardAtIndex,
+  storyboardRefreshingIndex,
+  storyboardRetryingIndex,
   onSceneChange,
   onReferenceHintChange,
   onDialogueChange,
@@ -186,8 +194,11 @@ export function StoryboardEditorSection({
                       ) : null}
                     </div>
                   ) : null}
-                  {shot.realStoryboardError ? (
-                    <p className="mt-2 text-[10px] leading-4 text-amber-700">失败原因：{shot.realStoryboardError}</p>
+                  {shot.backendFailureDetail ? (
+                    <p className="mt-2 text-[10px] leading-4 text-amber-700">后端失败：{shot.backendFailureDetail}</p>
+                  ) : null}
+                  {shot.frontendBlockingDetail ? (
+                    <p className="mt-2 text-[10px] leading-4 text-surface-500">待补信息：{shot.frontendBlockingDetail}</p>
                   ) : null}
                   {shot.storyboardBlockingItems.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -198,6 +209,30 @@ export function StoryboardEditorSection({
                       ))}
                     </div>
                   ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onRefreshStoryboardAtIndex(shot)}
+                      disabled={storyboardRefreshingIndex === shot.index || !shot.realStoryboardId}
+                      className="h-7 gap-1 text-[11px]"
+                    >
+                      {storyboardRefreshingIndex === shot.index ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      刷新结果
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onRetryStoryboardAtIndex(shot)}
+                      disabled={storyboardRetryingIndex === shot.index || !shot.realStoryboardId || shot.realStoryboardStatus !== 'failed'}
+                      className="h-7 gap-1 border-amber-200 text-[11px] text-amber-700 hover:bg-amber-50"
+                    >
+                      {storyboardRetryingIndex === shot.index ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      重试该镜头
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

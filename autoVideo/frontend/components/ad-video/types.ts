@@ -160,6 +160,8 @@ export type StoryboardPreviewItem = {
   storyboardStatusDetail: string
   storyboardStatusTone: StoryboardPreviewTone
   storyboardBlockingItems: string[]
+  frontendBlockingDetail?: string
+  backendFailureDetail?: string
   realStoryboardId?: number
   realStoryboardSequence?: number
   realStoryboardStatus?: string
