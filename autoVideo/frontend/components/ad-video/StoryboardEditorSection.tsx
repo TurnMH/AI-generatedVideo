@@ -33,6 +33,8 @@ type StoryboardEditorSectionProps = {
     succeeded: number
     failed: number
     submitted: number
+    reviewed: number
+    unreviewedSucceeded: number
   }
   referenceHintGeneratingAll: boolean
   referenceHintGeneratingIndex: number | null
@@ -46,6 +48,7 @@ type StoryboardEditorSectionProps = {
   onFillReferenceHintAtIndex: (shot: StoryboardEditorShot) => void
   onRetryStoryboardAtIndex: (shot: StoryboardEditorShot) => void
   onRefreshStoryboardAtIndex: (shot: StoryboardEditorShot) => void
+  onToggleStoryboardReviewed: (shot: StoryboardEditorShot) => void
   storyboardRefreshingIndex: number | null
   storyboardRetryingIndex: number | null
   onSceneChange: (index: number, value: string) => void
@@ -68,6 +71,7 @@ export function StoryboardEditorSection({
   onFillReferenceHintAtIndex,
   onRetryStoryboardAtIndex,
   onRefreshStoryboardAtIndex,
+  onToggleStoryboardReviewed,
   storyboardRefreshingIndex,
   storyboardRetryingIndex,
   onSceneChange,
@@ -83,6 +87,8 @@ export function StoryboardEditorSection({
           <div className="mt-2 flex flex-wrap gap-2">
             <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5 text-[10px] text-surface-600">总计 {storyboardShotSummary.total}</span>
             {storyboardShotSummary.succeeded > 0 ? <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">已生成 {storyboardShotSummary.succeeded}</span> : null}
+            {storyboardShotSummary.reviewed > 0 ? <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-[10px] text-emerald-800">已检查 {storyboardShotSummary.reviewed}</span> : null}
+            {storyboardShotSummary.unreviewedSucceeded > 0 ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">待检查成功镜头 {storyboardShotSummary.unreviewedSucceeded}</span> : null}
             {storyboardShotSummary.failed > 0 ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">失败 {storyboardShotSummary.failed}</span> : null}
             {storyboardShotSummary.generating > 0 ? <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700">生成中 {storyboardShotSummary.generating}</span> : null}
             {storyboardShotSummary.pending > 0 ? <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] text-cyan-700">排队中 {storyboardShotSummary.pending}</span> : null}
@@ -169,6 +175,7 @@ export function StoryboardEditorSection({
                   {shot.hasReferenceHint ? '图片词已填' : '待补图片词'}
                 </span>
                 <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">{shot.imageStatusLabel}</span>
+                {shot.isReviewed ? <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800">已检查</span> : null}
               </div>
             </div>
 
@@ -254,6 +261,17 @@ export function StoryboardEditorSection({
                     >
                       {storyboardRetryingIndex === shot.index ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                       重试该镜头
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onToggleStoryboardReviewed(shot)}
+                      disabled={shot.storyboardStatus !== 'succeeded'}
+                      className="h-7 gap-1 border-emerald-200 text-[11px] text-emerald-700 hover:bg-emerald-50 disabled:border-surface-200 disabled:text-surface-400"
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      {shot.isReviewed ? '取消检查' : '标记已检查'}
                     </Button>
                   </div>
                 </div>

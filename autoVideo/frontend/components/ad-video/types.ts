@@ -98,6 +98,7 @@ export type AdVideoDraftSnapshot = {
   autoAvoidLowHourEnabled: boolean
   lowHourThreshold: number
   autoRetryEnabled: boolean
+  reviewedStoryboardShotKeys: string[]
 }
 
 export type AdReviewChecklistItem = {
@@ -141,6 +142,7 @@ export type StoryboardPreviewTone = 'slate' | 'amber' | 'blue' | 'emerald'
 
 export type StoryboardPreviewItem = {
   index: number
+  shotKey: string
   scene: string
   sceneResolved: string
   scenePlaceholder: string
@@ -162,6 +164,7 @@ export type StoryboardPreviewItem = {
   storyboardBlockingItems: string[]
   frontendBlockingDetail?: string
   backendFailureDetail?: string
+  isReviewed?: boolean
   realStoryboardId?: number
   realStoryboardSequence?: number
   realStoryboardStatus?: string

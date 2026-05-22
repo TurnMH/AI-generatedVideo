@@ -217,6 +217,7 @@ export default function AdVideoPage() {
   const [referenceHintGeneratingIndex, setReferenceHintGeneratingIndex] = useState<number | null>(null)
   const [storyboardRefreshingIndex, setStoryboardRefreshingIndex] = useState<number | null>(null)
   const [storyboardRetryingIndex, setStoryboardRetryingIndex] = useState<number | null>(null)
+  const [reviewedStoryboardShotKeys, setReviewedStoryboardShotKeys] = useState<string[]>([])
   const [storyboardGenerating, setStoryboardGenerating] = useState(false)
   const [storyboardGeneratedAt, setStoryboardGeneratedAt] = useState<string | null>(null)
   const [reviewConfirmed, setReviewConfirmed] = useState(false)
@@ -555,6 +556,7 @@ export default function AdVideoPage() {
     autoAvoidLowHourEnabled,
     lowHourThreshold,
     autoRetryEnabled,
+    reviewedStoryboardShotKeys,
   }), [
     adPrompt,
     autoAvoidLowHourEnabled,
@@ -585,6 +587,7 @@ export default function AdVideoPage() {
     subtitleText,
     targetMarket,
     title,
+    reviewedStoryboardShotKeys,
   ])
 
   const applyDraftSnapshot = (state: Partial<AdVideoDraftSnapshot>) => {
@@ -625,6 +628,9 @@ export default function AdVideoPage() {
     if (typeof state.autoAvoidLowHourEnabled === 'boolean') setAutoAvoidLowHourEnabled(state.autoAvoidLowHourEnabled)
     if (typeof state.lowHourThreshold === 'number' && !Number.isNaN(state.lowHourThreshold)) setLowHourThreshold(state.lowHourThreshold)
     if (typeof state.autoRetryEnabled === 'boolean') setAutoRetryEnabled(state.autoRetryEnabled)
+    if (Array.isArray(state.reviewedStoryboardShotKeys)) {
+      setReviewedStoryboardShotKeys(state.reviewedStoryboardShotKeys.filter((item): item is string => typeof item === 'string'))
+    }
   }
 
   const handleRestoreSavedDraft = () => {
@@ -901,8 +907,14 @@ export default function AdVideoPage() {
         storyboardStatusDetail = `当前还差 1 项：${storyboardBlockingItems[0]}。补齐后更适合提交分镜生成。`
       }
 
+      const shotKey = matchedStoryboard?.id
+        ? `storyboard:${matchedStoryboard.id}`
+        : `sequence:${index + 1}`
+      const isReviewed = storyboardStatus === 'succeeded' && reviewedStoryboardShotKeys.includes(shotKey)
+
       return {
         index,
+        shotKey,
         scene,
         sceneResolved: resolvedScene,
         scenePlaceholder,
@@ -924,6 +936,7 @@ export default function AdVideoPage() {
         storyboardBlockingItems,
         frontendBlockingDetail,
         backendFailureDetail,
+        isReviewed,
         realStoryboardId: matchedStoryboard?.id,
         realStoryboardSequence: matchedStoryboard?.sequence_number,
         realStoryboardStatus: matchedStoryboard?.status,
@@ -931,7 +944,7 @@ export default function AdVideoPage() {
         realStoryboardError: matchedStoryboard?.error_msg,
       }
     })
-  }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardBySequence, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
+  }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, reviewedStoryboardShotKeys, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardBySequence, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
 
   const storyboardShotSummary = useMemo(() => {
     const summary = {
@@ -944,12 +957,32 @@ export default function AdVideoPage() {
       succeeded: 0,
       failed: 0,
       submitted: 0,
+      reviewed: 0,
+      unreviewedSucceeded: 0,
     }
     storyboardPreview.forEach((shot) => {
       summary[shot.storyboardStatus] += 1
+      if (shot.isReviewed) {
+        summary.reviewed += 1
+      } else if (shot.storyboardStatus === 'succeeded') {
+        summary.unreviewedSucceeded += 1
+      }
     })
     return summary
   }, [storyboardPreview])
+
+  const toggleStoryboardReviewed = (shot: StoryboardPreviewItem) => {
+    if (shot.storyboardStatus !== 'succeeded') return
+    setReviewedStoryboardShotKeys((prev) => {
+      const exists = prev.includes(shot.shotKey)
+      return exists ? prev.filter((item) => item !== shot.shotKey) : [...prev, shot.shotKey]
+    })
+    toast({
+      title: shot.isReviewed ? `镜头 ${shot.index + 1} 已取消检查` : `镜头 ${shot.index + 1} 已标记检查`,
+      description: shot.isReviewed ? '后续可继续调整后再确认。' : '该成功镜头已纳入已检查范围。',
+      variant: 'success',
+    })
+  }
 
   const refreshStoryboardAtIndex = async (shot: StoryboardPreviewItem) => {
     if (!activeProjectId || !shot.realStoryboardId) return
@@ -973,6 +1006,7 @@ export default function AdVideoPage() {
     setStoryboardRetryingIndex(shot.index)
     try {
       await storyboardAPI.retry(activeProjectId, shot.realStoryboardId, selectedImageModel || undefined)
+      setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== shot.shotKey))
       await mutateProjectStoryboards()
       toast({
         title: `镜头 ${shot.index + 1} 已提交重试`,
@@ -1391,10 +1425,12 @@ export default function AdVideoPage() {
   const projectReady = Boolean(activeProjectId && projectPreparedAt)
   const storyboardReady = Boolean(storyboardGeneratedAt)
   const videoReady = Boolean(activeTaskId || taskStatus === 'pending' || taskStatus === 'processing' || taskStatus === 'succeeded' || taskStatus === 'failed')
+  const hasSucceededStoryboardShots = storyboardShotSummary.succeeded > 0
+  const hasUnreviewedSucceededStoryboardShots = storyboardShotSummary.unreviewedSucceeded > 0
 
   const canPrepareProject = reviewReady
   const canGenerateStoryboard = reviewReady && projectReady
-  const canGenerateVideo = reviewReady && projectReady && storyboardReady
+  const canGenerateVideo = reviewReady && projectReady && storyboardReady && !hasUnreviewedSucceededStoryboardShots
   const canComposeVideo = Boolean(activeTaskId)
 
   const prepareProjectHint = !reviewReady
@@ -1417,7 +1453,9 @@ export default function AdVideoPage() {
     ? '请先准备项目。'
     : !storyboardReady
       ? '请先手动生成图片。'
-      : '只提交视频任务，不会自动帮你合成。'
+      : hasSucceededStoryboardShots && hasUnreviewedSucceededStoryboardShots
+        ? `还有 ${storyboardShotSummary.unreviewedSucceeded} 个成功镜头未检查，请先确认后再提交视频。`
+        : '只提交视频任务，不会自动帮你合成。'
 
   const composeVideoHint = !activeTaskId
     ? '请先手动生成视频并等待任务出现。'
@@ -1998,6 +2036,7 @@ export default function AdVideoPage() {
       setProjectPreparedAt(null)
       setLastGenerationContext(null)
       setStoryboardGeneratedAt(null)
+      setReviewedStoryboardShotKeys([])
       setActiveTaskId(null)
       setTaskOutputUrl('')
       setTaskClipProgress({ done: 0, total: 0 })
@@ -2011,6 +2050,7 @@ export default function AdVideoPage() {
   }
 
   const handleGenerateByImages = async () => {
+    setReviewedStoryboardShotKeys([])
     setCreatingByImages(true)
     try {
       const generationTask = createGenerationTaskEntry()
@@ -2044,6 +2084,9 @@ export default function AdVideoPage() {
       const prepared = await ensureManualProjectPrepared()
       if (!storyboardGeneratedAt) {
         throw new Error('请先手动生成分镜图片，再手动生成视频')
+      }
+      if (hasSucceededStoryboardShots && hasUnreviewedSucceededStoryboardShots) {
+        throw new Error(`还有 ${storyboardShotSummary.unreviewedSucceeded} 个成功镜头未检查，请先确认后再提交视频`)
       }
       await triggerVideoGeneration(prepared.context)
       appendAdTaskLog(`视频生成任务已手动提交，项目 ${prepared.projectId} 正在后台处理`, 'success')
@@ -2783,11 +2826,21 @@ export default function AdVideoPage() {
                 onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
                 onRetryStoryboardAtIndex={retryStoryboardAtIndex}
                 onRefreshStoryboardAtIndex={refreshStoryboardAtIndex}
+                onToggleStoryboardReviewed={toggleStoryboardReviewed}
                 storyboardRefreshingIndex={storyboardRefreshingIndex}
                 storyboardRetryingIndex={storyboardRetryingIndex}
-                onSceneChange={(index, value) => setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))}
-                onReferenceHintChange={(index, value) => setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))}
-                onDialogueChange={(index, value) => setSubtitleText((prev) => updateLineAtIndex(prev, index, value))}
+                onSceneChange={(index, value) => {
+                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                  setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))
+                }}
+                onReferenceHintChange={(index, value) => {
+                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                  setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))
+                }}
+                onDialogueChange={(index, value) => {
+                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                  setSubtitleText((prev) => updateLineAtIndex(prev, index, value))
+                }}
               />
             )}
           />
