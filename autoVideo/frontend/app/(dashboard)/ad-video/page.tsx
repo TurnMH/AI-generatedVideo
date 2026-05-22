@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
@@ -2579,7 +2580,16 @@ export default function AdVideoPage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="overflow-hidden rounded-[24px] border-surface-200 shadow-sm">
-          <CardContent className="space-y-6 bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
+          <CardContent className="bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
+          <Tabs defaultValue="copy" className="space-y-4">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="copy">文案与设置</TabsTrigger>
+              <TabsTrigger value="storyboard">分镜编辑</TabsTrigger>
+              <TabsTrigger value="generate">生成操作</TabsTrigger>
+              <TabsTrigger value="history">历史</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="copy" className="space-y-6">
           <div className="grid gap-5 lg:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="ad-title">项目名称（可选）</Label>
@@ -2708,7 +2718,9 @@ export default function AdVideoPage() {
             onJpegQualityChange={setJpegQuality}
             onRemoveLocalFile={removeLocalFile}
           />
+            </TabsContent>
 
+            <TabsContent value="storyboard" className="space-y-6">
           <AdReviewSection
             reviewReady={reviewReady}
             reviewConfirmed={reviewConfirmed}
@@ -2749,7 +2761,9 @@ export default function AdVideoPage() {
               />
             )}
           />
+            </TabsContent>
 
+            <TabsContent value="generate" className="space-y-6">
           <AdPrimaryActionsSection
             creatingByText={creatingByText}
             preparingProject={preparingProject}
@@ -3010,7 +3024,9 @@ export default function AdVideoPage() {
               ) : null}
             </div>
           ) : null}
+            </TabsContent>
 
+            <TabsContent value="history" className="space-y-6">
           <LocalHistoryPanel
             historyEntries={historyEntries}
             selectedHistoryEntryId={selectedHistoryEntryId}
@@ -3021,6 +3037,8 @@ export default function AdVideoPage() {
             onSelect={setSelectedHistoryEntryId}
             onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
           />
+            </TabsContent>
+          </Tabs>
           </CardContent>
         </Card>
 
