@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { assetAPI, chatAPI, modelAPI, projectAPI, storageAPI, storyboardAPI, taskAPI, videoAPI } from '@/lib/api'
 import { ensureProjectMediaTag } from '@/lib/project-media'
-import type { Asset } from '@/types'
+import type { Asset, Storyboard } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -292,100 +292,6 @@ export default function AdVideoPage() {
       notes ? `补充要求：${notes}` : '',
     ].filter(Boolean).join('\n')
   }, [brandVoiceNotesText, selectedBrandVoiceTemplateMeta])
-  const storyboardPreview = useMemo<StoryboardPreviewItem[]>(() => {
-    const clipCount = Math.max(
-      imageUrls.length,
-      countEditableSlots(sceneDescriptionDraftLines),
-      countEditableSlots(subtitleDraftLines),
-      countEditableSlots(referenceImageHintDraftLines),
-      selectedStoryboardTemplateMeta.sceneLines.length,
-      selectedStoryboardTemplateMeta.dialogueLines.length,
-      selectedStoryboardTemplateMeta.referenceLines.length,
-      localFiles.length,
-      1,
-    )
-    const fallbackSceneText = normalizeEditableLine(optimizedScript || adPrompt)
-    const fallbackDialogueText = normalizeEditableLine(subtitleText)
-    const fallbackSceneLines = fallbackSceneText.split(/\n+/).filter(Boolean)
-    return Array.from({ length: clipCount }, (_, index) => {
-      const scene = normalizeEditableLine(sceneDescriptionDraftLines[index] ?? '')
-      const perClipFallback = fallbackSceneLines.length > 1
-        ? (fallbackSceneLines[index] ?? fallbackSceneLines[fallbackSceneLines.length - 1] ?? '')
-        : (index === 0 ? fallbackSceneText : '')
-      const scenePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.sceneLines[index] ?? '') || perClipFallback
-      const dialogue = normalizeEditableLine(subtitleDraftLines[index] ?? '')
-      const dialoguePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.dialogueLines[index] ?? '') || (index === 0 ? fallbackDialogueText : '')
-      const referenceHint = normalizeEditableLine(referenceImageHintDraftLines[index] ?? '')
-      const referenceHintPlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.referenceLines[index] ?? '')
-      const resolvedReferenceHint = referenceHint || referenceHintPlaceholder || '待补参考图提示词'
-      const remoteImageUrl = imageUrls[index]
-      const localFile = localFiles[index]
-      const imagePreviewUrl = remoteImageUrl ?? (localFile ? URL.createObjectURL(localFile) : undefined)
-      const imageSource = remoteImageUrl
-        ?? localFile?.name
-        ?? '待生成分镜图片'
-      const imageStatusLabel = remoteImageUrl || localFile
-        ? '已有可用图片'
-        : '将按提示词生成分镜图'
-      const resolvedScene = scene || scenePlaceholder
-      const resolvedDialogue = dialogue || dialoguePlaceholder
-      const storyboardBlockingItems: string[] = []
-      if (!resolvedScene) storyboardBlockingItems.push('待补视频描述词')
-      if (!resolvedReferenceHint || resolvedReferenceHint === '待补参考图提示词') storyboardBlockingItems.push('待补图片提示词')
-      if (!resolvedDialogue) storyboardBlockingItems.push('待补台词')
-
-      let storyboardStatus: StoryboardPreviewItem['storyboardStatus'] = 'ready'
-      let storyboardStatusTone: StoryboardPreviewItem['storyboardStatusTone'] = 'emerald'
-      let storyboardStatusLabel = '可生成'
-      let storyboardStatusDetail = '当前镜头信息已齐，可用于手动提交分镜图片生成。'
-
-      if (storyboardGenerating || creatingByImages) {
-        storyboardStatus = 'generating'
-        storyboardStatusTone = 'blue'
-        storyboardStatusLabel = '生成中'
-        storyboardStatusDetail = '分镜图片生成请求已发起，当前仍处于广告页级别的整体提交阶段。'
-      } else if (storyboardGeneratedAt) {
-        storyboardStatus = 'submitted'
-        storyboardStatusTone = 'blue'
-        storyboardStatusLabel = '已提交'
-        storyboardStatusDetail = '该轮分镜图片生成已触发；当前广告页尚未提供逐镜头回填结果，请结合上方当前任务与后续历史记录确认。'
-      } else if (storyboardBlockingItems.length >= 2) {
-        storyboardStatus = 'blocked'
-        storyboardStatusTone = 'amber'
-        storyboardStatusLabel = '信息不足'
-        storyboardStatusDetail = '当前镜头仍缺少关键信息，建议先补齐后再生成，避免得到空泛或失真的分镜图。'
-      } else if (storyboardBlockingItems.length === 1) {
-        storyboardStatus = 'attention'
-        storyboardStatusTone = 'amber'
-        storyboardStatusLabel = '待补一项'
-        storyboardStatusDetail = `当前还差 1 项：${storyboardBlockingItems[0]}。补齐后更适合提交分镜生成。`
-      }
-
-      return {
-        index,
-        scene,
-        sceneResolved: resolvedScene,
-        scenePlaceholder,
-        dialogue,
-        dialogueResolved: resolvedDialogue,
-        dialoguePlaceholder,
-        referenceHint,
-        referenceHintResolved: resolvedReferenceHint,
-        referenceHintPlaceholder,
-        imageSource,
-        imagePreviewUrl,
-        imageStatusLabel,
-        hasDialogue: Boolean(dialogue),
-        hasReferenceHint: Boolean(referenceHint),
-        storyboardStatus,
-        storyboardStatusLabel,
-        storyboardStatusDetail,
-        storyboardStatusTone,
-        storyboardBlockingItems,
-      }
-    })
-  }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
-
   const readChatReply = (payload: unknown): string => {
     const data = payload as {
       data?: { reply?: string; parts?: Array<{ type?: string; text?: string }> }
@@ -869,7 +775,149 @@ export default function AdVideoPage() {
     }
   )
 
-  const projectTasks = ((projectTasksRaw as { data?: { items?: VideoTaskSnapshot[] } })?.data?.items ?? []) as VideoTaskSnapshot[]
+  const { data: projectStoryboardsRaw } = useSWR(
+    activeProjectId ? ['ad-video-project-storyboards', activeProjectId] : null,
+    () => storyboardAPI.listAll(activeProjectId as number, { include_versions: true }) as Promise<{ data?: Storyboard[] }>,
+    {
+      refreshInterval: storyboardGenerating || creatingByImages ? 5000 : 30000,
+      revalidateOnFocus: true,
+    }
+  )
+
+  const projectTasks = useMemo(
+    () => (((projectTasksRaw as { data?: { items?: VideoTaskSnapshot[] } })?.data?.items ?? []) as VideoTaskSnapshot[]),
+    [projectTasksRaw],
+  )
+  const projectStoryboards = useMemo(
+    () => (((projectStoryboardsRaw as { data?: Storyboard[] })?.data ?? []) as Storyboard[]),
+    [projectStoryboardsRaw],
+  )
+
+  const storyboardBySequence = useMemo(() => {
+    const sorted = [...projectStoryboards].sort((a, b) => a.sequence_number - b.sequence_number)
+    return new Map(sorted.map((item) => [Math.max(0, item.sequence_number - 1), item]))
+  }, [projectStoryboards])
+
+  const storyboardPreview = useMemo<StoryboardPreviewItem[]>(() => {
+    const clipCount = Math.max(
+      imageUrls.length,
+      countEditableSlots(sceneDescriptionDraftLines),
+      countEditableSlots(subtitleDraftLines),
+      countEditableSlots(referenceImageHintDraftLines),
+      selectedStoryboardTemplateMeta.sceneLines.length,
+      selectedStoryboardTemplateMeta.dialogueLines.length,
+      selectedStoryboardTemplateMeta.referenceLines.length,
+      localFiles.length,
+      1,
+    )
+    const fallbackSceneText = normalizeEditableLine(optimizedScript || adPrompt)
+    const fallbackDialogueText = normalizeEditableLine(subtitleText)
+    const fallbackSceneLines = fallbackSceneText.split(/\n+/).filter(Boolean)
+    return Array.from({ length: clipCount }, (_, index) => {
+      const scene = normalizeEditableLine(sceneDescriptionDraftLines[index] ?? '')
+      const perClipFallback = fallbackSceneLines.length > 1
+        ? (fallbackSceneLines[index] ?? fallbackSceneLines[fallbackSceneLines.length - 1] ?? '')
+        : (index === 0 ? fallbackSceneText : '')
+      const scenePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.sceneLines[index] ?? '') || perClipFallback
+      const dialogue = normalizeEditableLine(subtitleDraftLines[index] ?? '')
+      const dialoguePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.dialogueLines[index] ?? '') || (index === 0 ? fallbackDialogueText : '')
+      const referenceHint = normalizeEditableLine(referenceImageHintDraftLines[index] ?? '')
+      const referenceHintPlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.referenceLines[index] ?? '')
+      const resolvedReferenceHint = referenceHint || referenceHintPlaceholder || '待补参考图提示词'
+      const matchedStoryboard = storyboardBySequence.get(index)
+      const remoteImageUrl = matchedStoryboard?.image_url || imageUrls[index]
+      const localFile = localFiles[index]
+      const imagePreviewUrl = remoteImageUrl ?? (localFile ? URL.createObjectURL(localFile) : undefined)
+      const imageSource = matchedStoryboard?.image_url
+        ? `已生成分镜 #${matchedStoryboard.sequence_number}`
+        : remoteImageUrl
+          ?? localFile?.name
+          ?? '待生成分镜图片'
+      const imageStatusLabel = matchedStoryboard?.status === 'completed'
+        ? '已有真实分镜图'
+        : remoteImageUrl || localFile
+          ? '已有可用图片'
+          : '将按提示词生成分镜图'
+      const resolvedScene = scene || scenePlaceholder
+      const resolvedDialogue = dialogue || dialoguePlaceholder
+      const storyboardBlockingItems: string[] = []
+      if (!resolvedScene) storyboardBlockingItems.push('待补视频描述词')
+      if (!resolvedReferenceHint || resolvedReferenceHint === '待补参考图提示词') storyboardBlockingItems.push('待补图片提示词')
+      if (!resolvedDialogue) storyboardBlockingItems.push('待补台词')
+
+      let storyboardStatus: StoryboardPreviewItem['storyboardStatus'] = 'ready'
+      let storyboardStatusTone: StoryboardPreviewItem['storyboardStatusTone'] = 'emerald'
+      let storyboardStatusLabel = '可生成'
+      let storyboardStatusDetail = '当前镜头信息已齐，可用于手动提交分镜图片生成。'
+
+      if (matchedStoryboard?.status === 'completed') {
+        storyboardStatus = 'submitted'
+        storyboardStatusTone = 'emerald'
+        storyboardStatusLabel = '已生成'
+        storyboardStatusDetail = `已拿到真实分镜结果 #${matchedStoryboard.sequence_number}，可继续检查画面并进入下一阶段。`
+      } else if (matchedStoryboard?.status === 'failed') {
+        storyboardStatus = 'attention'
+        storyboardStatusTone = 'amber'
+        storyboardStatusLabel = '生成失败'
+        storyboardStatusDetail = matchedStoryboard.error_msg?.trim()
+          ? `真实分镜生成失败：${matchedStoryboard.error_msg.trim()}`
+          : '真实分镜生成失败，建议调整当前镜头后重试。'
+      } else if (matchedStoryboard?.status === 'generating' || matchedStoryboard?.status === 'pending') {
+        storyboardStatus = 'generating'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '生成中'
+        storyboardStatusDetail = '已映射到项目里的真实分镜任务，当前镜头仍在生成中。'
+      } else if (storyboardGenerating || creatingByImages) {
+        storyboardStatus = 'generating'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '生成中'
+        storyboardStatusDetail = '分镜图片生成请求已发起，当前仍处于广告页级别的整体提交阶段。'
+      } else if (storyboardGeneratedAt) {
+        storyboardStatus = 'submitted'
+        storyboardStatusTone = 'blue'
+        storyboardStatusLabel = '已提交'
+        storyboardStatusDetail = '该轮分镜图片生成已触发；当前广告页正在等待真实 storyboard 结果回填。'
+      } else if (storyboardBlockingItems.length >= 2) {
+        storyboardStatus = 'blocked'
+        storyboardStatusTone = 'amber'
+        storyboardStatusLabel = '信息不足'
+        storyboardStatusDetail = '当前镜头仍缺少关键信息，建议先补齐后再生成，避免得到空泛或失真的分镜图。'
+      } else if (storyboardBlockingItems.length === 1) {
+        storyboardStatus = 'attention'
+        storyboardStatusTone = 'amber'
+        storyboardStatusLabel = '待补一项'
+        storyboardStatusDetail = `当前还差 1 项：${storyboardBlockingItems[0]}。补齐后更适合提交分镜生成。`
+      }
+
+      return {
+        index,
+        scene,
+        sceneResolved: resolvedScene,
+        scenePlaceholder,
+        dialogue,
+        dialogueResolved: resolvedDialogue,
+        dialoguePlaceholder,
+        referenceHint,
+        referenceHintResolved: resolvedReferenceHint,
+        referenceHintPlaceholder,
+        imageSource,
+        imagePreviewUrl,
+        imageStatusLabel,
+        hasDialogue: Boolean(dialogue),
+        hasReferenceHint: Boolean(referenceHint),
+        storyboardStatus,
+        storyboardStatusLabel,
+        storyboardStatusDetail,
+        storyboardStatusTone,
+        storyboardBlockingItems,
+        realStoryboardId: matchedStoryboard?.id,
+        realStoryboardSequence: matchedStoryboard?.sequence_number,
+        realStoryboardStatus: matchedStoryboard?.status,
+        realStoryboardUpdatedAt: matchedStoryboard?.updated_at,
+        realStoryboardError: matchedStoryboard?.error_msg,
+      }
+    })
+  }, [adPrompt, creatingByImages, imageUrls, localFiles, optimizedScript, referenceImageHintDraftLines, sceneDescriptionDraftLines, selectedStoryboardTemplateMeta, storyboardBySequence, storyboardGeneratedAt, storyboardGenerating, subtitleDraftLines, subtitleText])
 
   const sessionTasks = useMemo(() => {
     if (!sessionAnchorAt) return projectTasks

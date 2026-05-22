@@ -164,6 +164,31 @@ export function StoryboardEditorSection({
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] font-medium text-surface-800">分镜状态</p>
                   <p className="mt-1 text-[11px] leading-5 text-surface-600">{shot.storyboardStatusDetail}</p>
+                  {shot.realStoryboardId ? (
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-surface-500">
+                      <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5">
+                        分镜ID #{shot.realStoryboardId}
+                      </span>
+                      {shot.realStoryboardSequence ? (
+                        <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5">
+                          序号 {shot.realStoryboardSequence}
+                        </span>
+                      ) : null}
+                      {shot.realStoryboardStatus ? (
+                        <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5">
+                          后端状态 {shot.realStoryboardStatus}
+                        </span>
+                      ) : null}
+                      {shot.realStoryboardUpdatedAt ? (
+                        <span className="rounded-full border border-surface-200 bg-white px-2 py-0.5">
+                          更新于 {new Date(shot.realStoryboardUpdatedAt).toLocaleString('zh-CN')}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {shot.realStoryboardError ? (
+                    <p className="mt-2 text-[10px] leading-4 text-amber-700">失败原因：{shot.realStoryboardError}</p>
+                  ) : null}
                   {shot.storyboardBlockingItems.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {shot.storyboardBlockingItems.map((item) => (

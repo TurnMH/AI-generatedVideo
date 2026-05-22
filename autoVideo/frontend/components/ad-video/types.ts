@@ -160,6 +160,11 @@ export type StoryboardPreviewItem = {
   storyboardStatusDetail: string
   storyboardStatusTone: StoryboardPreviewTone
   storyboardBlockingItems: string[]
+  realStoryboardId?: number
+  realStoryboardSequence?: number
+  realStoryboardStatus?: string
+  realStoryboardUpdatedAt?: string
+  realStoryboardError?: string
 }
 
 export type BrandVoiceTemplateKey = string
