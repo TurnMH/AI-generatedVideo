@@ -1,17 +1,12 @@
 'use client'
 
-import Link from "next/link"
-
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import {
-  ArrowRight,
-  Download,
   Image as ImageIcon,
   Loader2,
   Megaphone,
-  Repeat,
   RefreshCw,
   Sparkles,
   Wand2,
@@ -30,17 +25,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
-import { AdAdvancedSettingsSection } from '@/components/ad-video/AdAdvancedSettingsSection'
-import { AdMarketGuidanceSection } from '@/components/ad-video/AdMarketGuidanceSection'
-import { AdMediaInputSection } from '@/components/ad-video/AdMediaInputSection'
-import { AdPrimaryActionsSection } from '@/components/ad-video/AdPrimaryActionsSection'
-import { AdReviewSection } from '@/components/ad-video/AdReviewSection'
 import { CurrentTaskPanel } from '@/components/ad-video/CurrentTaskPanel'
-import { FourStepWorkbench } from '@/components/ad-video/FourStepWorkbench'
 import { GenerationQueuePanel } from '@/components/ad-video/GenerationQueuePanel'
 import { LocalHistoryPanel } from '@/components/ad-video/LocalHistoryPanel'
 import { StoryboardEditorSection } from '@/components/ad-video/StoryboardEditorSection'
@@ -2625,14 +2613,17 @@ export default function AdVideoPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-10">
+    <div className="mx-auto max-w-6xl space-y-6 pb-10">
       <div className="overflow-hidden rounded-[28px] border border-surface-200/70 bg-gradient-to-br from-slate-950 via-cyan-950 to-slate-900 p-6 text-white shadow-sm">
-        <div className="max-w-2xl">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-surface-100 backdrop-blur">
+        <div className="max-w-3xl space-y-3">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-surface-100 backdrop-blur">
             <Megaphone className="h-3.5 w-3.5 text-cyan-300" />
             广告视频工作台
           </div>
-          <h2 className="text-2xl font-semibold tracking-tight">手动四步流程：文案 → 图片 → 视频 → 合成</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">单页 8 步广告生成链路</h2>
+          <p className="text-sm leading-6 text-surface-200">
+            按顺序完成：国家语言与提示 → 广告文案 → 文案优化 → 分镜镜头处理 → 分镜视频提示词 → 参考图 → 分镜资源生成 → 视频生成。
+          </p>
         </div>
       </div>
 
@@ -2641,490 +2632,507 @@ export default function AdVideoPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="font-medium">检测到上次草稿</p>
-              <p className="mt-1 text-xs text-amber-700">这是本地草稿恢复，不会自动跳转到旧项目；你可以选择恢复或丢弃。</p>
+              <p className="mt-1 text-xs text-amber-700">这是本地草稿恢复，不会跳回旧项目页；你可以直接恢复继续编辑。</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button type="button" size="sm" onClick={handleRestoreSavedDraft}>
-                恢复草稿
-              </Button>
-              <Button type="button" size="sm" variant="outline" onClick={handleDiscardSavedDraft}>
-                丢弃草稿
-              </Button>
+              <Button type="button" size="sm" onClick={handleRestoreSavedDraft}>恢复草稿</Button>
+              <Button type="button" size="sm" variant="outline" onClick={handleDiscardSavedDraft}>丢弃草稿</Button>
             </div>
           </div>
         </div>
       ) : null}
 
-      <div>
-        <Card className="overflow-hidden rounded-[24px] border-surface-200 shadow-sm">
-          <CardContent className="bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
-          <Tabs defaultValue="copy" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="copy">文案与设置</TabsTrigger>
-              <TabsTrigger value="storyboard">分镜编辑</TabsTrigger>
-              <TabsTrigger value="generate">生成操作</TabsTrigger>
-              <TabsTrigger value="history">历史</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="copy" className="space-y-6">
-          <div className="grid gap-5 lg:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="ad-title">项目名称（可选）</Label>
-              <Input
-                id="ad-title"
-                placeholder="例如：618 夏季清凉饮料投放"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
+      <Card className="overflow-hidden rounded-[24px] border-surface-200 shadow-sm">
+        <CardContent className="space-y-6 bg-gradient-to-b from-white to-surface-50/60 pt-6 text-surface-900">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {[
+              ['1', '国家 / 语言 / 提示', `${getTargetMarketLabel()} · ${getSubtitleLanguageLabel()}`],
+              ['2', '广告文案', adPrompt.trim() ? `已输入 ${adPrompt.trim().length} 字` : '待输入'],
+              ['3', '文案优化', optimizedScript.trim() ? '已生成优化文案' : '待优化'],
+              ['4', '分镜与视频提示词', `${storyboardPreview.length} 个镜头`],
+              ['5', '参考图', `URL ${imageUrls.length} / 本地 ${localFiles.length}`],
+              ['6', '项目准备', projectReady ? `项目 #${activeProjectId}` : '待准备'],
+              ['7', '分镜资源生成', storyboardReady ? '已触发' : '待生成'],
+              ['8', '视频生成', activeTaskId ? `任务 #${activeTaskId}` : '待提交'],
+            ].map(([no, titleText, statusText]) => (
+              <div key={no} className="rounded-2xl border border-surface-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-cyan-100 px-2 text-xs font-semibold text-cyan-800">{no}</span>
+                  <span className="text-[11px] text-surface-500">{statusText}</span>
+                </div>
+                <p className="mt-3 text-sm font-medium text-surface-900">{titleText}</p>
+              </div>
+            ))}
           </div>
 
-          <AdMarketGuidanceSection
-            targetMarketOptions={TARGET_MARKET_OPTIONS}
-            targetMarket={targetMarket}
-            onTargetMarketChange={setTargetMarket}
-            subtitleLanguageOptions={SUBTITLE_LANGUAGE_OPTIONS}
-            subtitleLanguage={subtitleLanguage}
-            onSubtitleLanguageChange={setSubtitleLanguage}
-            creativeModeOptions={CREATIVE_MODE_OPTIONS}
-            creativeMode={creativeMode}
-            onCreativeModeChange={setCreativeMode}
-            subtitleText={subtitleText}
-            onSubtitleTextChange={setSubtitleText}
-            subtitleLineCount={subtitleLines.length}
-            directorNote={directorNote}
-            onDirectorNoteChange={setDirectorNote}
-          />
-
-          <div className="space-y-2">
-            <Label htmlFor="ad-prompt">广告文案</Label>
-            <p className="text-xs leading-5 text-surface-500">请先确认上方的目标市场、字幕语言、创意模式、台词与导演备注，再进行广告文案优化。</p>
-            <Textarea
-              id="ad-prompt"
-              rows={7}
-              placeholder="请输入广告文案，例如：主打“0糖0脂”的夏季气泡饮，受众为 18-30 岁白领，风格轻快明亮，结尾强调“限时第二件半价”。"
-              value={adPrompt}
-              onChange={(e) => setAdPrompt(e.target.value)}
-            />
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <div className="flex items-center gap-2 text-xs text-surface-600">
-                <Switch checked={autoOptimizeCopy} onCheckedChange={setAutoOptimizeCopy} />
-                生成前自动优化文案
-              </div>
-              <div className="flex items-center gap-2 text-xs text-surface-600">
-                <span>优化模型</span>
-                <Select value={selectedOptimizeModel} onValueChange={setSelectedOptimizeModel}>
-                  <SelectTrigger className="h-8 w-[220px] bg-white text-xs">
-                    <SelectValue placeholder="选择优化模型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableOptimizeModels.length > 0 ? availableOptimizeModels.map((model) => (
-                      <SelectItem key={`opt-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
-                    )) : <SelectItem value="__none" disabled>暂无可用优化模型</SelectItem>}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5"
-				onClick={() => { void runCopyOptimization() }}
-                disabled={optimizingCopy || creatingByImages}
-              >
-                {optimizingCopy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                先优化文案
-              </Button>
-            </div>
-            {optimizedScript ? (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-                <p className="text-xs font-medium text-emerald-700">优化后文案（已用于生成）</p>
-                <p className="mt-1 line-clamp-4 text-xs leading-5 text-emerald-800">{optimizedScript}</p>
-                {selectedOptimizeModel ? <p className="mt-2 text-[11px] text-emerald-700">优化模型：{selectedOptimizeModel}</p> : null}
-              </div>
-            ) : null}
-          </div>
-
-          <AdAdvancedSettingsSection
-            templates={AD_TEMPLATES}
-            selectedTemplate={selectedTemplate}
-            onSelectTemplate={applyTemplate}
-            availableVideoModels={availableVideoModels}
-            selectedVideoModel={selectedVideoModel}
-            onSelectVideoModel={setSelectedVideoModel}
-            styleOptions={VIDEO_STYLE_PRESETS}
-            selectedStylePreset={selectedStylePreset}
-            onSelectStylePreset={setSelectedStylePreset}
-            motionOptions={VIDEO_MOTION_OPTIONS}
-            selectedMotionMode={selectedMotionMode}
-            onSelectMotionMode={(value) => setSelectedMotionMode(value as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])}
-            clipDurationSec={clipDurationSec}
-            onClipDurationSecChange={setClipDurationSec}
-            selectedVideoMode={selectedVideoMode}
-            onSelectVideoMode={setSelectedVideoMode}
-            autoAvoidLowHourEnabled={autoAvoidLowHourEnabled}
-            onAutoAvoidLowHourEnabledChange={setAutoAvoidLowHourEnabled}
-            lowHourThreshold={lowHourThreshold}
-            onLowHourThresholdChange={setLowHourThreshold}
-            autoRetryEnabled={autoRetryEnabled}
-            onAutoRetryEnabledChange={setAutoRetryEnabled}
-          />
-
-          <AdMediaInputSection
-            imageUrlsText={imageUrlsText}
-            onImageUrlsTextChange={setImageUrlsText}
-            imageUrlCount={imageUrls.length}
-            sceneDescriptionsText={sceneDescriptionsText}
-            onSceneDescriptionsTextChange={setSceneDescriptionsText}
-            localFiles={localFiles}
-            onLocalFilesChange={handleLocalFiles}
-            enableLocalCompression={enableLocalCompression}
-            onEnableLocalCompressionChange={setEnableLocalCompression}
-            maxImageSide={maxImageSide}
-            onMaxImageSideChange={setMaxImageSide}
-            jpegQuality={jpegQuality}
-            onJpegQualityChange={setJpegQuality}
-            onRemoveLocalFile={removeLocalFile}
-          />
-            </TabsContent>
-
-            <TabsContent value="storyboard" className="space-y-6">
-          <AdReviewSection
-            reviewReady={reviewReady}
-            reviewConfirmed={reviewConfirmed}
-            adReviewChecklist={adReviewChecklist}
-            blockingReviewItems={blockingReviewItems}
-            advisoryReviewItems={advisoryReviewItems}
-            onReviewConfirmedChange={setReviewConfirmed}
-            storyboardTemplates={STORYBOARD_TEMPLATES}
-            selectedStoryboardTemplate={selectedStoryboardTemplate}
-            selectedStoryboardTemplateMeta={selectedStoryboardTemplateMeta}
-            onSelectStoryboardTemplate={applyStoryboardTemplate}
-            brandVoiceTemplates={BRAND_VOICE_TEMPLATES}
-            selectedBrandVoiceTemplate={selectedBrandVoiceTemplate}
-            selectedBrandVoiceLabel={getBrandVoiceLabel()}
-            onSelectBrandVoiceTemplate={setSelectedBrandVoiceTemplate}
-            optimizedScript={optimizedScript}
-            adPrompt={adPrompt}
-            brandVoiceBrief={brandVoiceBrief}
-            brandVoiceNotesText={brandVoiceNotesText}
-            onBrandVoiceNotesTextChange={setBrandVoiceNotesText}
-            selectedBrandVoiceTemplateMeta={selectedBrandVoiceTemplateMeta}
-            storyboardEditor={(
-              <StoryboardEditorSection
-                storyboardPreview={storyboardPreview}
-                referenceHintGeneratingAll={referenceHintGeneratingAll}
-                referenceHintGeneratingIndex={referenceHintGeneratingIndex}
-                storyboardShotSummary={storyboardShotSummary}
-                imageModels={availableImageModels}
-                selectedImageModel={selectedImageModel}
-                onSelectedImageModelChange={setSelectedImageModel}
-                referenceHintModels={availableReferenceHintModels}
-                selectedReferenceHintModel={selectedReferenceHintModel}
-                onSelectedReferenceHintModelChange={setSelectedReferenceHintModel}
-                onFillAllReferenceHints={fillReferenceHintsForAll}
-                onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
-                onRetryStoryboardAtIndex={retryStoryboardAtIndex}
-                onRefreshStoryboardAtIndex={refreshStoryboardAtIndex}
-                onToggleStoryboardReviewed={toggleStoryboardReviewed}
-                storyboardRefreshingIndex={storyboardRefreshingIndex}
-                storyboardRetryingIndex={storyboardRetryingIndex}
-                onSceneChange={(index, value) => {
-                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
-                  setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))
-                }}
-                onReferenceHintChange={(index, value) => {
-                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
-                  setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))
-                }}
-                onDialogueChange={(index, value) => {
-                  setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
-                  setSubtitleText((prev) => updateLineAtIndex(prev, index, value))
-                }}
-              />
-            )}
-          />
-            </TabsContent>
-
-            <TabsContent value="generate" className="space-y-6">
-          <FourStepWorkbench items={fourStepItems} />
-
-          <AdPrimaryActionsSection
-            creatingByText={creatingByText}
-            preparingProject={preparingProject}
-            generatingStoryboard={creatingByImages || storyboardGenerating}
-            submittingVideo={submittingVideo}
-            composingVideo={composingVideo}
-            reviewReady={reviewReady}
-            projectReady={projectReady}
-            storyboardReady={storyboardReady}
-            videoReady={videoReady}
-            canPrepareProject={canPrepareProject}
-            canGenerateStoryboard={canGenerateStoryboard}
-            canGenerateVideo={canGenerateVideo}
-            canComposeVideo={canComposeVideo}
-            prepareProjectHint={prepareProjectHint}
-            generateStoryboardHint={generateStoryboardHint}
-            generateVideoHint={generateVideoHint}
-            composeVideoHint={composeVideoHint}
-            onCreateFromText={handleCreateFromText}
-            onPrepareProject={handlePrepareProject}
-            onGenerateStoryboard={handleGenerateByImages}
-            onGenerateVideo={handleGenerateVideoManually}
-            onComposeVideo={handleComposeVideoManually}
-          />
-
-          {activeProjectId ? (
-            <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
-              <CurrentTaskPanel
-                activeProjectId={activeProjectId}
-                activeTaskId={activeTaskId}
-                taskStatus={taskStatus}
-                taskError={taskError}
-                taskOutputUrl={taskOutputUrl}
-                taskClipProgress={taskClipProgress}
-                autoRetryAttempts={autoRetryAttempts}
-                adTaskLogs={adTaskLogs}
-                activeOptimizeTaskId={activeOptimizeTaskId}
-                manualRerunLoading={manualRerunLoading}
-                exportingPackage={exportingPackage}
-                nextActionLabel={nextActionLabel}
-                nextActionHint={nextActionHint}
-                onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
-                onOpenOutput={openOutput}
-                onRerunAnotherVersion={handleRerunAnotherVersion}
-                onExportPackage={handleExportPackage}
-              />
-
-              {lastGenerationContext ? (
-                <div className="mt-3 space-y-2 rounded-lg border border-cyan-200 bg-white/70 p-3">
-                  <p className="text-xs font-medium text-cyan-900">批量多版本生成（2-4 模型）</p>
-                  <div className="flex flex-wrap gap-2">
-                    {availableVideoModels.map((model) => {
-                      const checked = batchModelKeys.includes(model.model_key)
-                      return (
-                        <button
-                          key={`batch-${model.id}`}
-                          type="button"
-                          onClick={() => toggleBatchModel(model.model_key)}
-                          className={[
-                            'rounded-full border px-2.5 py-1 text-xs',
-                            checked
-                              ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                              : 'border-surface-200 bg-white text-surface-600',
-                          ].join(' ')}
-                        >
-                          {model.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5"
-                      onClick={handleBatchGenerateVersions}
-                      disabled={batchGenerating || batchModelKeys.length === 0}
-                    >
-                      {batchGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat className="h-3.5 w-3.5" />}
-                      批量多版本生成
-                    </Button>
-                    <span className="text-xs text-cyan-700">已选 {batchModelKeys.length} 个模型 · 累计批量提交 {batchSubmittedCount}</span>
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-6">
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 1</p>
+                    <h3 className="mt-1 text-lg font-semibold text-surface-900">选择国家、语言与投放提示</h3>
+                    <p className="mt-1 text-sm text-surface-500">这些设置会直接进入文案优化、分镜提示词和视频生成参数。</p>
                   </div>
                 </div>
-              ) : null}
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label>国家 / 市场</Label>
+                    <Select value={targetMarket} onValueChange={setTargetMarket}>
+                      <SelectTrigger><SelectValue placeholder="选择市场" /></SelectTrigger>
+                      <SelectContent>
+                        {TARGET_MARKET_OPTIONS.map((option) => (
+                          <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-surface-500">{TARGET_MARKET_OPTIONS.find((item) => item.key === targetMarket)?.prompt}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>语言 / 字幕</Label>
+                    <Select value={subtitleLanguage} onValueChange={setSubtitleLanguage}>
+                      <SelectTrigger><SelectValue placeholder="选择语言" /></SelectTrigger>
+                      <SelectContent>
+                        {SUBTITLE_LANGUAGE_OPTIONS.map((option) => (
+                          <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-surface-500">{SUBTITLE_LANGUAGE_OPTIONS.find((item) => item.key === subtitleLanguage)?.prompt}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>创意模式</Label>
+                    <Select value={creativeMode} onValueChange={setCreativeMode}>
+                      <SelectTrigger><SelectValue placeholder="选择创意模式" /></SelectTrigger>
+                      <SelectContent>
+                        {CREATIVE_MODE_OPTIONS.map((option) => (
+                          <SelectItem key={option.key} value={option.key}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-surface-500">{CREATIVE_MODE_OPTIONS.find((item) => item.key === creativeMode)?.prompt}</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="director-note">补充提示 / 导演备注</Label>
+                    <Textarea id="director-note" rows={4} value={directorNote} onChange={(e) => setDirectorNote(e.target.value)} placeholder="补充平台限制、品牌要求、镜头禁忌、必须保留的卖点。" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ad-title">项目名称（可选）</Label>
+                    <Input id="ad-title" placeholder="例如：BAND 投教广告" value={title} onChange={(e) => setTitle(e.target.value)} />
+                    <div className="rounded-xl border border-surface-200 bg-surface-50 p-3 text-xs text-surface-600">
+                      当前市场：{getTargetMarketLabel()} / 当前字幕：{getSubtitleLanguageLabel()} / 当前创意模式：{getCreativeModeLabel()}
+                    </div>
+                  </div>
+                </div>
+              </section>
 
-              {modelCompareRows.length > 0 ? (
-                <div className="mt-3 space-y-3 rounded-lg border border-cyan-200 bg-white/80 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs font-medium text-cyan-900">多版本结果看板</p>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-cyan-700">
-                        样本 {overallCompareStats.total} · 成功率 {overallCompareStats.successRate}%
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5"
-                        onClick={handleExportCompareReport}
-                        disabled={compareExporting}
-                      >
-                        {compareExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                        导出对比报告
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5"
-                        onClick={handleExportDailyAdvice}
-                        disabled={adviceExporting}
-                      >
-                        {adviceExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                        导出今日建议单
-                      </Button>
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 2</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">输入广告文案</h3>
+                <p className="mt-1 text-sm text-surface-500">先写原始广告意图，后面再决定是否使用大模型做文案优化。</p>
+                <div className="mt-4 space-y-2">
+                  <Label htmlFor="ad-prompt">广告文案</Label>
+                  <Textarea id="ad-prompt" rows={8} value={adPrompt} onChange={(e) => setAdPrompt(e.target.value)} placeholder="输入广告原稿、卖点、受众、投放目标、CTA。" />
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-surface-600">
+                    <div className="rounded-full border border-surface-200 bg-surface-50 px-3 py-1">当前字数：{adPrompt.trim().length}</div>
+                    <div className="rounded-full border border-surface-200 bg-surface-50 px-3 py-1">字幕行数：{subtitleLines.length}</div>
+                    <Button type="button" variant="outline" size="sm" onClick={handleCreateFromText} disabled={creatingByText}>
+                      {creatingByText ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      保存当前草稿
+                    </Button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 3</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">选择大模型进行广告文案优化</h3>
+                <p className="mt-1 text-sm text-surface-500">优化是手动动作；你可以保留原文，也可以先出一版更适合广告成片的优化稿。</p>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs text-surface-600">
+                    <Switch checked={autoOptimizeCopy} onCheckedChange={setAutoOptimizeCopy} />
+                    生成前自动优化文案
+                  </div>
+                  <div className="min-w-[220px] flex-1">
+                    <Select value={selectedOptimizeModel} onValueChange={setSelectedOptimizeModel}>
+                      <SelectTrigger><SelectValue placeholder="选择优化模型" /></SelectTrigger>
+                      <SelectContent>
+                        {availableOptimizeModels.length > 0 ? availableOptimizeModels.map((model) => (
+                          <SelectItem key={`opt-${model.id}`} value={model.model_key}>{model.name}</SelectItem>
+                        )) : <SelectItem value="__none" disabled>暂无可用优化模型</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button type="button" onClick={() => { void runCopyOptimization() }} disabled={optimizingCopy || creatingByImages}>
+                    {optimizingCopy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                    优化广告文案
+                  </Button>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <p className="text-xs font-medium text-surface-500">原始文案</p>
+                    <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-surface-800">{adPrompt.trim() || '尚未输入广告文案'}</div>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-emerald-700">优化后文案</p>
+                      {selectedOptimizeModel ? <span className="text-[11px] text-emerald-700">模型：{selectedOptimizeModel}</span> : null}
+                    </div>
+                    <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-emerald-900">{optimizedScript.trim() || '还没有优化结果'}</div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 4</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">分镜镜头文案风格和提示词处理</h3>
+                <p className="mt-1 text-sm text-surface-500">这里决定分镜模板、品牌语气、字幕台词，并完成进入下一步前的审核确认。</p>
+                <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="space-y-2 xl:col-span-2">
+                    <Label>分镜模板</Label>
+                    <Select value={selectedStoryboardTemplate} onValueChange={applyStoryboardTemplate}>
+                      <SelectTrigger><SelectValue placeholder="选择分镜模板" /></SelectTrigger>
+                      <SelectContent>
+                        {STORYBOARD_TEMPLATES.map((item) => (
+                          <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-surface-500">{selectedStoryboardTemplateMeta.hint}</p>
+                  </div>
+                  <div className="space-y-2 xl:col-span-2">
+                    <Label>品牌语气</Label>
+                    <Select value={selectedBrandVoiceTemplate} onValueChange={setSelectedBrandVoiceTemplate}>
+                      <SelectTrigger><SelectValue placeholder="选择品牌语气" /></SelectTrigger>
+                      <SelectContent>
+                        {BRAND_VOICE_TEMPLATES.map((item) => (
+                          <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-surface-500">{selectedBrandVoiceTemplateMeta.hint}</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="brand-voice-notes">品牌补充说明</Label>
+                    <Textarea id="brand-voice-notes" rows={4} value={brandVoiceNotesText} onChange={(e) => setBrandVoiceNotesText(e.target.value)} placeholder="补充品牌口吻、禁用表达、必须保留的叙述风格。" />
+                    <div className="rounded-xl border border-surface-200 bg-surface-50 p-3 text-xs text-surface-600">{brandVoiceBrief || '当前未生成品牌语气摘要。'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="subtitle-text">字幕 / 口播台词</Label>
+                    <Textarea id="subtitle-text" rows={6} value={subtitleText} onChange={(e) => setSubtitleText(e.target.value)} placeholder="每行一句，作为字幕与口播基础文本。" />
+                    <div className="rounded-xl border border-surface-200 bg-surface-50 p-3 text-xs text-surface-600">已识别 {subtitleLines.length} 条台词。阻塞项 {blockingReviewItems.length}，提醒项 {advisoryReviewItems.length}。</div>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-xl border border-surface-200 bg-surface-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-surface-800">进入生成前审核</p>
+                      <p className="mt-1 text-xs text-surface-500">必须先确认审核，后面才能准备项目和提交分镜资源。</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-surface-700">
+                      <Switch checked={reviewConfirmed} onCheckedChange={setReviewConfirmed} />
+                      我已确认当前分镜文案和风格设置
                     </div>
                   </div>
-                  {recommendedModel ? (
-                    <div className="rounded-md border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-800">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span>
-                          推荐模型：{recommendedModel.modelName} · 评分 {recommendedModel.score} · 成功率 {recommendedModel.successRate}% · 平均耗时 {recommendedModel.avgDurationSec || 0}s · 成本指数 {recommendedModel.estimatedCostPerClip}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
-                            onClick={() => {
-                              setSelectedVideoModel(recommendedModel.modelName)
-                              toast({ title: `已套用推荐模型：${recommendedModel.modelName}`, variant: 'success' })
-                            }}
-                          >
-                            一键套用
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
-                            onClick={handleApplyRecommendedAndRerun}
-                            disabled={manualRerunLoading}
-                          >
-                            {manualRerunLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '套用并复投'}
-                          </Button>
-                          <div className="flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-1 py-0.5">
-                            <Input
-                              type="number"
-                              min={1}
-                              max={20}
-                              value={lockRunsInput}
-                              onChange={(e) => setLockRunsInput(Number(e.target.value || 3))}
-                              className="h-6 w-14 border-0 px-1 text-xs"
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 border-emerald-300 px-2 text-xs text-emerald-800 hover:bg-emerald-100"
-                              onClick={() => {
-                                const runs = Math.max(1, Math.min(20, lockRunsInput))
-                                setLockedModelKey(recommendedModel.modelName)
-                                setLockedModelRemaining(runs)
-                                setSelectedVideoModel(recommendedModel.modelName)
-                                toast({ title: `已锁定推荐模型 ${recommendedModel.modelName}`, description: `将优先用于接下来 ${runs} 次生成`, variant: 'success' })
-                              }}
-                            >
-                              锁定N次
-                            </Button>
+                  {blockingReviewItems.length > 0 ? (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      阻塞项：{blockingReviewItems.map((item) => item.label).join('、')}
+                    </div>
+                  ) : null}
+                  {advisoryReviewItems.length > 0 ? (
+                    <div className="mt-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-xs text-surface-600">
+                      提醒项：{advisoryReviewItems.map((item) => item.label).join('、')}
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 5</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">分镜视频提示词处理</h3>
+                <p className="mt-1 text-sm text-surface-500">逐镜头编辑图片提示词、视频提示词、字幕台词，并查看真实分镜状态。</p>
+                <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-surface-200 bg-surface-50 p-4 text-xs text-surface-600">
+                  <div>镜头数：{storyboardPreview.length}</div>
+                  <div>已生成：{storyboardShotSummary.succeeded}</div>
+                  <div>失败：{storyboardShotSummary.failed}</div>
+                  <div>待检查成功镜头：{storyboardShotSummary.unreviewedSucceeded}</div>
+                  <div>图片模型：{selectedImageModel || '未选'}</div>
+                  <div>提示词模型：{selectedReferenceHintModel || '未选'}</div>
+                </div>
+                <div className="mt-4">
+                  <StoryboardEditorSection
+                    storyboardPreview={storyboardPreview}
+                    referenceHintGeneratingAll={referenceHintGeneratingAll}
+                    referenceHintGeneratingIndex={referenceHintGeneratingIndex}
+                    storyboardShotSummary={storyboardShotSummary}
+                    imageModels={availableImageModels}
+                    selectedImageModel={selectedImageModel}
+                    onSelectedImageModelChange={setSelectedImageModel}
+                    referenceHintModels={availableReferenceHintModels}
+                    selectedReferenceHintModel={selectedReferenceHintModel}
+                    onSelectedReferenceHintModelChange={setSelectedReferenceHintModel}
+                    onFillAllReferenceHints={fillReferenceHintsForAll}
+                    onFillReferenceHintAtIndex={fillReferenceHintAtIndex}
+                    onRetryStoryboardAtIndex={retryStoryboardAtIndex}
+                    onRefreshStoryboardAtIndex={refreshStoryboardAtIndex}
+                    onToggleStoryboardReviewed={toggleStoryboardReviewed}
+                    storyboardRefreshingIndex={storyboardRefreshingIndex}
+                    storyboardRetryingIndex={storyboardRetryingIndex}
+                    onSceneChange={(index, value) => {
+                      setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                      setSceneDescriptionsText((prev) => updateLineAtIndex(prev, index, value))
+                    }}
+                    onReferenceHintChange={(index, value) => {
+                      setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                      setReferenceImageHintsText((prev) => updateLineAtIndex(prev, index, value))
+                    }}
+                    onDialogueChange={(index, value) => {
+                      setReviewedStoryboardShotKeys((prev) => prev.filter((item) => item !== storyboardPreview[index]?.shotKey))
+                      setSubtitleText((prev) => updateLineAtIndex(prev, index, value))
+                    }}
+                  />
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 6</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">输入分镜参考图：支持本地上传或提示词生成</h3>
+                <p className="mt-1 text-sm text-surface-500">本地图片会在准备项目时上传；也可以直接粘贴 URL。提示词模型和图片模型会显示在当前参数里。</p>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="image-urls">参考图 URL（每行一张）</Label>
+                    <Textarea id="image-urls" rows={8} value={imageUrlsText} onChange={(e) => setImageUrlsText(e.target.value)} placeholder="https://..." />
+                    <p className="text-xs text-surface-500">当前识别到 {imageUrls.length} 张 URL 图片。</p>
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-surface-800">本地参考图上传</p>
+                        <p className="text-xs text-surface-500">支持上传本地图片，准备项目时会上传并归一化地址。</p>
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-surface-200 bg-white px-3 py-2 text-xs font-medium text-surface-700 hover:bg-surface-100">
+                        <ImageIcon className="h-3.5 w-3.5" />
+                        上传图片
+                        <input type="file" accept="image/*" multiple className="hidden" onChange={(event) => handleLocalFiles(event.target.files)} />
+                      </label>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <div className="flex items-center gap-2 text-xs text-surface-600">
+                        <Switch checked={enableLocalCompression} onCheckedChange={setEnableLocalCompression} />
+                        上传前压缩
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">最长边</Label>
+                        <Input type="number" min={640} max={4096} value={maxImageSide} onChange={(e) => setMaxImageSide(Number(e.target.value || 1920))} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">JPEG 质量</Label>
+                        <Input type="number" min={1} max={100} value={jpegQuality} onChange={(e) => setJpegQuality(Number(e.target.value || 88))} />
+                      </div>
+                    </div>
+                    {localFiles.length > 0 ? (
+                      <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-surface-200 bg-white p-2">
+                        {localFiles.map((file, idx) => (
+                          <div key={`${file.name}-${idx}`} className="flex items-center justify-between gap-2 rounded-md px-2 py-1 text-xs text-surface-700">
+                            <span className="truncate">{file.name}</span>
+                            <button type="button" className="text-rose-500 hover:text-rose-600" onClick={() => removeLocalFile(idx)}>删除</button>
                           </div>
-                        </div>
-                      </div>
-                      {lockedModelKey ? (
-                        <p className="mt-1 text-xs text-emerald-700">当前锁定：{lockedModelKey} · 剩余 {lockedModelRemaining} 次</p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <div className="rounded-md border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-700">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span>最近{recentTrend.windowSize}条趋势：样本 {recentTrend.total} · 成功率 {recentTrend.successRate}% · 平均耗时 {recentTrend.avgDurationSec || 0}s · 失败 {recentTrend.failed}</span>
-                      <Select value={trendWindow} onValueChange={(value) => setTrendWindow(value as '10' | '20' | '50')}>
-                        <SelectTrigger className="h-7 w-24 bg-white text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="10">最近10</SelectItem>
-                          <SelectItem value="20">最近20</SelectItem>
-                          <SelectItem value="50">最近50</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  {currentHourStat ? (
-                    <div className="rounded-md border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-700">
-                      当前时段 {currentHourStat.hour}：样本 {currentHourStat.total} · 成功率 {currentHourStat.successRate}% · 平均耗时 {currentHourStat.avgDurationSec || 0}s
-                      {autoAvoidLowHourEnabled && currentHourStat.total >= 3 && currentHourStat.successRate < lowHourThreshold
-                        ? ` · 已启用自动避坑阈值 ${lowHourThreshold}%`
-                        : ''}
-                    </div>
-                  ) : null}
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {modelCompareRows.map((row) => (
-                      <div key={`compare-${row.modelName}`} className="rounded-md border border-surface-200 bg-white p-3 text-xs">
-                        <p className="font-medium text-surface-800">{row.modelName}</p>
-                        <p className="mt-1 text-surface-600">任务 {row.total} · 成功 {row.succeeded} · 失败 {row.failed} · 进行中 {row.processing}</p>
-                        <p className="mt-1 text-cyan-700">成功率 {row.successRate}% · 评分 {row.score}</p>
-                        <p className="mt-1 text-surface-600">平均耗时 {row.avgDurationSec || 0}s · P95 {row.p95DurationSec || 0}s · 成本指数 {row.estimatedCostPerClip}</p>
-                        {row.latestOutputUrl ? (
-                          <a href={row.latestOutputUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex text-cyan-700 hover:text-cyan-800">
-                            查看最新输出
-                          </a>
-                        ) : null}
-                        {row.latestError ? (
-                          <p className="mt-1 text-rose-600 line-clamp-2">最近失败: {row.latestError}</p>
-                        ) : null}
-                        {row.topFailureReasons.length > 0 ? (
-                          <p className="mt-1 text-rose-700">失败聚类: {row.topFailureReasons.map((item) => `${item.reason}(${item.count})`).join('，')}</p>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                  {failureReasonClusters.length > 0 ? (
-                    <div className="rounded-md border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-700">
-                      全局失败原因: {failureReasonClusters.map((item) => `${item.reason}(${item.count})`).join('，')}
-                    </div>
-                  ) : null}
-                  {hourlyStats.length > 0 ? (
-                    <div className="rounded-md border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-700">
-                      <p className="font-medium text-surface-800">分时段稳定性</p>
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        {hourlyStats.map((item) => (
-                          <span key={`hour-${item.hour}`} className="rounded-full border border-surface-300 bg-white px-2 py-0.5">
-                            {item.hour} 成功率 {item.successRate}% · 均耗时 {item.avgDurationSec || 0}s
-                          </span>
                         ))}
                       </div>
-                    </div>
-                  ) : null}
+                    ) : <p className="text-xs text-surface-500">还没有本地参考图。</p>}
+                  </div>
                 </div>
-              ) : null}
+              </section>
 
-              {(taskStatus === 'pending' || taskStatus === 'processing') ? (
-                <p className="mt-2 flex items-center gap-1.5 text-xs text-cyan-700">
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  正在自动轮询任务结果，生成完成后会直接显示下载入口。
-                </p>
-              ) : null}
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 7</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">点击按钮生成分镜资源</h3>
+                <p className="mt-1 text-sm text-surface-500">保持手动链路：先准备项目，再手动生成分镜资源，不自动提交视频。</p>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <p className="text-sm font-medium text-surface-800">先准备项目</p>
+                    <p className="mt-1 text-xs text-surface-500">{prepareProjectHint}</p>
+                    <Button className="mt-4" type="button" onClick={handlePrepareProject} disabled={!canPrepareProject || preparingProject}>
+                      {preparingProject ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      {projectReady ? '重新准备项目' : '准备项目'}
+                    </Button>
+                    <div className="mt-3 text-xs text-surface-600">当前状态：{projectReady ? `项目 #${activeProjectId} 已准备` : '尚未准备项目'}</div>
+                  </div>
+                  <div className="rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <p className="text-sm font-medium text-surface-800">生成分镜资源</p>
+                    <p className="mt-1 text-xs text-surface-500">{generateStoryboardHint}</p>
+                    <Button className="mt-4" type="button" onClick={handleGenerateByImages} disabled={!canGenerateStoryboard || creatingByImages || storyboardGenerating}>
+                      {(creatingByImages || storyboardGenerating) ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      手动生成分镜资源
+                    </Button>
+                    <div className="mt-3 text-xs text-surface-600">当前状态：{storyboardReady ? `已触发于 ${storyboardGeneratedAt ? new Date(storyboardGeneratedAt).toLocaleString('zh-CN') : '刚刚'}` : '还未生成分镜资源'}</div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">STEP 8</p>
+                <h3 className="mt-1 text-lg font-semibold text-surface-900">点击视频生成：根据提示词、场景和参考图生成视频</h3>
+                <p className="mt-1 text-sm text-surface-500">视频阶段依然保持手动：先提交视频任务，是否合成由你手动决定。</p>
+                <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="space-y-2 xl:col-span-2">
+                    <Label>视频模型</Label>
+                    <Select value={selectedVideoModel} onValueChange={setSelectedVideoModel}>
+                      <SelectTrigger><SelectValue placeholder="选择视频模型" /></SelectTrigger>
+                      <SelectContent>
+                        {availableVideoModels.length > 0 ? availableVideoModels.map((model) => (
+                          <SelectItem key={model.id} value={model.model_key}>{model.name}</SelectItem>
+                        )) : <SelectItem value="__no_model__" disabled>暂无可用模型</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>风格</Label>
+                    <Select value={selectedStylePreset} onValueChange={setSelectedStylePreset}>
+                      <SelectTrigger><SelectValue placeholder="选择风格" /></SelectTrigger>
+                      <SelectContent>
+                        {VIDEO_STYLE_PRESETS.map((item) => (
+                          <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>运镜</Label>
+                    <Select value={selectedMotionMode} onValueChange={(value) => setSelectedMotionMode(value as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])}>
+                      <SelectTrigger><SelectValue placeholder="选择运镜" /></SelectTrigger>
+                      <SelectContent>
+                        {VIDEO_MOTION_OPTIONS.map((item) => (
+                          <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>片段时长（秒）</Label>
+                    <Input type="number" min={2} max={10} value={clipDurationSec} onChange={(e) => setClipDurationSec(Number(e.target.value || 5))} />
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <p className="text-sm font-medium text-surface-800">提交视频任务</p>
+                    <p className="mt-1 text-xs text-surface-500">{generateVideoHint}</p>
+                    <Button className="mt-4" type="button" onClick={handleGenerateVideoManually} disabled={!canGenerateVideo || submittingVideo}>
+                      {submittingVideo ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      手动生成视频
+                    </Button>
+                    <div className="mt-3 text-xs text-surface-600">当前任务：{activeTaskId ? `#${activeTaskId} / ${taskStatus}` : '尚未提交视频任务'}</div>
+                  </div>
+                  <div className="rounded-xl border border-surface-200 bg-surface-50 p-4">
+                    <p className="text-sm font-medium text-surface-800">手动触发合成</p>
+                    <p className="mt-1 text-xs text-surface-500">{composeVideoHint}</p>
+                    <div className="flex flex-wrap items-center gap-3 mt-4">
+                      <Button type="button" variant="outline" onClick={handleComposeVideoManually} disabled={!canComposeVideo || composingVideo}>
+                        {composingVideo ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                        手动点合成
+                      </Button>
+                      {taskOutputUrl ? <Button type="button" variant="outline" onClick={openOutput}>打开输出</Button> : null}
+                    </div>
+                    <div className="mt-3 text-xs text-surface-600">输出：{taskOutputUrl || '当前还没有输出链接'}</div>
+                  </div>
+                </div>
+              </section>
             </div>
-          ) : null}
 
-          {draftSavedAt ? (
-            <p className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</p>
-          ) : null}
-            </TabsContent>
+            <div className="space-y-6">
+              <section className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4 shadow-sm">
+                <p className="text-sm font-semibold text-cyan-900">当前任务状态</p>
+                <p className="mt-1 text-xs text-cyan-700">主链路操作都在左边，这里只保留当前状态与结果反馈。</p>
+                <div className="mt-4">
+                  <CurrentTaskPanel
+                    activeProjectId={activeProjectId}
+                    activeTaskId={activeTaskId}
+                    taskStatus={taskStatus}
+                    taskError={taskError}
+                    taskOutputUrl={taskOutputUrl}
+                    taskClipProgress={taskClipProgress}
+                    autoRetryAttempts={autoRetryAttempts}
+                    adTaskLogs={adTaskLogs}
+                    activeOptimizeTaskId={activeOptimizeTaskId}
+                    manualRerunLoading={manualRerunLoading}
+                    exportingPackage={exportingPackage}
+                    nextActionLabel={nextActionLabel}
+                    nextActionHint={nextActionHint}
+                    onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+                    onOpenOutput={openOutput}
+                    onRerunAnotherVersion={handleRerunAnotherVersion}
+                    onExportPackage={handleExportPackage}
+                  />
+                </div>
+                {(taskStatus === 'pending' || taskStatus === 'processing') ? (
+                  <p className="mt-3 flex items-center gap-1.5 text-xs text-cyan-700">
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    正在轮询任务结果，完成后会直接显示输出入口。
+                  </p>
+                ) : null}
+              </section>
 
-            <TabsContent value="history" className="space-y-6">
-          <LocalHistoryPanel
-            historyEntries={historyEntries}
-            selectedHistoryEntryId={selectedHistoryEntryId}
-            selectedHistoryEntry={selectedHistoryEntry}
-            currentVersionSummary={currentVersionSummary}
-            selectedHistorySummary={selectedHistorySummary}
-            onSave={handleSaveHistorySnapshot}
-            onSelect={setSelectedHistoryEntryId}
-            onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
-          />
+              <section className="rounded-2xl border border-surface-200 bg-white p-4 shadow-sm">
+                <p className="text-sm font-semibold text-surface-900">当前模型参数</p>
+                <div className="mt-3 space-y-2 text-xs text-surface-600">
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>优化模型</span><span>{selectedOptimizeModel || '未选择'}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>分镜图片模型</span><span>{selectedImageModel || '未选择'}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>提示词模型</span><span>{selectedReferenceHintModel || '未选择'}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>视频模型</span><span>{selectedVideoModel || '系统默认'}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>视频风格</span><span>{selectedStylePreset}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>运镜模式</span><span>{selectedMotionMode}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>视频模式</span><span>{selectedVideoMode}</span></div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>片段时长</span><span>{clipDurationSec}s</span></div>
+                </div>
+              </section>
 
-          <GenerationQueuePanel
-            generationTasks={generationTasks}
-            activeGenerationTaskId={activeGenerationTaskId}
-            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
-            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
-          />
-            </TabsContent>
-          </Tabs>
-          </CardContent>
-        </Card>
+              <section className="rounded-2xl border border-surface-200 bg-white p-4 shadow-sm">
+                <p className="text-sm font-semibold text-surface-900">当前链路状态</p>
+                <div className="mt-3 space-y-2 text-xs text-surface-600">
+                  <div className="flex items-center justify-between rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>审核确认</span><span>{reviewReady ? '已完成' : '未完成'}</span></div>
+                  <div className="flex items-center justify-between rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>项目准备</span><span>{projectReady ? '已准备' : '未准备'}</span></div>
+                  <div className="flex items-center justify-between rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>分镜资源</span><span>{storyboardReady ? '已生成/已触发' : '未生成'}</span></div>
+                  <div className="flex items-center justify-between rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>视频任务</span><span>{videoReady ? taskStatus : '未提交'}</span></div>
+                  <div className="flex items-center justify-between rounded-lg border border-surface-200 bg-surface-50 px-3 py-2"><span>成功镜头待检查</span><span>{storyboardShotSummary.unreviewedSucceeded}</span></div>
+                </div>
+              </section>
+            </div>
+          </div>
 
-      </div>
+          <section className="rounded-2xl border border-surface-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-surface-900">历史与最近提交记录</p>
+                <p className="mt-1 text-xs text-surface-500">这部分降级为辅助区，不打断主链路。</p>
+              </div>
+              {draftSavedAt ? <span className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</span> : null}
+            </div>
+            <div className="mt-4 grid gap-6 xl:grid-cols-2">
+              <LocalHistoryPanel
+                historyEntries={historyEntries}
+                selectedHistoryEntryId={selectedHistoryEntryId}
+                selectedHistoryEntry={selectedHistoryEntry}
+                currentVersionSummary={currentVersionSummary}
+                selectedHistorySummary={selectedHistorySummary}
+                onSave={handleSaveHistorySnapshot}
+                onSelect={setSelectedHistoryEntryId}
+                onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
+              />
+              <GenerationQueuePanel
+                generationTasks={generationTasks}
+                activeGenerationTaskId={activeGenerationTaskId}
+                onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+                onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
+              />
+            </div>
+          </section>
+        </CardContent>
+      </Card>
     </div>
   )
+
 }
