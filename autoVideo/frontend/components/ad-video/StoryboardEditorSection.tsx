@@ -1,21 +1,11 @@
 import { Loader2, Sparkles } from 'lucide-react'
+import type { StoryboardPreviewItem } from '@/components/ad-video/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 
-type StoryboardEditorShot = {
-  index: number
-  scene: string
-  scenePlaceholder: string
-  dialogue: string
-  dialoguePlaceholder: string
-  referenceHint: string
-  referenceHintPlaceholder: string
-  imageSource: string
-  hasDialogue: boolean
-  hasReferenceHint: boolean
-}
+type StoryboardEditorShot = StoryboardPreviewItem
 
 type StoryboardEditorSectionProps = {
   storyboardPreview: StoryboardEditorShot[]
@@ -58,7 +48,7 @@ export function StoryboardEditorSection({
             className="h-8 gap-2 border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
           >
             {referenceHintGeneratingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            AI 补全全部参考图
+            AI 补全全部参考图提示词
           </Button>
         </div>
       </div>
@@ -106,7 +96,7 @@ export function StoryboardEditorSection({
                     ) : (
                       <Sparkles className="h-3 w-3" />
                     )}
-                    AI 补全
+                    AI 补全提示词
                   </Button>
                 </div>
                 <Input
@@ -114,7 +104,7 @@ export function StoryboardEditorSection({
                   placeholder={shot.referenceHintPlaceholder || '例如：白底产品特写 / 手持使用场景'}
                   onChange={(event) => onReferenceHintChange(shot.index, event.target.value)}
                 />
-                <p className="text-[11px] leading-5 text-surface-500">可填参考图风格、构图、主体或检索关键词，不需要真实上传图片。</p>
+                <p className="text-[11px] leading-5 text-surface-500">这里填写参考图风格、构图、主体或检索关键词，供后续找图、选图或生成提示词使用，不会自动上传真实图片。</p>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-surface-700">字幕 / 口播</Label>
