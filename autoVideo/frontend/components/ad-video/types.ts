@@ -178,5 +178,7 @@ export type AssetLike = {
   url?: string
   file_url?: string
   thumbnail_url?: string
+  image_url?: string
+  composite_image_url?: string
   metadata?: unknown
 } | null | undefined
