@@ -2632,6 +2632,8 @@ export default function AdVideoPage() {
             </TabsContent>
 
             <TabsContent value="generate" className="space-y-6">
+          <FourStepWorkbench items={fourStepItems} />
+
           <AdPrimaryActionsSection
             creatingByText={creatingByText}
             preparingProject={preparingProject}
@@ -2656,19 +2658,6 @@ export default function AdVideoPage() {
             onGenerateVideo={handleGenerateVideoManually}
             onComposeVideo={handleComposeVideoManually}
           />
-
-          <FourStepWorkbench items={fourStepItems} />
-
-          <GenerationQueuePanel
-            generationTasks={generationTasks}
-            activeGenerationTaskId={activeGenerationTaskId}
-            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
-            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
-          />
-
-          {draftSavedAt ? (
-            <p className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</p>
-          ) : null}
 
           {activeProjectId ? (
             <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
@@ -2890,6 +2879,17 @@ export default function AdVideoPage() {
                 </p>
               ) : null}
             </div>
+          ) : null}
+
+          <GenerationQueuePanel
+            generationTasks={generationTasks}
+            activeGenerationTaskId={activeGenerationTaskId}
+            onOpenProject={(projectId) => router.push(`/projects/${projectId}`)}
+            onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
+          />
+
+          {draftSavedAt ? (
+            <p className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</p>
           ) : null}
             </TabsContent>
 
