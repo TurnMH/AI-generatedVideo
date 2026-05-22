@@ -101,6 +101,49 @@ export function AdReviewSection({
         </span>
       </div>
 
+      <div className="space-y-3 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium text-cyan-900">分镜模板库</p>
+            <p className="text-xs text-cyan-700">一键套用镜头结构、台词节奏和参考图提示，再在卡片里做局部微调。</p>
+          </div>
+          <span className="rounded-full border border-cyan-200 bg-white px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+            当前：{selectedStoryboardTemplateMeta.label}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {storyboardTemplates.map((template) => {
+            const active = selectedStoryboardTemplate === template.key
+            return (
+              <button
+                key={template.key}
+                type="button"
+                onClick={() => onSelectStoryboardTemplate(template.key)}
+                className={[
+                  'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                  active
+                    ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
+                    : 'border-surface-200 bg-white text-surface-600 hover:border-cyan-200 hover:bg-cyan-50/40',
+                ].join(' ')}
+              >
+                {template.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="rounded-lg border border-cyan-100 bg-white px-3 py-3 text-xs text-cyan-700">
+          <p className="font-medium text-cyan-900">{selectedStoryboardTemplateMeta.label}</p>
+          <p className="mt-1 leading-5">{selectedStoryboardTemplateMeta.hint}</p>
+          <p className="mt-2 text-[11px] leading-5 text-cyan-600">
+            场景建议 {selectedStoryboardTemplateMeta.sceneLines.length} 条 · 台词建议 {selectedStoryboardTemplateMeta.dialogueLines.length} 条 · 参考图建议 {selectedStoryboardTemplateMeta.referenceLines.length} 条
+          </p>
+        </div>
+      </div>
+
+      {storyboardEditor}
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {adReviewChecklist.map((item) => (
           <div
@@ -145,47 +188,6 @@ export function AdReviewSection({
         <div className="space-y-1">
           <p className="text-sm font-medium text-cyan-900">我已确认市场、台词和分镜无误</p>
           <p className="text-xs text-cyan-700">勾选后才能提交生成；修改任意输入后会自动取消确认。</p>
-        </div>
-      </div>
-
-      <div className="space-y-3 rounded-xl border border-cyan-100 bg-cyan-50/40 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium text-cyan-900">分镜模板库</p>
-            <p className="text-xs text-cyan-700">一键套用镜头结构、台词节奏和参考图提示，再在卡片里做局部微调。</p>
-          </div>
-          <span className="rounded-full border border-cyan-200 bg-white px-2.5 py-1 text-[11px] font-medium text-cyan-700">
-            当前：{selectedStoryboardTemplateMeta.label}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {storyboardTemplates.map((template) => {
-            const active = selectedStoryboardTemplate === template.key
-            return (
-              <button
-                key={template.key}
-                type="button"
-                onClick={() => onSelectStoryboardTemplate(template.key)}
-                className={[
-                  'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                  active
-                    ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                    : 'border-surface-200 bg-white text-surface-600 hover:border-cyan-200 hover:bg-cyan-50/40',
-                ].join(' ')}
-              >
-                {template.label}
-              </button>
-            )
-          })}
-        </div>
-
-        <div className="rounded-lg border border-cyan-100 bg-white px-3 py-3 text-xs text-cyan-700">
-          <p className="font-medium text-cyan-900">{selectedStoryboardTemplateMeta.label}</p>
-          <p className="mt-1 leading-5">{selectedStoryboardTemplateMeta.hint}</p>
-          <p className="mt-2 text-[11px] leading-5 text-cyan-600">
-            场景建议 {selectedStoryboardTemplateMeta.sceneLines.length} 条 · 台词建议 {selectedStoryboardTemplateMeta.dialogueLines.length} 条 · 参考图建议 {selectedStoryboardTemplateMeta.referenceLines.length} 条
-          </p>
         </div>
       </div>
 
@@ -253,8 +255,6 @@ export function AdReviewSection({
           <p className="mt-2 text-[11px] leading-5 text-violet-600">{selectedBrandVoiceTemplateMeta.contrast}</p>
         </div>
       </div>
-
-      {storyboardEditor}
     </div>
   )
 }
