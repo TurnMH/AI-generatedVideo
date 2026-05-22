@@ -1539,13 +1539,6 @@ export default function AdVideoPage() {
       return
     }
 
-    const optimized = autoOptimizeCopy ? await runCopyOptimization({ preserveLogs: true }) : null
-    const trimmedPrompt = (optimized?.content || optimizedScript || basePrompt).trim()
-    if (trimmedPrompt.length < 10) {
-      toast({ title: '请先输入广告文案，用于场景描述和视频语义', variant: 'destructive' })
-      return
-    }
-
     if (imageUrls.length === 0 && localFiles.length === 0) {
       toast({ title: '请至少提供 1 张图片（URL 或本地上传）', variant: 'destructive' })
       return
@@ -1573,8 +1566,24 @@ export default function AdVideoPage() {
     setGenerationTasks((prev) => [generationTask, ...prev].slice(0, 8))
     setActiveGenerationTaskId(generationTask.id)
     setCreatingByImages(true)
+    toast({
+      title: '正在提交异步生成任务',
+      description: autoOptimizeCopy ? '正在优化文案并准备素材，请稍候。' : '正在准备素材并创建任务，请稍候。',
+      variant: 'success',
+    })
 
     try {
+      const optimized = autoOptimizeCopy ? await runCopyOptimization({ preserveLogs: true }) : null
+      const trimmedPrompt = (optimized?.content || optimizedScript || basePrompt).trim()
+      if (trimmedPrompt.length < 10) {
+        toast({ title: '请先输入广告文案，用于场景描述和视频语义', variant: 'destructive' })
+        updateGenerationTask(generationTask.id, {
+          status: 'failed',
+          step: '广告文案不足，未提交任务',
+          error: '广告文案不足，未提交任务',
+        })
+        return
+      }
       updateGenerationTask(generationTask.id, {
         status: autoOptimizeCopy ? 'optimizing' : 'uploading',
         step: autoOptimizeCopy ? '文案优化中，正在准备广告语' : '正在准备素材并提交任务',
