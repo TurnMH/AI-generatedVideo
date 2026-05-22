@@ -66,7 +66,7 @@ export function AdPrimaryActionsSection({
         <div className="space-y-1">
           <Button type="button" variant="outline" onClick={onPrepareProject} disabled={busy || !canPrepareProject} className="h-11 w-full gap-2">
             {preparingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-            1. 准备项目
+            {projectReady ? '1. 重新准备项目' : '1. 准备项目'}
           </Button>
           <p className="text-[11px] text-surface-500">{prepareProjectHint}</p>
         </div>

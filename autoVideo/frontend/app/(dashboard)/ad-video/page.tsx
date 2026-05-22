@@ -1356,7 +1356,7 @@ export default function AdVideoPage() {
     return `镜头 ${storyboardPreview.length} 个 · 图片 URL ${imageUrls.length} 张 · 本地图片 ${localFiles.length} 张 · 台词 ${subtitleLines.length} 条`
   }, [storyboardPreview.length, imageUrls.length, localFiles.length, subtitleLines.length])
 
-  const canPrepareProject = reviewReady && !projectReady
+  const canPrepareProject = reviewReady
   const canGenerateStoryboard = reviewReady && projectReady
   const canGenerateVideo = reviewReady && projectReady && storyboardReady
   const canComposeVideo = Boolean(activeTaskId)
@@ -1364,8 +1364,10 @@ export default function AdVideoPage() {
   const prepareProjectHint = !reviewReady
     ? '先完成分镜审核确认，才能创建项目。'
     : projectReady
-      ? '项目已准备完成，无需重复创建。'
-      : '会创建项目、上传脚本并准备素材。'
+      ? '如需重新准备项目，可再次点击。'
+      : taskStatus === 'failed'
+        ? '上一次准备失败了，可以直接重试。'
+        : '会创建项目、上传脚本并准备素材。'
 
   const generateStoryboardHint = !projectReady
     ? '请先完成“准备项目”。'
@@ -1952,9 +1954,19 @@ export default function AdVideoPage() {
     setPreparingProject(true)
     try {
       await ensureManualProjectPrepared()
+      setTaskError('')
+      setTaskStatus('idle')
       toast({ title: '项目准备完成', description: '现在可以手动点生成图片或生成视频。', variant: 'success' })
     } catch (error) {
       const message = error instanceof Error ? error.message : '项目准备失败'
+      setProjectPreparedAt(null)
+      setLastGenerationContext(null)
+      setStoryboardGeneratedAt(null)
+      setActiveTaskId(null)
+      setTaskOutputUrl('')
+      setTaskClipProgress({ done: 0, total: 0 })
+      setTaskError(message)
+      setTaskStatus('failed')
       appendAdTaskLog(message, 'error')
       toast({ title: '项目准备失败', description: message, variant: 'destructive' })
     } finally {
@@ -2536,30 +2548,12 @@ export default function AdVideoPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-10">
       <div className="overflow-hidden rounded-[28px] border border-surface-200/70 bg-gradient-to-br from-slate-950 via-cyan-950 to-slate-900 p-6 text-white shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-2xl">
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-surface-100 backdrop-blur">
-              <Megaphone className="h-3.5 w-3.5 text-cyan-300" />
-              广告视频工作台
-            </div>
-            <h2 className="text-2xl font-semibold tracking-tight">文案 + 指定图片，一步生成广告视频</h2>
-            <p className="mt-2 text-sm leading-6 text-surface-300">
-              先写广告文案，再在本页完善市场、分镜和台词，然后保存草稿或直接生成视频。
-            </p>
+        <div className="max-w-2xl">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-surface-100 backdrop-blur">
+            <Megaphone className="h-3.5 w-3.5 text-cyan-300" />
+            广告视频工作台
           </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.2em] text-surface-300">方式 A</p>
-              <p className="mt-2 text-base font-semibold text-white">本地草稿完善</p>
-              <p className="mt-1 text-xs text-surface-400">所有修改保留在当前页</p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.2em] text-surface-300">方式 B</p>
-              <p className="mt-2 text-base font-semibold text-white">指定图片直出视频</p>
-              <p className="mt-1 text-xs text-surface-400">创建项目后直接触发视频任务</p>
-            </div>
-          </div>
+          <h2 className="text-2xl font-semibold tracking-tight">手动四步流程：文案 → 图片 → 视频 → 合成</h2>
         </div>
       </div>
 
@@ -2603,15 +2597,6 @@ export default function AdVideoPage() {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />
-            </div>
-            <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 p-4">
-              <p className="flex items-center gap-2 text-sm font-medium text-cyan-800">
-                <Sparkles className="h-4 w-4" />
-                小提示
-              </p>
-              <p className="mt-1 text-xs leading-5 text-cyan-700">
-                广告文案里建议包含：产品卖点、目标人群、品牌语气、行动号召（CTA）。
-              </p>
             </div>
           </div>
 
@@ -2802,10 +2787,9 @@ export default function AdVideoPage() {
             onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-500">
-            <span>{draftSavedAt ? `草稿已保存于 ${new Date(draftSavedAt).toLocaleString('zh-CN')}` : '草稿会自动保存，避免编辑中途丢失'}</span>
-            <span>当前流程已与旧项目创建页解耦，修改会保留在本页。</span>
-          </div>
+          {draftSavedAt ? (
+            <p className="text-xs text-surface-500">草稿已保存于 {new Date(draftSavedAt).toLocaleString('zh-CN')}</p>
+          ) : null}
 
           {activeProjectId ? (
             <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4">
