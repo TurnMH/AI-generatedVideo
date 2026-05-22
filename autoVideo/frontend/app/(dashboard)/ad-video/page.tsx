@@ -161,6 +161,10 @@ export default function AdVideoPage() {
   const [optimizingCopy, setOptimizingCopy] = useState(false)
   const [creatingByText, setCreatingByText] = useState(false)
   const [creatingByImages, setCreatingByImages] = useState(false)
+  const [preparingProject, setPreparingProject] = useState(false)
+  const [submittingVideo, setSubmittingVideo] = useState(false)
+  const [composingVideo, setComposingVideo] = useState(false)
+  const [projectPreparedAt, setProjectPreparedAt] = useState<string | null>(null)
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null)
   const [activeTaskStartedAt, setActiveTaskStartedAt] = useState<string | null>(null)
@@ -1229,6 +1233,10 @@ export default function AdVideoPage() {
     return `广告视频-${new Date().toISOString().slice(0, 10)}`
   }
 
+  const projectReady = Boolean(activeProjectId && projectPreparedAt)
+  const storyboardReady = Boolean(storyboardGeneratedAt)
+  const videoReady = Boolean(activeTaskId || taskStatus === 'pending' || taskStatus === 'processing' || taskStatus === 'succeeded' || taskStatus === 'failed')
+
   const workflowSteps = useMemo(() => {
     const hasPrompt = adPrompt.trim().length >= 10
     const hasOptimized = optimizedScript.trim().length >= 10
@@ -1272,11 +1280,21 @@ export default function AdVideoPage() {
       },
       {
         key: 'video-submit',
-        label: '视频生成提交',
-        detail: activeProjectId
-          ? `项目 ${activeProjectId} 已进入视频提交流程。`
-          : '分镜图准备完成后，才会正式提交视频生成。',
-        status: buildStepStatus(Boolean(lastGenerationContext), creatingByImages || queueRunning, queueFailed && (taskError.includes('视频') || taskError.includes('提交') || taskError.includes('启动生成'))),
+        label: '手动视频生成',
+        detail: activeTaskId
+          ? `视频任务 #${activeTaskId} 已创建，可继续手动合成。`
+          : activeProjectId
+            ? `项目 ${activeProjectId} 已准备好，等待你手动点击生成视频。`
+            : '请先准备项目，再手动提交视频生成。',
+        status: buildStepStatus(videoReady, submittingVideo || queueRunning, queueFailed && (taskError.includes('视频') || taskError.includes('提交') || taskError.includes('启动生成'))),
+      },
+      {
+        key: 'compose',
+        label: '手动合成',
+        detail: activeTaskId
+          ? '视频任务已存在，可按你的节奏手动点击合成。'
+          : '生成视频任务后，这里才会进入可手动合成状态。',
+        status: buildStepStatus(taskStatus === 'succeeded', composingVideo, taskStatus === 'failed' && taskError.includes('合成')),
       },
       {
         key: 'result',
@@ -1289,7 +1307,7 @@ export default function AdVideoPage() {
         status: buildStepStatus(taskStatus === 'succeeded', taskStatus === 'pending' || taskStatus === 'processing', taskStatus === 'failed'),
       },
     ]
-  }, [adPrompt, optimizedScript, storyboardPreview, imageUrls.length, localFiles.length, storyboardGeneratedAt, generationTasks, creatingByImages, selectedOptimizeModel, optimizingCopy, autoOptimizeCopy, taskStatus, taskError, reviewReady, storyboardGenerating, activeProjectId, lastGenerationContext])
+  }, [adPrompt, optimizedScript, storyboardPreview, imageUrls.length, localFiles.length, storyboardGeneratedAt, generationTasks, creatingByImages, selectedOptimizeModel, optimizingCopy, autoOptimizeCopy, taskStatus, taskError, reviewReady, storyboardGenerating, activeProjectId, activeTaskId, lastGenerationContext, submittingVideo, composingVideo, videoReady])
 
   const workflowProgressValue = useMemo(() => {
     const doneCount = workflowSteps.filter((step) => step.status === 'done').length
@@ -1320,11 +1338,13 @@ export default function AdVideoPage() {
   const workflowTaskProgressDetail = useMemo(() => {
     if (taskStatus === 'failed') return taskError || '当前任务失败'
     if (taskStatus === 'succeeded') return '当前广告任务已完成，可预览或下载成片。'
-    if (storyboardGenerating) return '正在生成分镜图片，并等待后续视频提交。'
-    if (taskStatus === 'processing') return '视频已提交，后台正在生成片段并合成。'
-    if (creatingByImages || taskStatus === 'pending') return '正在按“文案优化 → 分镜图 → 视频生成”链路推进。'
+    if (storyboardGenerating) return '正在手动生成分镜图片。'
+    if (submittingVideo) return '正在手动提交视频生成任务。'
+    if (composingVideo) return '正在手动触发合成。'
+    if (taskStatus === 'processing') return '视频任务已创建，后台正在生成片段并等待合成结果。'
+    if (creatingByImages || taskStatus === 'pending') return '当前是手动流程：先图片，再视频，再合成。'
     return null
-  }, [creatingByImages, storyboardGenerating, taskError, taskStatus])
+  }, [creatingByImages, storyboardGenerating, submittingVideo, composingVideo, taskError, taskStatus])
 
   const workflowResourceSummary = useMemo(() => {
     return `镜头 ${storyboardPreview.length} 个 · 图片 URL ${imageUrls.length} 张 · 本地图片 ${localFiles.length} 张 · 台词 ${subtitleLines.length} 条`
@@ -1680,215 +1700,205 @@ export default function AdVideoPage() {
     setCreatingByText(false)
   }
 
-  const handleGenerateByImages = async () => {
+  const ensureManualProjectPrepared = async () => {
     const basePrompt = adPrompt.trim()
-    if (basePrompt.length < 10) {
-      toast({ title: '请先输入广告文案，用于场景描述和视频语义', variant: 'destructive' })
-      return
-    }
-
-    if (imageUrls.length === 0 && localFiles.length === 0) {
-      toast({ title: '请至少提供 1 张图片（URL 或本地上传）', variant: 'destructive' })
-      return
-    }
-
+    if (basePrompt.length < 10) throw new Error('请先输入广告文案，用于场景描述和视频语义')
+    if (imageUrls.length === 0 && localFiles.length === 0) throw new Error('请至少提供 1 张图片（URL 或本地上传）')
     const invalidUrl = imageUrls.find((url) => !isHttpUrl(url))
-    if (invalidUrl) {
-      toast({ title: '存在无效图片 URL，请使用 http/https 链接', description: invalidUrl, variant: 'destructive' })
-      return
+    if (invalidUrl) throw new Error(`存在无效图片 URL：${invalidUrl}`)
+    if (!reviewConfirmed) throw new Error('请先完成本地审核确认')
+
+    if (activeProjectId && lastGenerationContext) {
+      return {
+        projectId: activeProjectId,
+        context: lastGenerationContext,
+      }
     }
 
-    if (!reviewConfirmed) {
-      toast({
-        title: '请先完成本地审核确认',
-        description: '确认市场、台词和分镜无误后，再提交生成。',
-        variant: 'destructive',
-      })
-      return
+    const optimized = autoOptimizeCopy ? await runCopyOptimization({ preserveLogs: true }) : null
+    const trimmedPrompt = (optimized?.content || optimizedScript || basePrompt).trim()
+    if (trimmedPrompt.length < 10) throw new Error('广告文案不足，无法准备项目')
+
+    const marketBrief = getMarketBrief()
+    const subtitleSourceText = subtitleText.trim() || trimmedPrompt
+    const generationPrompt = [trimmedPrompt, marketBrief].filter(Boolean).join('\n\n')
+    const projectTitle = buildProjectTitle()
+    const referenceSourceLines = referenceImageHints.length > 0 ? referenceImageHints : selectedStoryboardTemplateMeta.referenceLines
+    const initialReferenceHints = distributeDialogues(referenceSourceLines, Math.max(imageUrls.length, localFiles.length, 1))
+    const selectedImageModelRecord = availableImageModels.find((item) => item.model_key === selectedImageModel)
+
+    appendAdTaskLog('正在准备项目、脚本和素材', 'progress')
+    const createRes = (await projectAPI.create({
+      title: projectTitle,
+      description: `由视频广告生成器创建；目标市场：${getTargetMarketLabel()}；字幕语言：${getSubtitleLanguageLabel()}；创意模式：${getCreativeModeLabel()}；品牌语气：${getBrandVoiceLabel()}；分镜模板：${selectedStoryboardTemplateMeta.label}；图片模型：${selectedImageModelRecord?.name ?? '系统默认'}`,
+      project_type: 'video',
+      style_tags: ensureProjectMediaTag(DEFAULT_AD_TAGS, 'video'),
+      target_episodes: 1,
+      image_model_id: selectedImageModelRecord?.id,
+      video_mode: selectedVideoMode,
+      storyboard_config: {
+        style_preset: selectedStylePreset,
+        motion_mode: selectedMotionMode,
+        duration: clipDurationSec,
+        aspect_ratio: '16:9',
+        resolution: '1080p',
+        target_market: targetMarket,
+        subtitle_language: subtitleLanguage,
+        creative_mode: creativeMode,
+        director_note: directorNote.trim(),
+        brand_voice_template: selectedBrandVoiceTemplate,
+        brand_voice_notes: brandVoiceNotesText.trim(),
+        storyboard_template: selectedStoryboardTemplate,
+        reference_image_hints: initialReferenceHints,
+      },
+    } as never)) as { data: { id: number } }
+
+    const projectId = createRes.data.id
+    const scriptFile = new File([subtitleSourceText], 'ad-script.txt', { type: 'text/plain;charset=utf-8' })
+    await projectAPI.uploadScript(projectId, scriptFile)
+
+    const dedupedUrlSet = new Set(imageUrls)
+    const finalImageUrls: string[] = [...dedupedUrlSet]
+    for (const sourceFile of localFiles) {
+      const file = enableLocalCompression
+        ? await compressImage(sourceFile, maxImageSide, Math.max(0.3, Math.min(0.98, jpegQuality / 100)))
+        : sourceFile
+      const createdAssetRes = await assetAPI.create(projectId, {
+        type: 'image',
+        name: `广告图-${file.name}`,
+        description: trimmedPrompt,
+        is_manual: true,
+      }) as unknown as { data?: { id?: number } }
+      const assetId = Number(createdAssetRes?.data?.id ?? 0)
+      if (!assetId) continue
+      await assetAPI.upload(projectId, assetId, file)
+      const assetRes = await assetAPI.get(projectId, assetId) as unknown as { data?: Asset }
+      const resolvedUrl = normalizeImageUrlFromAsset(assetRes?.data)
+      if (resolvedUrl && !dedupedUrlSet.has(resolvedUrl)) {
+        dedupedUrlSet.add(resolvedUrl)
+        finalImageUrls.push(resolvedUrl)
+      }
     }
+    if (finalImageUrls.length === 0) throw new Error('图片处理后未得到可用图片地址')
 
-    resetAdTaskLogs('开始创建广告任务')
-    appendAdTaskLog(`广告文案已确认，准备提交 ${getTargetMarketLabel()} 任务`, 'info')
-
-    const generationTask = createGenerationTaskEntry()
-    setGenerationTasks((prev) => [generationTask, ...prev].slice(0, 8))
-    setActiveGenerationTaskId(generationTask.id)
-    setCreatingByImages(true)
-    toast({
-      title: '正在提交异步生成任务',
-      description: autoOptimizeCopy ? '正在优化文案并准备素材，请稍候。' : '正在准备素材并创建任务，请稍候。',
-      variant: 'success',
+    const perClipReferenceHints = distributeDialogues(referenceSourceLines, finalImageUrls.length)
+    const perClipDialogues = distributeDialogues(splitSubtitleScript(subtitleSourceText), finalImageUrls.length)
+    const resolvedDescriptions = finalImageUrls.map((_, index) => {
+      const line = sceneDescriptions[index] ?? perClipDialogues[index] ?? optimized?.outline?.[index] ?? sceneDescriptions[sceneDescriptions.length - 1] ?? trimmedPrompt
+      return line.trim()
     })
 
+    const context: GenerationContext = {
+      projectId,
+      projectTitle,
+      prompt: generationPrompt,
+      imageUrls: finalImageUrls,
+      sceneDescriptions: resolvedDescriptions,
+      modelName: chooseModelForSubmission(selectedVideoModel || (availableVideoModels[0]?.model_key ?? '')),
+      stylePreset: selectedStylePreset,
+      motionMode: selectedMotionMode,
+      videoMode: selectedVideoMode,
+      clipDurationSec,
+      targetMarket,
+      subtitleLanguage,
+      creativeMode,
+      directorNote: directorNote.trim(),
+      subtitleText: subtitleSourceText,
+      dialogues: perClipDialogues,
+      storyboardTemplate: selectedStoryboardTemplate,
+      referenceImageHints: perClipReferenceHints,
+      brandVoiceTemplate: selectedBrandVoiceTemplate,
+      brandVoiceNotes: brandVoiceNotesText.trim(),
+      startedAt: new Date().toISOString(),
+    }
+
+    setActiveProjectId(projectId)
+    setLastGenerationContext(context)
+    setProjectPreparedAt(new Date().toISOString())
+    appendAdTaskLog(`项目已准备完成，ID ${projectId}，可手动继续生成图片/视频`, 'success')
+    return { projectId, context }
+  }
+
+  const handlePrepareProject = async () => {
+    resetAdTaskLogs('开始准备手动生成项目')
+    setPreparingProject(true)
     try {
-      const optimized = autoOptimizeCopy ? await runCopyOptimization({ preserveLogs: true }) : null
-      const trimmedPrompt = (optimized?.content || optimizedScript || basePrompt).trim()
-      if (trimmedPrompt.length < 10) {
-        toast({ title: '请先输入广告文案，用于场景描述和视频语义', variant: 'destructive' })
-        updateGenerationTask(generationTask.id, {
-          status: 'failed',
-          step: '广告文案不足，未提交任务',
-          error: '广告文案不足，未提交任务',
-        })
-        return
-      }
-      updateGenerationTask(generationTask.id, {
-        status: autoOptimizeCopy ? 'optimizing' : 'uploading',
-        step: autoOptimizeCopy ? '文案优化中，正在准备广告语' : '正在准备素材并提交任务',
-      })
-      appendAdTaskLog(autoOptimizeCopy ? '开始自动优化广告文案' : '跳过自动优化，直接准备素材', 'progress')
-
-      const marketBrief = getMarketBrief()
-      const subtitleSourceText = subtitleText.trim() || trimmedPrompt
-      const generationPrompt = [trimmedPrompt, marketBrief].filter(Boolean).join('\n\n')
-      const projectTitle = buildProjectTitle()
-      const referenceSourceLines = referenceImageHints.length > 0 ? referenceImageHints : selectedStoryboardTemplateMeta.referenceLines
-      const initialReferenceHints = distributeDialogues(referenceSourceLines, Math.max(imageUrls.length, localFiles.length, 1))
-      updateGenerationTask(generationTask.id, {
-        status: 'uploading',
-        step: '正在上传素材并创建项目',
-      })
-      appendAdTaskLog('正在上传素材并创建项目', 'progress')
-      const selectedImageModelRecord = availableImageModels.find((item) => item.model_key === selectedImageModel)
-      const createRes = (await projectAPI.create({
-        title: projectTitle,
-        description: `由视频广告生成器创建；目标市场：${getTargetMarketLabel()}；字幕语言：${getSubtitleLanguageLabel()}；创意模式：${getCreativeModeLabel()}；品牌语气：${getBrandVoiceLabel()}；分镜模板：${selectedStoryboardTemplateMeta.label}；图片模型：${selectedImageModelRecord?.name ?? '系统默认'}`,
-        project_type: 'video',
-        style_tags: ensureProjectMediaTag(DEFAULT_AD_TAGS, 'video'),
-        target_episodes: 1,
-        image_model_id: selectedImageModelRecord?.id,
-        video_mode: selectedVideoMode,
-        storyboard_config: {
-          style_preset: selectedStylePreset,
-          motion_mode: selectedMotionMode,
-          duration: clipDurationSec,
-          aspect_ratio: '16:9',
-          resolution: '1080p',
-          target_market: targetMarket,
-          subtitle_language: subtitleLanguage,
-          creative_mode: creativeMode,
-          director_note: directorNote.trim(),
-          brand_voice_template: selectedBrandVoiceTemplate,
-          brand_voice_notes: brandVoiceNotesText.trim(),
-          storyboard_template: selectedStoryboardTemplate,
-          reference_image_hints: initialReferenceHints,
-        },
-      } as never)) as { data: { id: number } }
-
-      const projectId = createRes.data.id
-      appendAdTaskLog(`项目已创建，ID ${projectId}`, 'success')
-      setAutoRetryAttempts(0)
-      autoRetryingRef.current = false
-      setSessionAnchorAt(new Date().toISOString())
-      setRetryHistory([])
-      setBatchSubmittedCount(0)
-
-      const scriptFile = new File([subtitleSourceText], 'ad-script.txt', {
-        type: 'text/plain;charset=utf-8',
-      })
-      await projectAPI.uploadScript(projectId, scriptFile)
-
-      const dedupedUrlSet = new Set(imageUrls)
-      const finalImageUrls: string[] = [...dedupedUrlSet]
-
-      for (const sourceFile of localFiles) {
-        const file = enableLocalCompression
-          ? await compressImage(sourceFile, maxImageSide, Math.max(0.3, Math.min(0.98, jpegQuality / 100)))
-          : sourceFile
-
-        const createdAssetRes = await assetAPI.create(projectId, {
-          type: 'image',
-          name: `广告图-${file.name}`,
-          description: trimmedPrompt,
-          is_manual: true,
-        }) as unknown as { data?: { id?: number } }
-
-        const assetId = Number(createdAssetRes?.data?.id ?? 0)
-        if (!assetId) continue
-
-        await assetAPI.upload(projectId, assetId, file)
-        const assetRes = await assetAPI.get(projectId, assetId) as unknown as { data?: Asset }
-        const resolvedUrl = normalizeImageUrlFromAsset(assetRes?.data)
-        if (resolvedUrl && !dedupedUrlSet.has(resolvedUrl)) {
-          dedupedUrlSet.add(resolvedUrl)
-          finalImageUrls.push(resolvedUrl)
-        }
-      }
-
-      if (finalImageUrls.length === 0) {
-        throw new Error('图片处理后未得到可用图片地址')
-      }
-      appendAdTaskLog(`素材准备完成，共 ${finalImageUrls.length} 张图片`, 'success')
-
-      const perClipReferenceHints = distributeDialogues(referenceSourceLines, finalImageUrls.length)
-      const perClipDialogues = distributeDialogues(splitSubtitleScript(subtitleSourceText), finalImageUrls.length)
-
-      const resolvedDescriptions = finalImageUrls.map((_, index) => {
-        const line = sceneDescriptions[index] ?? perClipDialogues[index] ?? optimized?.outline?.[index] ?? sceneDescriptions[sceneDescriptions.length - 1] ?? trimmedPrompt
-        return line.trim()
-      })
-
-      await triggerStoryboardGeneration(projectId, generationTask.id)
-      appendAdTaskLog(`分镜图片阶段已提交，项目 ${projectId} 将继续进入视频生成`, 'success')
-
-      updateGenerationTask(generationTask.id, {
-        status: 'submitting',
-        step: '分镜图片已提交，正在提交视频生成',
-      })
-
-      await triggerVideoGeneration({
-        projectId,
-        projectTitle,
-        prompt: generationPrompt,
-        imageUrls: finalImageUrls,
-        sceneDescriptions: resolvedDescriptions,
-        modelName: chooseModelForSubmission(selectedVideoModel || (availableVideoModels[0]?.model_key ?? '')),
-        stylePreset: selectedStylePreset,
-        motionMode: selectedMotionMode,
-        videoMode: selectedVideoMode,
-        clipDurationSec,
-        targetMarket,
-        subtitleLanguage,
-        creativeMode,
-        directorNote: directorNote.trim(),
-        subtitleText: subtitleSourceText,
-        dialogues: perClipDialogues,
-        storyboardTemplate: selectedStoryboardTemplate,
-        referenceImageHints: perClipReferenceHints,
-        brandVoiceTemplate: selectedBrandVoiceTemplate,
-        brandVoiceNotes: brandVoiceNotesText.trim(),
-      })
-      appendAdTaskLog(`视频生成任务已提交，项目 ${projectId} 正在后台处理`, 'success')
-
-      updateGenerationTask(generationTask.id, {
-        projectId,
-        status: 'running',
-        step: '已提交成功，后台正在生成并轮询状态',
-      })
-
-      toast({
-        title: '广告视频生成已启动',
-        description: `任务已加入异步列表：${projectTitle}`,
-        variant: 'success',
-      })
+      await ensureManualProjectPrepared()
+      toast({ title: '项目准备完成', description: '现在可以手动点生成图片或生成视频。', variant: 'success' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : '启动生成失败，请稍后重试'
-      const stageStep = message.includes('分镜') || message.includes('图片')
-        ? '分镜图片生成失败'
-        : message.includes('视频') || message.includes('提交')
-          ? '视频生成提交失败'
-          : '生成任务提交失败'
+      const message = error instanceof Error ? error.message : '项目准备失败'
       appendAdTaskLog(message, 'error')
+      toast({ title: '项目准备失败', description: message, variant: 'destructive' })
+    } finally {
+      setPreparingProject(false)
+    }
+  }
+
+  const handleGenerateByImages = async () => {
+    setCreatingByImages(true)
+    try {
+      const generationTask = createGenerationTaskEntry()
+      setGenerationTasks((prev) => [generationTask, ...prev].slice(0, 8))
+      setActiveGenerationTaskId(generationTask.id)
+      const { projectId } = await ensureManualProjectPrepared()
       updateGenerationTask(generationTask.id, {
-        status: 'failed',
-        step: stageStep,
-        error: message,
+        projectId,
+        status: 'uploading',
+        step: '正在手动生成分镜图片',
       })
-      toast({ title: stageStep, description: message, variant: 'destructive' })
-      setTaskStatus('failed')
-      setTaskError(message)
+      await triggerStoryboardGeneration(projectId, generationTask.id)
+      updateGenerationTask(generationTask.id, {
+        projectId,
+        status: 'submitting',
+        step: '分镜图片生成请求已提交，等待你手动点视频生成',
+      })
+      toast({ title: '分镜图片生成已提交', description: '你现在可以检查结果，再手动点生成视频。', variant: 'success' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '分镜图片生成失败'
+      appendAdTaskLog(message, 'error')
+      toast({ title: '分镜图片生成失败', description: message, variant: 'destructive' })
     } finally {
       setCreatingByImages(false)
+    }
+  }
+
+  const handleGenerateVideoManually = async () => {
+    setSubmittingVideo(true)
+    try {
+      const prepared = await ensureManualProjectPrepared()
+      if (!storyboardGeneratedAt) {
+        throw new Error('请先手动生成分镜图片，再手动生成视频')
+      }
+      await triggerVideoGeneration(prepared.context)
+      appendAdTaskLog(`视频生成任务已手动提交，项目 ${prepared.projectId} 正在后台处理`, 'success')
+      toast({ title: '视频生成已提交', description: '接下来可等待任务创建后，再手动点合成。', variant: 'success' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '视频生成提交失败'
+      appendAdTaskLog(message, 'error')
+      toast({ title: '视频生成提交失败', description: message, variant: 'destructive' })
+      setTaskError(message)
+      setTaskStatus('failed')
+    } finally {
+      setSubmittingVideo(false)
+    }
+  }
+
+  const handleComposeVideoManually = async () => {
+    if (!activeTaskId) {
+      toast({ title: '还没有可合成的视频任务', description: '请先手动生成视频并等待任务出现。', variant: 'destructive' })
+      return
+    }
+    setComposingVideo(true)
+    try {
+      await videoAPI.compose(activeTaskId)
+      appendAdTaskLog(`已手动触发合成，任务 #${activeTaskId}`, 'success')
+      toast({ title: '已手动触发合成', description: `任务 #${activeTaskId} 已开始合成`, variant: 'success' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '手动合成失败'
+      appendAdTaskLog(message, 'error')
+      toast({ title: '手动合成失败', description: message, variant: 'destructive' })
+    } finally {
+      setComposingVideo(false)
     }
   }
 
@@ -2619,10 +2629,19 @@ export default function AdVideoPage() {
 
           <AdPrimaryActionsSection
             creatingByText={creatingByText}
-            creatingByImages={creatingByImages}
+            preparingProject={preparingProject}
+            generatingStoryboard={creatingByImages || storyboardGenerating}
+            submittingVideo={submittingVideo}
+            composingVideo={composingVideo}
             reviewReady={reviewReady}
+            projectReady={projectReady}
+            storyboardReady={storyboardReady}
+            videoReady={videoReady}
             onCreateFromText={handleCreateFromText}
-            onGenerateByImages={handleGenerateByImages}
+            onPrepareProject={handlePrepareProject}
+            onGenerateStoryboard={handleGenerateByImages}
+            onGenerateVideo={handleGenerateVideoManually}
+            onComposeVideo={handleComposeVideoManually}
           />
 
           <GenerationQueuePanel
