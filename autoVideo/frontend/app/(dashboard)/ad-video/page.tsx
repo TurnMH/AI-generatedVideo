@@ -305,9 +305,16 @@ export default function AdVideoPage() {
       const dialoguePlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.dialogueLines[index] ?? '') || (index === 0 ? fallbackDialogueText : '')
       const referenceHint = normalizeEditableLine(referenceImageHintDraftLines[index] ?? '')
       const referenceHintPlaceholder = normalizeEditableLine(selectedStoryboardTemplateMeta.referenceLines[index] ?? '')
-      const imageSource = imageUrls[index]
-        ?? localFiles[index]?.name
-        ?? '待补图片'
+      const resolvedReferenceHint = referenceHint || referenceHintPlaceholder || '待补参考图提示词'
+      const remoteImageUrl = imageUrls[index]
+      const localFile = localFiles[index]
+      const imagePreviewUrl = remoteImageUrl ?? (localFile ? URL.createObjectURL(localFile) : undefined)
+      const imageSource = remoteImageUrl
+        ?? localFile?.name
+        ?? '待生成分镜图片'
+      const imageStatusLabel = remoteImageUrl || localFile
+        ? '已有可用图片'
+        : '将按提示词生成分镜图'
 
       return {
         index,
@@ -318,8 +325,11 @@ export default function AdVideoPage() {
         dialogueResolved: dialogue || dialoguePlaceholder,
         dialoguePlaceholder,
         referenceHint,
+        referenceHintResolved: resolvedReferenceHint,
         referenceHintPlaceholder,
         imageSource,
+        imagePreviewUrl,
+        imageStatusLabel,
         hasDialogue: Boolean(dialogue),
         hasReferenceHint: Boolean(referenceHint),
       }

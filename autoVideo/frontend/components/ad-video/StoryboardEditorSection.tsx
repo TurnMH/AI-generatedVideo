@@ -127,6 +127,25 @@ export function StoryboardEditorSection({
               </div>
             </div>
             <div className="mt-3 space-y-3">
+              <div className="grid gap-3 rounded-xl border border-dashed border-violet-200 bg-violet-50/40 p-3 md:grid-cols-[180px,1fr]">
+                <div className="overflow-hidden rounded-lg border border-violet-100 bg-white">
+                  {shot.imagePreviewUrl ? (
+                    <img src={shot.imagePreviewUrl} alt={`镜头 ${shot.index + 1} 参考图`} className="h-40 w-full object-cover" />
+                  ) : (
+                    <div className="flex h-40 items-center justify-center px-4 text-center text-xs leading-5 text-violet-600">
+                      暂无真实图片；确认提示词后会优先按所选图片模型生成分镜图。
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">{shot.imageStatusLabel}</span>
+                    <span className="rounded-full border border-violet-200 bg-white px-2 py-1 text-[11px] font-medium text-violet-700">当前有效提示词</span>
+                  </div>
+                  <p className="rounded-lg border border-violet-100 bg-white px-3 py-2 text-xs leading-5 text-violet-800">{shot.referenceHintResolved}</p>
+                  <p className="text-[11px] leading-5 text-violet-600">当前分镜区会同时展示“提示词”和“图片来源”。如果没有真实图，后续应按这里的提示词先生成分镜图，再推进视频生成。</p>
+                </div>
+              </div>
               <div className="space-y-1">
                 <Label className="text-xs text-surface-700">分镜描述</Label>
                 <Textarea

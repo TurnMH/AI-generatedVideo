@@ -144,8 +144,11 @@ export type StoryboardPreviewItem = {
   dialogueResolved: string
   dialoguePlaceholder: string
   referenceHint: string
+  referenceHintResolved: string
   referenceHintPlaceholder: string
   imageSource: string
+  imagePreviewUrl?: string
+  imageStatusLabel: string
   hasDialogue: boolean
   hasReferenceHint: boolean
 }
