@@ -2409,17 +2409,6 @@ export default function AdVideoPage() {
             onOpenOutput={(outputUrl) => window.open(outputUrl, '_blank', 'noopener,noreferrer')}
           />
 
-          <LocalHistoryPanel
-            historyEntries={historyEntries}
-            selectedHistoryEntryId={selectedHistoryEntryId}
-            selectedHistoryEntry={selectedHistoryEntry}
-            currentVersionSummary={currentVersionSummary}
-            selectedHistorySummary={selectedHistorySummary}
-            onSave={handleSaveHistorySnapshot}
-            onSelect={setSelectedHistoryEntryId}
-            onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
-          />
-
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-4 py-3 text-xs text-surface-500">
             <span>{draftSavedAt ? `草稿已保存于 ${new Date(draftSavedAt).toLocaleString('zh-CN')}` : '草稿会自动保存，避免编辑中途丢失'}</span>
             <span>当前流程已与旧项目创建页解耦，修改会保留在本页。</span>
@@ -2644,6 +2633,17 @@ export default function AdVideoPage() {
               ) : null}
             </div>
           ) : null}
+
+          <LocalHistoryPanel
+            historyEntries={historyEntries}
+            selectedHistoryEntryId={selectedHistoryEntryId}
+            selectedHistoryEntry={selectedHistoryEntry}
+            currentVersionSummary={currentVersionSummary}
+            selectedHistorySummary={selectedHistorySummary}
+            onSave={handleSaveHistorySnapshot}
+            onSelect={setSelectedHistoryEntryId}
+            onRestore={(entry) => handleRestoreHistorySnapshot(entry as AdVideoHistoryEntry)}
+          />
         </CardContent>
       </Card>
     </div>
