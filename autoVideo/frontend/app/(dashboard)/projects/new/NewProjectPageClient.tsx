@@ -256,6 +256,9 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
       reader.onload = () => {
         const text = reader.result as string
         update('scriptPreview', text.slice(0, 2000))
+        if (mediaKind === 'ad') {
+          update('ad_copy_text', text)
+        }
       }
       reader.readAsText(file)
     } else {
@@ -371,6 +374,9 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
               { type: draft.scriptMimeType || 'text/plain;charset=utf-8' }
             )
             next.scriptPreview = draft.scriptContent.slice(0, 2000)
+            if (nextMediaKind === 'ad') {
+              next.ad_copy_text = draft.scriptContent
+            }
           }
 
           return next
@@ -564,9 +570,15 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         } as Partial<Project>)
       }
 
-      if (form.scriptFile) {
-        await projectAPI.uploadScript(projectId, form.scriptFile)
-        // 上传了剧本文件时，自动触发分集+资源提取+分镜提取全链路（fire-and-forget）
+      const uploadableScriptFile = form.scriptFile ?? (
+        mediaKind === 'ad' && form.ad_copy_text.trim()
+          ? new File([form.ad_copy_text.trim()], `${form.title.trim() || 'ad-copy'}.txt`, { type: 'text/plain;charset=utf-8' })
+          : null
+      )
+
+      if (uploadableScriptFile) {
+        await projectAPI.uploadScript(projectId, uploadableScriptFile)
+        // 上传了剧本/广告文案文件时，自动触发分集+资源提取+分镜提取全链路（fire-and-forget）
         void projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
       }
 
@@ -578,7 +590,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         }
       }
 
-      const autoStart = form.scriptFile ? '?autoStart=1' : ''
+      const autoStart = uploadableScriptFile ? '?autoStart=1' : ''
       toast({ title: `${mediaMeta.label}项目已创建`, description: `「${form.title}」创建成功`, variant: 'success' })
       router.push(mediaKind === 'video' || mediaKind === 'ad' ? `${mediaMeta.listHref}/${projectId}${autoStart}` : `${mediaMeta.listHref}?project=${projectId}`)
     } catch {
@@ -1408,6 +1420,28 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
             <>
               <div className="space-y-2">
                 <Label>{display.scriptLabel}</Label>
+                {mediaKind === 'ad' ? (
+                  <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50/70 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-surface-800">广告文案输入</p>
+                        <p className="mt-1 text-xs text-surface-500">可直接粘贴广告口播、卖点文案、分镜文案或投放脚本；如果不上传文件，将自动把这里的内容作为文案文件提交。</p>
+                      </div>
+                      <Badge variant="outline">支持直接输入</Badge>
+                    </div>
+                    <Textarea
+                      placeholder="例如：前 3 秒钩子、核心卖点、用户痛点、产品展示、CTA……"
+                      value={form.ad_copy_text}
+                      onChange={(e) => {
+                        update('ad_copy_text', e.target.value)
+                        if (!form.scriptFile) {
+                          update('scriptPreview', e.target.value.slice(0, 2000))
+                        }
+                      }}
+                      rows={8}
+                    />
+                  </div>
+                ) : null}
                 <input
                   ref={scriptInputRef}
                   type="file"
@@ -1453,8 +1487,8 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                     title={display.scriptUploadHint}
                   >
                     <Upload className="h-8 w-8" />
-                    <span className="text-sm">{display.scriptUploadTitle}</span>
-                    <span className="text-xs">{display.scriptUploadHint}</span>
+                    <span className="text-sm">{mediaKind === 'ad' ? '上传广告文案文件（可选）' : display.scriptUploadTitle}</span>
+                    <span className="text-xs">{mediaKind === 'ad' ? '支持 .txt、.md、.docx；也可以只用上面的输入框直接创建。' : display.scriptUploadHint}</span>
                   </button>
                 )}
               </div>

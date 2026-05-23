@@ -33,6 +33,7 @@ export interface FormData {
   ad_target_audience: string
   ad_cta: string
   ad_duration_preference: string
+  ad_copy_text: string
 }
 
 export const initialFormData: FormData = {
@@ -70,4 +71,5 @@ export const initialFormData: FormData = {
   ad_target_audience: '',
   ad_cta: '',
   ad_duration_preference: '15s',
+  ad_copy_text: '',
 }

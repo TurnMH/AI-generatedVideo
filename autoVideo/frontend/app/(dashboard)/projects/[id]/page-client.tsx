@@ -37,6 +37,20 @@ import { ScriptTab } from '@/components/projects/detail/tabs/ScriptTab'
 import { EpisodeWorkspace } from '@/components/projects/detail/EpisodeWorkspace'
 import { resolveProjectIdParam } from '@/lib/project-route'
 
+function extractAdMeta(project: Project | undefined) {
+  if (!project) return null
+  const config = (project.storyboard_config ?? {}) as unknown as Record<string, unknown>
+  const lines = (project.description ?? '').split('\n').map((line) => line.trim()).filter(Boolean)
+  const lookup = (label: string) => lines.find((line) => line.startsWith(`${label}：`))?.slice(label.length + 1).trim() ?? ''
+  const campaignType = String(config.campaign_type ?? lookup('广告类型') ?? '')
+  const objective = String(config.campaign_objective ?? lookup('投放目标') ?? '')
+  const targetAudience = String(config.target_audience ?? lookup('目标受众') ?? '')
+  const callToAction = String(config.call_to_action ?? lookup('行动号召') ?? '')
+  const durationPreference = String(config.duration_preference ?? lookup('时长偏好') ?? '')
+  if (!campaignType && !objective && !targetAudience && !callToAction && !durationPreference) return null
+  return { campaignType, objective, targetAudience, callToAction, durationPreference }
+}
+
 export default function ProjectDetailPage() {
   const params = useParams()
   const pathname = usePathname()
@@ -189,6 +203,8 @@ export default function ProjectDetailPage() {
 
     return meta
   }, [episodes, stepperAssetsRaw, stepperStoryboardsRaw])
+
+  const adMeta = useMemo(() => (routeBase === '/ads' ? extractAdMeta(project) : null), [project, routeBase])
 
   const projectOverview = useMemo(() => {
     if (!project) {
@@ -796,8 +812,34 @@ export default function ProjectDetailPage() {
                     </span>
                   </div>
                   <p className="mt-4 max-w-2xl text-sm leading-6 text-surface-200">
-                    当前处于项目级总览模式。这里统一处理整体剧本大纲、项目级资源提取、分镜拆分、图片生成，以及进入语音与视频阶段的全局入口。
+                    {routeBase === '/ads'
+                      ? '当前处于广告项目总控模式。这里统一处理广告文案、投放脚本、分镜拆分、素材准备，以及进入配音与成片阶段的全局入口。'
+                      : '当前处于项目级总览模式。这里统一处理整体剧本大纲、项目级资源提取、分镜拆分、图片生成，以及进入语音与视频阶段的全局入口。'}
                   </p>
+                  {adMeta ? (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-surface-300">广告类型</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{adMeta.campaignType || '未设置'}</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-surface-300">投放目标</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{adMeta.objective || '未设置'}</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-surface-300">行动号召</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{adMeta.callToAction || '未设置'}</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-surface-300">时长偏好</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{adMeta.durationPreference || '未设置'}</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 sm:col-span-2 xl:col-span-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-surface-300">目标受众</p>
+                        <p className="mt-2 text-sm font-semibold text-white">{adMeta.targetAudience || '未设置'}</p>
+                      </div>
+                    </div>
+                  ) : null}
                   {projectSplitInProgress && (
                     <div className="mt-4 rounded-2xl border border-primary-300/30 bg-white/10 px-4 py-3 text-left">
                       <div className="flex items-start gap-3">
