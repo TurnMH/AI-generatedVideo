@@ -63,6 +63,72 @@ func shouldSkipEpisodeAssetRefresh(ctx context.Context) bool {
 	return skip
 }
 
+type adPromptContext struct {
+	CampaignType       string
+	CampaignObjective  string
+	TargetAudience     string
+	CallToAction       string
+	DurationPreference string
+}
+
+func extractAdPromptContext(project *model.Project) adPromptContext {
+	if project == nil {
+		return adPromptContext{}
+	}
+	var cfg map[string]interface{}
+	if len(project.StoryboardConfig) > 0 {
+		_ = json.Unmarshal(project.StoryboardConfig, &cfg)
+	}
+	ctx := adPromptContext{}
+	if cfg != nil {
+		ctx.CampaignType = strings.TrimSpace(asString(cfg["campaign_type"]))
+		ctx.CampaignObjective = strings.TrimSpace(asString(cfg["campaign_objective"]))
+		ctx.TargetAudience = strings.TrimSpace(asString(cfg["target_audience"]))
+		ctx.CallToAction = strings.TrimSpace(asString(cfg["call_to_action"]))
+		ctx.DurationPreference = strings.TrimSpace(asString(cfg["duration_preference"]))
+	}
+	return ctx
+}
+
+func isAdProject(project *model.Project) bool {
+	if project == nil {
+		return false
+	}
+	for _, tag := range project.StyleTags {
+		if strings.EqualFold(strings.TrimSpace(tag), "media:ad") {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAdPromptGuidance(ctx adPromptContext) string {
+	parts := make([]string, 0, 8)
+	if ctx.CampaignType != "" {
+		parts = append(parts, fmt.Sprintf("- 广告题材/形式：%s。后续文案与分镜要匹配这种广告表达，不要回退成泛短剧叙事。", ctx.CampaignType))
+	}
+	if ctx.CampaignObjective != "" {
+		parts = append(parts, fmt.Sprintf("- 投放目标：%s。优先围绕这个目标组织信息层级、卖点顺序与镜头重点。", ctx.CampaignObjective))
+	}
+	if ctx.TargetAudience != "" {
+		parts = append(parts, fmt.Sprintf("- 目标受众：%s。语言风格、利益点、场景设定与镜头语气都要贴近该受众。", ctx.TargetAudience))
+	}
+	if ctx.CallToAction != "" {
+		parts = append(parts, fmt.Sprintf("- 行动号召（CTA）：%s。结尾和关键转折镜头要为 CTA 服务，不能弱化或遗漏。", ctx.CallToAction))
+	}
+	if ctx.DurationPreference != "" {
+		parts = append(parts, fmt.Sprintf("- 时长偏好：%s。结构上要控制节奏密度，避免输出明显超出该投放时长预期的拖沓段落。", ctx.DurationPreference))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	parts = append(parts,
+		"- 这是广告项目，不是泛剧情短片：优先突出产品/服务利益点、记忆点、转化动机与消费场景。",
+		"- 剧本格式化时应把原文整理成更利于广告投放的口播/卖点/转场结构；分镜格式化时应强化开头抓人、卖点递进、品牌露出和结尾 CTA 收束。",
+	)
+	return strings.Join(parts, "\n")
+}
+
 // NewEpisodeService —— 创建剧集服务实例，初始化 LLM 及存储配置
 func NewEpisodeService(
 	episodeRepo *repository.EpisodeRepo,
@@ -1009,7 +1075,7 @@ func (s *EpisodeService) fetchScriptPrepSkillHints(ctx context.Context, projectI
 // It adds explicit visual markers, camera suggestions, character positions and pacing cues.
 // The returned string is a fully annotated script ready for breakEpisodeIntoScenes.
 // On any failure the original content is returned unchanged so the pipeline is never blocked.
-func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string) string {
+func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string, adCtx adPromptContext) string {
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
@@ -1072,6 +1138,9 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 
 	if prepSkillHints != "" {
 		systemPrompt += "\n\n**本项目专属分镜预处理指引（请务必遵守）：**\n" + prepSkillHints
+	}
+	if adGuidance := buildAdPromptGuidance(adCtx); adGuidance != "" {
+		systemPrompt += "\n\n**广告分镜预处理补充约束（务必遵守）：**\n" + adGuidance + "\n- 这是广告分镜预处理，不是普通剧情分镜整理：应主动强化开头抓人镜头、产品/服务核心卖点、使用场景、信任背书、品牌露出与结尾 CTA。\n- 若广告题材偏口播、带货、品牌宣传、功能演示、测评或知识型广告，应保留并强化对应的信息结构，不要一律改写成戏剧冲突驱动。"
 	}
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n" + bible + "\n所有标注中的人物姓名和场景描述必须与以上一致性词库保持一致。"
@@ -2156,8 +2225,10 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 	// The template is used to produce PromptUsed for each storyboard at creation time.
 	var storyboardPromptTemplate string
 	projectVisualEra := ""
+	adCtx := adPromptContext{}
 	assetRefs := s.fetchAssetReferences(ctx, projectID, nil)
 	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil {
+		adCtx = extractAdPromptContext(project)
 		sk := storyboardStyleKey(storyboardStylePreset(project))
 		storyboardPromptTemplate = s.fetchStoryboardPromptTemplate(ctx, sk)
 		projectVisualEra = inferVisualEra(strings.TrimSpace(project.ScriptText))
@@ -2225,7 +2296,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			// Pre-optimization: run a professional storyboard-prep pass before scene splitting
 			// to add explicit visual markers, camera suggestions and pacing cues.
 			_ = s.episodeRepo.UpdateStatus(epID, "script_prepping")
-			optimized := s.prepareScriptForStoryboard(ctx, epContent, epNum, kwLib, projectType, prepSkillHints)
+			optimized := s.prepareScriptForStoryboard(ctx, epContent, epNum, kwLib, projectType, prepSkillHints, adCtx)
 			if s.logger != nil && optimized != epContent {
 				s.logger.Info("script prep optimization applied",
 					zap.Int("episode", epNum),
@@ -2234,7 +2305,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				)
 			}
 
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, projectType)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, projectType, adCtx)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -2427,7 +2498,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, adCtx adPromptContext) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
 	}
@@ -2447,7 +2518,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, adCtx)
 		if len(scenes) > 0 {
 			return scenes
 		}
@@ -2463,7 +2534,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, adCtx adPromptContext) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -2472,15 +2543,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, projectType)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, projectType, adCtx)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, adCtx)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, adCtx adPromptContext) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -2519,7 +2590,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, adCtx)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -2535,7 +2606,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, adCtx adPromptContext) []llmScene {
 	// clipDuration is the user-configured default; we still expose it as a soft reference
 	// but allow the LLM to deviate based on actual scene complexity.
 	refDuration := clipDuration
@@ -2646,6 +2717,9 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 	}
 	if skillHints != "" {
 		sceneSystemPrompt += "\n\n**本项目专属分镜指引（请务必遵守）：**\n" + skillHints
+	}
+	if adGuidance := buildAdPromptGuidance(adCtx); adGuidance != "" {
+		sceneSystemPrompt += "\n\n**广告项目分镜拆分补充约束（务必遵守）：**\n" + adGuidance + "\n- 广告项目的分镜拆分要优先服务转化表达：开头前 1-3 个镜头尽量快速建立 hook、痛点、反差或结果画面。\n- 中段镜头要围绕卖点、功能、使用方式、受众场景或品牌信任线索组织，而不是平均分配成泛叙事镜头。\n- 结尾镜头要自然收束到品牌露出、行动号召、转化动作或记忆点，保持广告闭环。"
 	}
 	// Inject consistency bible so the LLM writes visually grounded, consistent scene descriptions.
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
@@ -4627,8 +4701,13 @@ func (s *EpisodeService) OptimizeEpisode(ctx context.Context, id, projectID uint
 		}
 	}
 
+	var adCtx adPromptContext
+	if project, pErr := s.projectRepo.FindByIDNoAuth(projectID); pErr == nil {
+		adCtx = extractAdPromptContext(project)
+	}
+
 	writingHints := s.fetchWritingSkillHints(ctx, projectID)
-	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib)
+	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib, adCtx)
 	if err != nil {
 		episode.OptimizeStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -4683,7 +4762,7 @@ func (s *EpisodeService) ApplyOptimizedText(ctx context.Context, id, projectID u
 	return episode, nil
 }
 
-func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode, writingHints string, kwLib *KeywordLibrary) (*OptimizedEpisode, error) {
+func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode, writingHints string, kwLib *KeywordLibrary, adCtx adPromptContext) (*OptimizedEpisode, error) {
 	systemPrompt := `你是专业的短剧剧本改编专家。请将给定的小说/故事文本改编为标准剧本格式，返回严格 JSON（不要 markdown 代码块）：
 {
   "title": "集标题（简洁有力，20字以内）",
@@ -4708,6 +4787,9 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属指引（务必遵守）：**\n" + writingHints
+	}
+	if adGuidance := buildAdPromptGuidance(adCtx); adGuidance != "" {
+		systemPrompt += "\n\n**广告项目补充约束（务必遵守）：**\n" + adGuidance + "\n- 输出的 title / summary / optimized_text 都必须体现广告用途，尤其 summary 要像可投放的广告项目简介，而不是泛剧情梗概。\n- 如果原文是广告文案或产品介绍，不要强行改成多人物戏剧冲突；应保持广告表达，并增强 hook、利益点、痛点、解决方案、信任背书和 CTA 的可执行结构。"
 	}
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += bible
@@ -5085,7 +5167,11 @@ func (s *EpisodeService) optimizeEpisodeInternal(ctx context.Context, id, projec
 	}
 	episode.OptimizeStatus = "optimizing"
 	_ = s.episodeRepo.Update(episode)
-	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib)
+	var adCtx adPromptContext
+	if project, pErr := s.projectRepo.FindByIDNoAuth(projectID); pErr == nil {
+		adCtx = extractAdPromptContext(project)
+	}
+	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib, adCtx)
 	if err != nil {
 		episode.OptimizeStatus = "failed"
 		_ = s.episodeRepo.Update(episode)

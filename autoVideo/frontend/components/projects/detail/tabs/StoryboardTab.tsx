@@ -208,6 +208,15 @@ function ImageModelDropdownContent({
 export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboards, isExtractingStoryboards, awaitingAutoStoryboard, storyboardButtonDisabled, hideActionBar, sbGenerateTrigger, sbRegenerateTrigger, sbPauseTrigger, sbResumeTrigger, sbAuditTrigger }: { projectId: number; project: Project ; episodeId?: number; onExtractStoryboards?: () => void; isExtractingStoryboards?: boolean; awaitingAutoStoryboard?: boolean; storyboardButtonDisabled?: boolean; hideActionBar?: boolean; sbGenerateTrigger?: number; sbRegenerateTrigger?: number; sbPauseTrigger?: number; sbResumeTrigger?: number; sbAuditTrigger?: number }) {
   const { toast } = useToast()
   const isSerial = project.project_type === 'video_serial'
+  const isAdProject = (project.style_tags ?? []).includes('media:ad')
+  const adConfig = (project.storyboard_config ?? {}) as unknown as Record<string, unknown>
+  const adPromptHint = [
+    typeof adConfig.campaign_type === 'string' && adConfig.campaign_type.trim() ? `广告题材：${adConfig.campaign_type.trim()}` : '',
+    typeof adConfig.campaign_objective === 'string' && adConfig.campaign_objective.trim() ? `投放目标：${adConfig.campaign_objective.trim()}` : '',
+    typeof adConfig.target_audience === 'string' && adConfig.target_audience.trim() ? `目标受众：${adConfig.target_audience.trim()}` : '',
+    typeof adConfig.call_to_action === 'string' && adConfig.call_to_action.trim() ? `CTA：${adConfig.call_to_action.trim()}` : '',
+    typeof adConfig.duration_preference === 'string' && adConfig.duration_preference.trim() ? `时长偏好：${adConfig.duration_preference.trim()}` : '',
+  ].filter(Boolean).join('｜')
   const storyboardItemLabel = isSerial ? '镜头' : '分镜'
   const storyboardImageLabel = isSerial ? '首帧图片' : '分镜图片'
   const storyboardGenerateLabel = isSerial ? '首帧生成' : '分镜图片生成'
@@ -1266,6 +1275,11 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
   return (
     <div className="relative">
       {/* ── Progress bar — shown when generating or when stats are meaningful ── */}
+      {isAdProject && adPromptHint && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          当前广告分镜拆分会联动：{adPromptHint}
+        </div>
+      )}
       {stats.total > 0 && (
         <div className={`mb-4 rounded-lg border px-4 py-3 ${isActive ? 'border-blue-200 bg-blue-50' : 'border-surface-200 bg-surface-50'}`}>
           <div className="mb-2 flex items-center justify-between">
@@ -1353,10 +1367,10 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               variant="outline"
               size="sm"
               className="border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:text-primary-800 disabled:opacity-60"
-              title={awaitingAutoStoryboard ? '资源提取完成后会自动发起镜头拆分' : extractStoryboardLabel}
+              title={awaitingAutoStoryboard ? (isAdProject ? `资源提取完成后会自动按广告题材拆分镜头${adPromptHint ? `（${adPromptHint}）` : ''}` : '资源提取完成后会自动发起镜头拆分') : (isAdProject ? `${extractStoryboardLabel}（会联动当前广告题材、目标受众与 CTA）` : extractStoryboardLabel)}
             >
               {isExtractingStoryboards ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />}
-              {awaitingAutoStoryboard ? '等待自动拆分镜头' : isExtractingStoryboards ? '镜头拆分中…' : extractStoryboardLabel}
+              {awaitingAutoStoryboard ? (isAdProject ? '等待自动拆分广告镜头' : '等待自动拆分镜头') : isExtractingStoryboards ? (isAdProject ? '广告镜头拆分中…' : '镜头拆分中…') : extractStoryboardLabel}
             </Button>
           )}
           {!hideActionBar && (

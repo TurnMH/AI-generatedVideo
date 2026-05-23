@@ -143,6 +143,26 @@ function resolveDraftTargetEpisodes(
   return targetEpisodes > 0 ? String(targetEpisodes) : ''
 }
 
+function getAdMeta(project: Project): {
+  campaignType: string
+  objective: string
+  targetAudience: string
+  callToAction: string
+  durationPreference: string
+} {
+  const config = (project.storyboard_config ?? {}) as unknown as Record<string, unknown>
+  const pick = (key: string) => {
+    const value = config[key]
+    return typeof value === 'string' ? value.trim() : ''
+  }
+  return {
+    campaignType: pick('campaign_type'),
+    objective: pick('campaign_objective'),
+    targetAudience: pick('target_audience'),
+    callToAction: pick('call_to_action'),
+    durationPreference: pick('duration_preference'),
+  }
+}
 
 export function ScriptTab({
   projectId,
@@ -157,6 +177,18 @@ export function ScriptTab({
 }) {
   const { toast } = useToast()
   const isAdProject = (project.style_tags ?? []).includes('media:ad')
+  const adMeta = useMemo(() => getAdMeta(project), [project])
+  const adPromptHint = useMemo(() => {
+    if (!isAdProject) return ''
+    const parts = [
+      adMeta.campaignType ? `广告题材：${adMeta.campaignType}` : '',
+      adMeta.objective ? `投放目标：${adMeta.objective}` : '',
+      adMeta.targetAudience ? `目标受众：${adMeta.targetAudience}` : '',
+      adMeta.callToAction ? `CTA：${adMeta.callToAction}` : '',
+      adMeta.durationPreference ? `时长偏好：${adMeta.durationPreference}` : '',
+    ].filter(Boolean)
+    return parts.join('｜')
+  }, [adMeta, isAdProject])
   const getApiErrorMessage = (error: unknown) => {
     const response = (error as { response?: { data?: { message?: string; error?: string } } })?.response?.data
     return response?.message || response?.error || (error as { message?: string })?.message || ''
@@ -874,7 +906,7 @@ export function ScriptTab({
       const updated: Episode = raw?.data ?? (res as unknown as Episode)
       if (selectedEpisode?.id === ep.id) setSelectedEpisode(updated)
       mutateEpisodes()
-      toast({ title: '剧本格式化完成', description: '已生成优化后的剧本格式内容，可在详情中查看并确认应用', variant: 'success' })
+      toast({ title: isAdProject ? '广告文案格式化完成' : '剧本格式化完成', description: isAdProject ? '已按当前广告题材、目标受众与 CTA 生成更适合投放的广告脚本格式，可在详情中查看并确认应用。' : '已生成优化后的剧本格式内容，可在详情中查看并确认应用', variant: 'success' })
     } catch {
       toast({ title: '格式转化失败，请重试', variant: 'destructive' })
     } finally {
@@ -890,7 +922,7 @@ export function ScriptTab({
       const updated: Episode = raw?.data ?? (res as unknown as Episode)
       if (selectedEpisode?.id === ep.id) setSelectedEpisode(updated)
       mutateEpisodes()
-      toast({ title: '已应用优化内容', description: '优化后的剧本格式已替换原有正文', variant: 'success' })
+      toast({ title: '已应用优化内容', description: isAdProject ? '优化后的广告脚本格式已替换原有正文。' : '优化后的剧本格式已替换原有正文', variant: 'success' })
     } catch {
       toast({ title: '应用失败，请重试', variant: 'destructive' })
     } finally {
@@ -919,7 +951,7 @@ export function ScriptTab({
     try {
       await projectAPI.autoOptimizeReview(projectId, ep.id)
       // 202 Accepted — backend processes async; spinner kept until polling detects completion
-      toast({ title: 'AI 一键优化已启动', description: '正在后台处理，完成后状态将自动更新' })
+      toast({ title: 'AI 一键优化已启动', description: isAdProject ? '正在结合当前广告题材、目标受众与 CTA 在后台处理，完成后状态将自动更新。' : '正在后台处理，完成后状态将自动更新' })
     } catch {
       setAutoOptimizingEpisode(null)
       toast({ title: '一键优化启动失败，请重试', variant: 'destructive' })
@@ -930,7 +962,7 @@ export function ScriptTab({
     setBatchOptimizing(true)
     try {
       await projectAPI.batchOptimize(projectId)
-      toast({ title: '批量格式转化已启动', description: '后台正在处理所有分集，完成后状态将自动更新', variant: 'success' })
+      toast({ title: isAdProject ? '批量广告脚本格式化已启动' : '批量格式转化已启动', description: isAdProject ? '后台会结合当前广告题材、目标受众与 CTA 处理所有广告片段，完成后状态将自动更新。' : '后台正在处理所有分集，完成后状态将自动更新', variant: 'success' })
     } catch {
       toast({ title: '批量格式转化启动失败', variant: 'destructive' })
     } finally {
@@ -1518,6 +1550,11 @@ export function ScriptTab({
                     <p className="mt-0.5 text-xs text-violet-600">
                       {formattingCount > 0 ? `当前 ${formattingCount} 集正在格式化` : `剩余 ${pendingCount} 集待处理`}，格式化完成后即可进入各集工作台进行资源生成与出图
                     </p>
+                    {isAdProject && adPromptHint && (
+                      <p className="mt-1 text-[11px] text-violet-700">
+                        当前广告格式化会联动：{adPromptHint}
+                      </p>
+                    )}
                     <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
                       <div
                         className="h-full rounded-full bg-violet-500 transition-all duration-700"
@@ -1704,10 +1741,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-purple-600 hover:bg-purple-50 hover:text-purple-800"
                         onClick={() => { handleAutoOptimizeReview(ep); setSelectedEpisode(ep) }}
                         disabled={autoOptimizingEpisode === ep.id || optimizingEpisode === ep.id || reviewingEpisode === ep.id}
-                        title="AI 自动完成：转剧本格式 → 审查 → 弥补不足"
+                        title={isAdProject ? `AI 自动完成：广告脚本格式化 → 审查 → 弥补不足${adPromptHint ? `（${adPromptHint}）` : ''}` : 'AI 自动完成：转剧本格式 → 审查 → 弥补不足'}
                       >
                         {autoOptimizingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
-                        AI 一键优化
+                        {isAdProject ? 'AI 广告优化' : 'AI 一键优化'}
                       </Button>
                       <Button
                         size="sm"
@@ -1715,10 +1752,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-amber-600 hover:bg-amber-50 hover:text-amber-800"
                         onClick={() => handleOptimizeEpisode(ep)}
                         disabled={optimizingEpisode === ep.id || autoOptimizingEpisode === ep.id}
-                        title="将本集小说原文转化为标准剧本格式"
+                        title={isAdProject ? `将本片段原始广告文案转化为更适合投放的广告脚本格式${adPromptHint ? `（${adPromptHint}）` : ''}` : '将本集小说原文转化为标准剧本格式'}
                       >
                         {optimizingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        转剧本格式
+                        {isAdProject ? '转广告脚本格式' : '转剧本格式'}
                         {ep.optimize_status === 'done' && <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-700">✓</span>}
                       </Button>
                       {ep.optimize_status === 'done' && ep.optimized_text && (
@@ -1728,7 +1765,7 @@ export function ScriptTab({
                           className="h-6 px-2 text-xs text-amber-500 hover:bg-amber-50"
                           onClick={() => handleApplyOptimizedText(ep)}
                           disabled={applyingOptimized === ep.id}
-                          title="将优化后的剧本格式应用为正式内容"
+                          title={isAdProject ? '将优化后的广告脚本格式应用为正式内容' : '将优化后的剧本格式应用为正式内容'}
                         >
                           {applyingOptimized === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
                           确认应用
@@ -1740,10 +1777,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-green-600 hover:bg-green-50 hover:text-green-800"
                         onClick={() => { handleReviewEpisode(ep); setSelectedEpisode(ep) }}
                         disabled={reviewingEpisode === ep.id || autoOptimizingEpisode === ep.id}
-                        title="AI 审查本集剧本质量与一致性"
+                        title={isAdProject ? 'AI 审查当前广告脚本的投放表达、信息完整度与一致性' : 'AI 审查本集剧本质量与一致性'}
                       >
                         {reviewingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        AI 审查
+                        {isAdProject ? 'AI 审查广告脚本' : 'AI 审查'}
                         {ep.review_status === 'done' && <span className="ml-1 rounded bg-green-100 px-1 text-[9px] text-green-700">✓</span>}
                       </Button>
                     </div>
