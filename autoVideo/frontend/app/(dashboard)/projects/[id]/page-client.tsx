@@ -783,7 +783,7 @@ export default function ProjectDetailPage() {
             <div className="max-w-3xl">
               <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-surface-100">
                 <Sparkles className="h-3.5 w-3.5 text-primary-300" />
-                项目总控台
+                {routeBase === '/ads' ? '广告总控台' : '项目总控台'}
               </div>
               <div className="flex items-start gap-4">
                 <Button
@@ -799,7 +799,7 @@ export default function ProjectDetailPage() {
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <StatusBadge status={project.status} />
                     <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-100">
-                      剧集 {episodes.length}
+                      {routeBase === '/ads' ? `广告片段 ${episodes.length}` : `剧集 ${episodes.length}`}
                     </span>
                     <span className="rounded-full border border-violet-400/20 bg-violet-400/10 px-3 py-1 text-xs text-violet-100">
                       风格标签 {project.style_tags?.length ?? 0}
@@ -890,7 +890,7 @@ export default function ProjectDetailPage() {
             <div className="max-w-3xl">
               <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary-100 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700">
                 <ListVideo className="h-3.5 w-3.5" />
-                当前分集工作台
+                {routeBase === '/ads' ? '当前广告片段工作台' : '当前分集工作台'}
               </div>
               <div className="flex items-start gap-4">
                 <Button
@@ -904,12 +904,14 @@ export default function ProjectDetailPage() {
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-2xl font-semibold tracking-tight text-surface-900">
-                      第 {selectedEpisode?.episode_number ?? selectedEpisodeId} 集 · {selectedEpisode?.title || '未命名分集'}
+                      {routeBase === '/ads'
+                        ? `广告片段 ${selectedEpisode?.episode_number ?? selectedEpisodeId} · ${selectedEpisode?.title || '未命名广告片段'}`
+                        : `第 ${selectedEpisode?.episode_number ?? selectedEpisodeId} 集 · ${selectedEpisode?.title || '未命名分集'}`}
                     </h2>
                     {selectedEpisode?.status ? <StatusBadge status={selectedEpisode.status} /> : null}
                   </div>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-600">
-                    {selectedEpisode?.summary?.trim() || '当前处于单集工作模式，顶部仅展示本集相关入口，不再展示项目级全局操作。'}
+                    {selectedEpisode?.summary?.trim() || (routeBase === '/ads' ? '当前处于广告片段工作模式，顶部仅展示当前片段相关入口，便于继续处理素材、分镜、配音与成片。' : '当前处于单集工作模式，顶部仅展示本集相关入口，不再展示项目级全局操作。')}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2 text-xs text-surface-500">
                     <span className="rounded-full border border-surface-200 bg-surface-50 px-3 py-1">
@@ -934,7 +936,7 @@ export default function ProjectDetailPage() {
                   <span className="text-sm font-semibold text-surface-900">本集资源</span>
                 </div>
                 <p className="text-[11px] text-surface-500 leading-relaxed mb-2">
-                  管理、生成当前分集的角色、场景、道具等素材资源。
+                  {routeBase === '/ads' ? '管理并补齐当前广告片段所需的角色、场景、商品、道具等素材资源。' : '管理、生成当前分集的角色、场景、道具等素材资源。'}
                 </p>
                 <Button
                   variant="outline"
@@ -953,7 +955,7 @@ export default function ProjectDetailPage() {
                   <span className="text-sm font-semibold text-surface-900">本集分镜</span>
                 </div>
                 <p className="text-[11px] text-surface-500 leading-relaxed mb-2">
-                  查看、编辑本集分镜序列，生成与调整镜头画面。
+                  {routeBase === '/ads' ? '查看、编辑当前广告片段的分镜节奏，生成并调整镜头画面。' : '查看、编辑本集分镜序列，生成与调整镜头画面。'}
                 </p>
                 <Button
                   variant="outline"
@@ -972,7 +974,7 @@ export default function ProjectDetailPage() {
                   <span className="text-sm font-semibold text-surface-900">本集配音</span>
                 </div>
                 <p className="text-[11px] text-surface-500 leading-relaxed mb-2">
-                  为本集角色台词生成配音，调节语速、音调与情感。
+                  {routeBase === '/ads' ? '为当前广告片段生成口播与配音，可继续调节语速、音调与情感。' : '为本集角色台词生成配音，调节语速、音调与情感。'}
                 </p>
                 <Button
                   variant="outline"
@@ -991,7 +993,7 @@ export default function ProjectDetailPage() {
                   <span className="text-sm font-semibold text-surface-900">本集字幕</span>
                 </div>
                 <p className="text-[11px] text-surface-500 leading-relaxed mb-2">
-                  生成、编辑本集时间轴字幕，支持多语言翻译。
+                  {routeBase === '/ads' ? '生成、编辑当前广告片段字幕，适配口播、卖点文案与多语言投放。' : '生成、编辑本集时间轴字幕，支持多语言翻译。'}
                 </p>
                 <Button
                   variant="outline"
@@ -1007,10 +1009,10 @@ export default function ProjectDetailPage() {
               <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 sm:col-span-2">
                 <div className="flex items-center gap-2 mb-1">
                   <Video className="h-4 w-4 text-amber-600" />
-                  <span className="text-sm font-semibold text-surface-900">本集视频成片</span>
+                  <span className="text-sm font-semibold text-surface-900">{routeBase === '/ads' ? '当前广告成片' : '本集视频成片'}</span>
                 </div>
                 <p className="text-[11px] text-surface-500 leading-relaxed mb-2">
-                  将本集分镜、配音、字幕合成为最终视频文件，支持预览与导出。
+                  {routeBase === '/ads' ? '将当前广告片段的分镜、口播与字幕合成为广告成片，支持预览与导出。' : '将本集分镜、配音、字幕合成为最终视频文件，支持预览与导出。'}
                 </p>
                 <Button
                   variant="outline"
@@ -1031,7 +1033,7 @@ export default function ProjectDetailPage() {
         <aside className="lg:sticky lg:top-4 lg:self-start">
           <div className="rounded-2xl border border-surface-200 bg-white p-3 shadow-sm">
             <div className="px-2 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-widest text-surface-400">
-              项目总览
+              {routeBase === '/ads' ? '广告总览' : '项目总览'}
             </div>
             <button
               onClick={() => setSelectedEpisodeId(null)}
@@ -1046,14 +1048,14 @@ export default function ProjectDetailPage() {
               }`}>
                 <BookOpen className="h-3.5 w-3.5" />
               </span>
-              <span className="flex-1 text-left">剧本大纲与分集</span>
+              <span className="flex-1 text-left">{routeBase === '/ads' ? '广告文案与片段' : '剧本大纲与分集'}</span>
               <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${
                 selectedEpisodeId === null ? 'text-primary-400' : 'text-surface-300 group-hover:translate-x-0.5 group-hover:text-primary-400'
               }`} />
             </button>
             
             <div className="mb-2 mt-4 px-2 pb-1 text-[11px] font-semibold uppercase tracking-widest text-surface-400">
-              单集工作区
+              {routeBase === '/ads' ? '广告片段工作区' : '单集工作区'}
             </div>
             <div className="space-y-1.5 max-h-[60vh] overflow-y-auto pr-0.5">
               {episodes.map(ep => {

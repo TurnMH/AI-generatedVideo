@@ -156,6 +156,7 @@ export function ScriptTab({
   onAutoStoryboardQueued?: () => void
 }) {
   const { toast } = useToast()
+  const isAdProject = (project.style_tags ?? []).includes('media:ad')
   const getApiErrorMessage = (error: unknown) => {
     const response = (error as { response?: { data?: { message?: string; error?: string } } })?.response?.data
     return response?.message || response?.error || (error as { message?: string })?.message || ''
@@ -1042,12 +1043,12 @@ export function ScriptTab({
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">剧本文件</CardTitle>
+            <CardTitle className="text-base">{isAdProject ? '广告文案文件' : '剧本文件'}</CardTitle>
             <div className="flex gap-2">
               <input ref={fileRef} type="file" accept=".txt,.pdf,.docx,.md" className="hidden" onChange={handleUpload} />
-              <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} title="上传新版本的剧本文件">
+              <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} title={isAdProject ? '上传新版本的广告文案文件' : '上传新版本的剧本文件'}>
                 <Upload className="mr-1.5 h-3.5 w-3.5" />
-                上传新版本
+                {isAdProject ? '上传新版本文案' : '上传新版本'}
               </Button>
             </div>
           </div>
@@ -1059,14 +1060,14 @@ export function ScriptTab({
                 <div className="flex flex-wrap items-center gap-4">
                   <span className="flex items-center gap-1.5">
                     <FileText className="h-4 w-4 text-primary-500" />
-                    {project.script_file_url.split('/').pop() || '剧本文件'}
+                    {project.script_file_url.split('/').pop() || (isAdProject ? '广告文案文件' : '剧本文件')}
                   </span>
                   <span>{formatBytes(project.script_file_size || 0)}</span>
                   <span>上传于 {format(new Date(project.updated_at), 'yyyy-MM-dd HH:mm')}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {hasScriptText && (
-                    <Button size="sm" variant="outline" onClick={() => setShowScriptPreviewDialog(true)} title="查看剧本全文">
+                    <Button size="sm" variant="outline" onClick={() => setShowScriptPreviewDialog(true)} title={isAdProject ? '查看广告文案全文' : '查看剧本全文'}>
                       <Eye className="mr-1.5 h-3.5 w-3.5" />
                       查看全文
                     </Button>
@@ -1075,7 +1076,7 @@ export function ScriptTab({
                     size="sm"
                     variant="outline"
                     onClick={() => window.open(project.script_file_url, '_blank', 'noopener,noreferrer')}
-                    title="打开原始剧本文件"
+                    title={isAdProject ? '打开原始广告文案文件' : '打开原始剧本文件'}
                   >
                     <Download className="mr-1.5 h-3.5 w-3.5" />
                     打开原文件
@@ -1086,7 +1087,7 @@ export function ScriptTab({
 
             </div>
           ) : (
-            <p className="text-sm text-surface-400">尚未上传剧本文件</p>
+            <p className="text-sm text-surface-400">{isAdProject ? '尚未上传广告文案文件' : '尚未上传剧本文件'}</p>
           )}
         </CardContent>
       </Card>
@@ -1095,16 +1096,16 @@ export function ScriptTab({
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">分集列表</CardTitle>
+            <CardTitle className="text-base">{isAdProject ? '广告片段列表' : '分集列表'}</CardTitle>
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={handleOpenCreateEpisode}
-                title="手动补充一集，可直接用于资源提取、分镜和视频流程"
+                title={isAdProject ? '手动补充一个广告片段，可直接用于素材、分镜和成片流程' : '手动补充一集，可直接用于资源提取、分镜和视频流程'}
               >
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
-                手动创建分集
+                {isAdProject ? '手动创建广告片段' : '手动创建分集'}
               </Button>
               <Button
                 size="sm"
@@ -1343,7 +1344,7 @@ export function ScriptTab({
                   </div>
                   <p className="mt-1 text-sm leading-6 text-primary-800">{splitProgressSummary}</p>
                   <p className="mt-1 text-xs leading-5 text-primary-600">
-                    分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。
+                    {isAdProject ? '广告片段拆分、素材提取、分镜格式化等进度已统一汇总到上方“广告文案与片段”总览，这里仅保留当前阶段摘要。片段完成后会自动出现在下方列表。' : '分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。'}
                   </p>
                   {splitProgressPercent > 0 ? (
                     <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-primary-100">
@@ -1356,7 +1357,7 @@ export function ScriptTab({
               {scriptProgressStalled && (
                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>剧本解析超过 2 分钟无进展，可能已卡住。</span>
+                    <span>{isAdProject ? '广告文案解析超过 2 分钟无进展，可能已卡住。' : '剧本解析超过 2 分钟无进展，可能已卡住。'}</span>
                     <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
                       <RefreshCw className="mr-1 h-3 w-3" />
                       重新拉起
@@ -1488,7 +1489,7 @@ export function ScriptTab({
             </div>
           ) : episodes.length === 0 ? (
             <div className="py-6 text-center text-sm text-surface-400">
-              暂无分集，点击右上角「手动创建分集」添加，或上传剧本后 AI 自动分集。
+              {isAdProject ? '暂无广告片段，点击右上角“手动创建广告片段”添加，或上传广告文案后由 AI 自动拆分。' : '暂无分集，点击右上角「手动创建分集」添加，或上传剧本后 AI 自动分集。'}
             </div>
           ) : (
             <>
@@ -1963,11 +1964,11 @@ export function ScriptTab({
       <Dialog open={showScriptPreviewDialog} onOpenChange={setShowScriptPreviewDialog}>
         <DialogContent className="max-w-5xl">
           <DialogHeader>
-            <DialogTitle>剧本全文</DialogTitle>
+            <DialogTitle>{isAdProject ? '广告文案全文' : '剧本全文'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-surface-500">
-              <span>{project.script_file_url.split('/').pop() || '剧本文件'}</span>
+              <span>{project.script_file_url.split('/').pop() || (isAdProject ? '广告文案文件' : '剧本文件')}</span>
               <span>{scriptText.length} 字</span>
             </div>
             <div className="max-h-[70vh] overflow-auto rounded-lg border bg-surface-50 p-4">
