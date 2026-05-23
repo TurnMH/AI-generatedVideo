@@ -10,7 +10,7 @@ import { resolveProjectIdParam } from '@/lib/project-route'
 export default function AdProjectDetailPageClient() {
   const params = useParams()
   const pathname = usePathname()
-  const projectId = resolveProjectIdParam(params.id, pathname, 'projects')
+  const projectId = resolveProjectIdParam(params.id, pathname, 'ads')
 
   return <ProjectDetailPageClient key={projectId ?? 'ad-project-detail'} />
 }

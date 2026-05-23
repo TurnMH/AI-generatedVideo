@@ -82,7 +82,9 @@ export default function GeneratePage() {
   const router = useRouter()
   const params = useParams()
   const pathname = usePathname()
-  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const routeBase = pathname?.includes('/ads/') ? '/ads' : '/projects'
+  const routeSegment = pathname?.includes('/ads/') ? 'ads' : 'projects'
+  const projectId = resolveProjectIdParam(params.id, pathname, routeSegment) ?? 0
   const hasValidProjectId = projectId > 0
   const { toast } = useToast()
   const [showStart, setShowStart] = useState(false)
@@ -97,9 +99,9 @@ export default function GeneratePage() {
 
   useEffect(() => {
     if (!hasValidProjectId) {
-      router.replace('/projects')
+      router.replace(routeBase)
     }
-  }, [hasValidProjectId, router])
+  }, [hasValidProjectId, routeBase, router])
 
   const { data: projectRaw, isLoading: projectLoading, mutate: mutateProject } = useSWR(
     hasValidProjectId ? ['project', projectId] : null,
@@ -352,7 +354,7 @@ export default function GeneratePage() {
           variant="ghost"
           size="icon"
           className="shrink-0 rounded-2xl border border-surface-200"
-          onClick={() => router.push(`/projects/${projectId}`)}
+          onClick={() => router.push(`${routeBase}/${projectId}`)}
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>

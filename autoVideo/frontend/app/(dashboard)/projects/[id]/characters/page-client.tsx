@@ -47,7 +47,9 @@ export default function CharactersPage() {
   const router = useRouter()
   const params = useParams()
   const pathname = usePathname()
-  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const routeBase = pathname?.includes('/ads/') ? '/ads' : '/projects'
+  const routeSegment = pathname?.includes('/ads/') ? 'ads' : 'projects'
+  const projectId = resolveProjectIdParam(params.id, pathname, routeSegment) ?? 0
   const hasValidProjectId = projectId > 0
   const { toast } = useToast()
 
@@ -60,9 +62,9 @@ export default function CharactersPage() {
 
   React.useEffect(() => {
     if (!hasValidProjectId) {
-      router.replace('/projects')
+      router.replace(routeBase)
     }
-  }, [hasValidProjectId, router])
+  }, [hasValidProjectId, routeBase, router])
 
   const { data: projectRaw } = useSWR(
     hasValidProjectId ? ['project', projectId] : null,
@@ -155,7 +157,7 @@ export default function CharactersPage() {
                 variant="ghost"
                 size="icon"
                 className="mt-0.5 shrink-0 rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/15 hover:text-white"
-                onClick={() => router.push(`/projects/${projectId}`)}
+                onClick={() => router.push(`${routeBase}/${projectId}`)}
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>

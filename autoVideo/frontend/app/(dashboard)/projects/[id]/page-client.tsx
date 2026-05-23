@@ -42,7 +42,9 @@ export default function ProjectDetailPage() {
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const projectId = resolveProjectIdParam(params.id, pathname, 'projects') ?? 0
+  const routeBase = pathname?.includes('/ads/') ? '/ads' : '/projects'
+  const routeSegment = pathname?.includes('/ads/') ? 'ads' : 'projects'
+  const projectId = resolveProjectIdParam(params.id, pathname, routeSegment) ?? 0
   const hasValidProjectId = projectId > 0
 
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<number | null>(null)
@@ -64,9 +66,9 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     if (!hasValidProjectId) {
-      router.replace('/projects')
+      router.replace(routeBase)
     }
-  }, [hasValidProjectId, router])
+  }, [hasValidProjectId, routeBase, router])
 
   const { data, isLoading, mutate: mutateProject } = useSWR(
     hasValidProjectId ? ['project', projectId] : null,
@@ -638,7 +640,7 @@ export default function ProjectDetailPage() {
     return (
       <div className="flex min-h-[280px] flex-col items-center justify-center">
         <p>项目不存在</p>
-        <Button onClick={() => router.push('/video')}>返回列表</Button>
+        <Button onClick={() => router.push(routeBase)}>返回列表</Button>
       </div>
     )
   }
@@ -772,7 +774,7 @@ export default function ProjectDetailPage() {
                   variant="ghost"
                   size="icon"
                   className="mt-0.5 shrink-0 rounded-2xl border border-white/10 bg-white/10"
-                  onClick={() => router.push('/video')}
+                  onClick={() => router.push(routeBase)}
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
