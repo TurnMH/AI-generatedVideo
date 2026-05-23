@@ -1880,7 +1880,7 @@ export default function AdVideoPage() {
 
       toast({
         title: '广告草稿已保存',
-        description: '你可以继续在当前页面调整市场、字幕和导演备注，然后直接生成视频',
+        description: '你可以继续在当前页面完善优化文案、分镜提示词、参考图，再按步骤手动推进。',
         variant: 'success',
       })
     } catch {
@@ -2740,7 +2740,7 @@ export default function AdVideoPage() {
                     <div className="rounded-full border border-surface-200 bg-surface-50 px-3 py-1">字幕行数：{subtitleLines.length}</div>
                     <Button type="button" variant="outline" size="sm" onClick={handleCreateFromText} disabled={creatingByText}>
                       {creatingByText ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                      保存当前草稿
+                      保存文案草稿
                     </Button>
                   </div>
                 </div>
