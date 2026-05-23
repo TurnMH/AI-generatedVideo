@@ -10,6 +10,7 @@ const pageTitles: Record<string, string> = {
 
 function getTitle(pathname: string): string {
   if (pageTitles[pathname]) return pageTitles[pathname]
+  if (pathname.includes('/ads')) return '广告项目'
   if (pathname.includes('/storyboard')) return '分镜看板'
   if (pathname.includes('/characters')) return '角色管理'
   if (pathname.includes('/generate')) return '生成中心'
@@ -18,6 +19,7 @@ function getTitle(pathname: string): string {
 }
 
 function getSubtitle(pathname: string): string {
+  if (pathname.includes('/ads')) return '按广告脚本、分镜、素材与成片链路推进广告视频项目'
   if (pathname === '/video') return '集中管理你的 AI 视频项目、进度与产出'
   if (pathname.includes('/storyboard')) return '按镜头推进分镜与画面表达'
   if (pathname.includes('/characters')) return '统一管理角色设定与视觉资产'
@@ -27,6 +29,7 @@ function getSubtitle(pathname: string): string {
 }
 
 function getEmoji(pathname: string): string {
+  if (pathname.includes('/ads')) return '📣'
   if (pathname.includes('/storyboard')) return '🎬'
   if (pathname.includes('/characters')) return '👤'
   if (pathname.includes('/generate')) return '⚡'
