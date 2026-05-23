@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation'
+import NewProjectPageClient from '@/app/(dashboard)/projects/new/NewProjectPageClient'
 
-export default function NewAdProjectRedirectPage() {
-  redirect('/projects/new?media=ad')
+export default function NewAdProjectPage() {
+  return <NewProjectPageClient forcedMediaKind="ad" />
 }

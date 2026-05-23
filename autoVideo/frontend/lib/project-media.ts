@@ -49,7 +49,7 @@ export const PROJECT_MEDIA_META: Record<
     listTitle: '广告项目列表',
     countLabel: '个广告项目',
     listHref: '/ads',
-    createHref: '/projects/new?media=ad',
+    createHref: '/ads/new',
     createLabel: '新建广告项目',
     createTitle: '新建广告项目',
     createDescription: '创建一个面向广告创意、分镜和投放视频的项目',
