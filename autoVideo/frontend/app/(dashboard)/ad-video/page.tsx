@@ -319,7 +319,7 @@ export default function AdVideoPage() {
     '2. 侧重主体、构图、场景、光影、情绪，不要写成完整文案。',
     '3. 尽量控制在 12 到 24 个字。',
     `当前广告标题：${title.trim() || '未命名广告'}`,
-    `当前广告文案：${adPrompt.trim() || optimizedScript.trim() || '暂无'}`,
+    `当前广告文案：${optimizedScript.trim() || adPrompt.trim() || '暂无'}`,
     `当前目标市场：${getTargetMarketLabel()}`,
     `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
     `镜头 ${shot.index + 1}/${total}`,
@@ -327,6 +327,32 @@ export default function AdVideoPage() {
     `分镜描述：${shot.sceneResolved || '暂无'}`,
     `字幕 / 口播：${shot.dialogueResolved || '暂无'}`,
     `现有参考提示：${shot.referenceHint || '暂无'}`,
+  ].join('\n')
+
+  const buildReferenceHintBatchPrompt = (shots: StoryboardPreviewItem[], total: number) => [
+    '你是广告分镜参考图提示词助手。',
+    '请只处理当前这一个镜头批次，并为每个镜头输出 1 行中文参考图提示词。',
+    '要求：',
+    '1. 每行对应一个镜头，禁止编号、禁止解释、禁止空行。',
+    '2. 每行尽量 12 到 24 个字，侧重主体、构图、场景、光影、情绪。',
+    '3. 只输出提示词本身，不要写完整文案。',
+    '4. 你只需要输出当前批次的镜头数量，不要补全其他批次。',
+    `当前广告标题：${title.trim() || '未命名广告'}`,
+    `当前广告文案：${optimizedScript.trim() || adPrompt.trim() || '暂无'}`,
+    `当前目标市场：${getTargetMarketLabel()}`,
+    `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
+    `本次总镜头数：${total}`,
+    `当前批次镜头数：${shots.length}`,
+    `当前批次范围：${((shots[0]?.index ?? 0) + 1)}-${((shots[shots.length - 1]?.index ?? (shots.length - 1)) + 1)}`,
+    '',
+    ...shots.map((shot) => [
+      `镜头 ${shot.index + 1}/${total}`,
+      `对应素材：${shot.imageSource || '暂无'}`,
+      `分镜描述：${shot.sceneResolved || '暂无'}`,
+      `字幕 / 口播：${shot.dialogueResolved || '暂无'}`,
+      `现有参考提示：${shot.referenceHint || '暂无'}`,
+      '',
+    ].join('\n')),
   ].join('\n')
 
   const fillReferenceHintAtIndex = async (shot: StoryboardPreviewItem) => {
@@ -356,51 +382,41 @@ export default function AdVideoPage() {
     if (storyboardPreview.length === 0 || referenceHintGeneratingAll || referenceHintGeneratingIndex !== null) return
     setReferenceHintGeneratingAll(true)
     try {
-      const prompt = [
-        '你是广告分镜参考图提示词助手。',
-        '请一次性为下面每个镜头输出 1 行中文参考图提示词。',
-        '要求：',
-        '1. 每行对应一个镜头，禁止编号、禁止解释、禁止空行。',
-        '2. 每行尽量 12 到 24 个字，侧重主体、构图、场景、光影、情绪。',
-        '3. 只输出提示词本身，不要写完整文案。',
-        `当前广告标题：${title.trim() || '未命名广告'}`,
-        `当前广告文案：${adPrompt.trim() || optimizedScript.trim() || '暂无'}`,
-        `当前目标市场：${getTargetMarketLabel()}`,
-        `当前分镜模板：${selectedStoryboardTemplateMeta.label}`,
-        '',
-        ...storyboardPreview.map((shot) => [
-          `镜头 ${shot.index + 1}/${storyboardPreview.length}`,
-          `对应素材：${shot.imageSource || '暂无'}`,
-          `分镜描述：${shot.sceneResolved || '暂无'}`,
-          `字幕 / 口播：${shot.dialogueResolved || '暂无'}`,
-          `现有参考提示：${shot.referenceHint || '暂无'}`,
-          '',
-        ].join('\n')),
-      ].join('\n')
+      const batchSize = 8
+      const totalBatches = Math.ceil(storyboardPreview.length / batchSize)
+      let nextHintsText = referenceImageHintsText
 
-      const res = await chatAPI.send([
-        { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
-        { role: 'user', content: prompt },
-      ], selectedReferenceHintModel || undefined) as unknown as { data?: unknown }
-      const replyLines = readChatReply(res.data)
-        .split(/\r?\n/)
-        .map(normalizeReferenceHintLine)
-        .filter(Boolean)
+      for (let start = 0; start < storyboardPreview.length; start += batchSize) {
+        const batchIndex = Math.floor(start / batchSize)
+        const batchShots = storyboardPreview.slice(start, start + batchSize)
+        const prompt = buildReferenceHintBatchPrompt(batchShots, storyboardPreview.length)
 
-      if (replyLines.length === 0) throw new Error('AI 未返回有效参考图提示')
-      if (replyLines.length !== storyboardPreview.length) {
-        throw new Error(`AI 返回 ${replyLines.length} 条提示，与当前 ${storyboardPreview.length} 个镜头不一致`)
+        const res = await chatAPI.send([
+          { role: 'system', content: '你是一个擅长把分镜转成画图提示词的助手。' },
+          { role: 'user', content: prompt },
+        ], selectedReferenceHintModel || undefined) as unknown as { data?: unknown }
+        const replyLines = readChatReply(res.data)
+          .split(/\r?\n/)
+          .map(normalizeReferenceHintLine)
+          .filter(Boolean)
+
+        if (replyLines.length === 0) throw new Error(`第 ${batchIndex + 1} 批未返回有效参考图提示`)
+        if (replyLines.length !== batchShots.length) {
+          throw new Error(`第 ${batchIndex + 1} 批 AI 返回 ${replyLines.length} 条提示，与当前批次 ${batchShots.length} 个镜头不一致，疑似输出被截断`)
+        }
+
+        batchShots.forEach((shot, idx) => {
+          const line = replyLines[idx] ?? ''
+          if (line) nextHintsText = updateLineAtIndex(nextHintsText, shot.index, line)
+        })
+        setReferenceImageHintsText(nextHintsText)
       }
 
-      setReferenceImageHintsText((prev) => {
-        let next = prev
-        storyboardPreview.forEach((shot, idx) => {
-          const line = replyLines[idx] ?? ''
-          if (line) next = updateLineAtIndex(next, shot.index, line)
-        })
-        return next
+      toast({
+        title: '已补全全部参考图提示',
+        description: `已按 ${totalBatches} 批生成 ${storyboardPreview.length} 个镜头的参考图提示，可继续手动微调。`,
+        variant: 'success',
       })
-      toast({ title: '已补全全部参考图提示', description: '可继续手动微调每个镜头的提示词', variant: 'success' })
     } catch (err: unknown) {
       toast({
         title: '参考图提示生成失败',
