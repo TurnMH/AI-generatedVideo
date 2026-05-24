@@ -2028,7 +2028,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
           })}
         </div>
         {filteredVideoStyles.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-4 py-6 text-center text-sm text-surface-500">
+          <div className="mt-4 rounded-xl border border-dashed border-surface-200 bg-surface-50 px-4 py-6 text-center text-sm text-surface-700">
             没有找到匹配的风格，试试切换分类、取消“只看常用”或换个关键词。
           </div>
         ) : null}
@@ -2038,7 +2038,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-surface-500">共 {tasks.length} 个任务 · 按 {videoTaskGroups.length} 组展示</span>
+          <span className="text-sm font-medium text-surface-700">共 {tasks.length} 个任务 · 按 {videoTaskGroups.length} 组展示</span>
           {processingCount > 0 && (
             <span className="flex items-center gap-1 text-xs text-blue-600">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -2056,11 +2056,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               <Mic className="h-3 w-3" /> 配音就绪 ({dubbingAudioMap.size} 集，生成后自动合成)
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-xs text-surface-400">
+            <span className="flex items-center gap-1 text-xs text-surface-600">
               <Mic className="h-3 w-3" /> 无配音，生成后为静音
             </span>
           )}
-          <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[11px] text-purple-700">
+          <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[11px] font-medium text-purple-800">
             {projectVideoStyleMeta.label} / {projectVideoStyleMeta.category}{projectVideoStyleCompactMeta ? ` · ${projectVideoStyleCompactMeta.hint}` : ''}
           </span>
         </div>
@@ -2091,8 +2091,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       {/* Task list */}
       {tasks.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16">
-          <Video className="mb-3 h-12 w-12 text-surface-300" />
-          <p className="text-sm text-surface-400">暂无视频任务，请先生成</p>
+          <Video className="mb-3 h-12 w-12 text-surface-400" />
+          <p className="text-sm font-medium text-surface-700">暂无视频任务，请先生成</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -2108,10 +2108,10 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                     <Badge variant="outline" className="border-surface-200 bg-surface-50 text-surface-700">
                       {group.label}
                     </Badge>
-                    <span className="text-xs text-surface-500">{group.tasks.length} 个任务</span>
-                    {groupSucceededCount > 0 ? <span className="text-xs text-green-600">已完成 {groupSucceededCount}</span> : null}
-                    {groupActiveCount > 0 ? <span className="text-xs text-blue-600">进行中 {groupActiveCount}</span> : null}
-                    {groupEpisodeOption ? <span className="text-xs text-surface-400" title={groupEpisodeOption.pendingStoryboardCount > 0 ? `待完成镜头: ${groupEpisodeOption.pendingStoryboardCount}` : undefined}>{isSerialProject ? `首帧就绪 ${groupEpisodeOption.firstClipReady}/${groupEpisodeOption.firstClipTotal || 0}` : `可生成分镜 ${groupEpisodeOption.completedStoryboardCount}/${groupEpisodeOption.totalStoryboardCount}`}{!groupEpisodeOption.canGenerateVideo && groupEpisodeOption.pendingStoryboardCount > 0 ? (isSerialProject ? '（需先准备首帧）' : '（需先生成分镜）') : ''}</span> : null}
+                    <span className="text-xs text-surface-700">{group.tasks.length} 个任务</span>
+                    {groupSucceededCount > 0 ? <span className="text-xs font-medium text-green-700">已完成 {groupSucceededCount}</span> : null}
+                    {groupActiveCount > 0 ? <span className="text-xs font-medium text-blue-700">进行中 {groupActiveCount}</span> : null}
+                    {groupEpisodeOption ? <span className="text-xs text-surface-600" title={groupEpisodeOption.pendingStoryboardCount > 0 ? `待完成镜头: ${groupEpisodeOption.pendingStoryboardCount}` : undefined}>{isSerialProject ? `首帧就绪 ${groupEpisodeOption.firstClipReady}/${groupEpisodeOption.firstClipTotal || 0}` : `可生成分镜 ${groupEpisodeOption.completedStoryboardCount}/${groupEpisodeOption.totalStoryboardCount}`}{!groupEpisodeOption.canGenerateVideo && groupEpisodeOption.pendingStoryboardCount > 0 ? (isSerialProject ? '（需先准备首帧）' : '（需先生成分镜）') : ''}</span> : null}
                   </div>
                   <div className="flex items-center gap-2">
                     {groupEpisodeId ? (
