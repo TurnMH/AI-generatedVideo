@@ -260,7 +260,82 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const dubbingProcessingTasks = processingTasks.filter((t) => t.task_type === 'dubbing')
   const subtitleProcessingTasks = processingTasks.filter((t) => t.task_type === 'subtitle')
 
-  const getEpisodeBaseText = (ep: Episode) => ep.script_excerpt || ep.title || ''
+  const pickEpisodeTextSource = (ep: Episode) => {
+    const candidates = [
+      ep.script_excerpt,
+      ep.optimized_text,
+      ep.summary,
+      ep.title,
+    ]
+    return candidates.find((value) => value?.trim())?.trim() ?? ''
+  }
+
+  const stripSpeechPrefix = (line: string) => line
+    .replace(/^[\s•·▪▫◦○●✔✅☑️□■▶▷►▸▹▻➤➜➟➠]+/, '')
+    .replace(/^(旁白|主持人|主播|解说|老师|嘉宾|男声|女声|人物|角色|画外音|OS|VO)\s*(?:[：:｜|丨-].*?|（[^）]*）|\([^)]*\))?\s*/u, '')
+    .trim()
+
+  const isDirectionOnlyLine = (line: string) => {
+    const trimmed = line.trim()
+    if (!trimmed) return true
+    if (/^[【\[].*[】\]]$/u.test(trimmed)) return true
+    if (/^[（(].*[)）]$/u.test(trimmed)) return true
+    return /^(镜头|画面|音效|音响|音乐|背景音乐|BGM|灯光|调色|转场|场景|内景|外景|景别|构图|运镜|摄影|机位|特写|远景|中景|近景|空镜|字幕|贴纸|包装|出字|旁白说明|动作|表情|情绪|氛围|布景|服装|道具|时间|地点)[：:：]/u.test(trimmed)
+  }
+
+  const looksLikeSpeakerCue = (line: string) => {
+    const trimmed = line.trim()
+    return /^(旁白|主持人|主播|解说|老师|嘉宾|男声|女声|人物|角色|画外音|OS|VO)(?:\s*(?:[：:｜|丨-].*?|（[^）]*）|\([^)]*\)))?$/u.test(trimmed)
+  }
+
+  const extractSpokenText = (text: string) => {
+    const lines = text
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+
+    const spoken: string[] = []
+    let pendingSpeaker = false
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) {
+        pendingSpeaker = false
+        continue
+      }
+      if (isDirectionOnlyLine(line)) {
+        continue
+      }
+      if (looksLikeSpeakerCue(line)) {
+        pendingSpeaker = true
+        continue
+      }
+
+      let candidate = stripSpeechPrefix(line)
+      candidate = candidate
+        .replace(/^[-—–:：]+\s*/, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+
+      if (!candidate) continue
+      if (isDirectionOnlyLine(candidate)) continue
+
+      if (pendingSpeaker || candidate) {
+        spoken.push(candidate)
+      }
+      pendingSpeaker = false
+    }
+
+    const cleaned = spoken
+      .map((line) => line.replace(/^[：:、，,；;]+/, '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+
+    return cleaned || text.trim()
+  }
+
+  const getEpisodeBaseText = (ep: Episode) => extractSpokenText(pickEpisodeTextSource(ep))
   const getDubbingSubmitText = (ep: Episode) => (dubbingDrafts[ep.id] ?? getEpisodeBaseText(ep)).trim()
   const getSubtitleSubmitText = (ep: Episode) => (subtitleDrafts[ep.id] ?? getEpisodeBaseText(ep)).trim()
   const getEpisodeVoiceOptions = (episodeId: number) => {
@@ -438,7 +513,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     setBatchDubbing(true)
     try {
       const eligible = episodes.filter(ep => {
-        if (!(ep.script_excerpt || ep.title)) return false
+        if (!getDubbingSubmitText(ep)) return false
         const existing = taskByEpisode[ep.id]?.dubbing
         return !(existing && (existing.status === 'succeeded' || existing.status === 'processing' || existing.status === 'pending'))
       })
@@ -485,7 +560,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     setBatchSubtitle(true)
     try {
       const eligible = episodes.filter(ep => {
-        if (!(ep.script_excerpt || ep.title)) return false
+        if (!getSubtitleSubmitText(ep)) return false
         const existing = taskByEpisode[ep.id]?.subtitle
         return !(existing && (existing.status === 'succeeded' || existing.status === 'processing' || existing.status === 'pending'))
       })
