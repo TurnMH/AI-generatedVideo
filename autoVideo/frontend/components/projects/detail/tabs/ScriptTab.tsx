@@ -697,7 +697,7 @@ export function ScriptTab({
     try {
       await projectAPI.generateEpisodes(projectId, hasKeywords ? keywords : undefined, { autoStoryboard: autoStoryboardAfterSplit })
       toast({
-        title: autoStoryboardAfterSplit ? '自动分集已启动，分镜需等待资源图全部完成后再开始' : '自动分集已启动，完成后可手动开始分镜',
+        title: autoStoryboardAfterSplit ? '重新分集已启动：旧分集与旧分镜将按新配置重建，分镜仍需等待资源图全部完成后再开始' : '重新分集已启动：旧分集与旧分镜将按新配置重建',
         variant: 'success',
       })
       if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()
@@ -1146,7 +1146,7 @@ export function ScriptTab({
                 disabled={isProcessing || !splitConfigReady || (!project.script_file_url && !hasScriptText)}
                 title={isProcessing
                   ? (project.progress?.message || '当前已有分集任务进行中，请等待当前任务完成')
-                  : (episodes.length > 0 ? '按当前手动配置重新自动分集' : '按当前手动配置开始自动分集')}
+                  : (episodes.length > 0 ? '按当前配置重新分集：会替换旧分集，并清空旧分镜后重建' : '按当前手动配置开始自动分集')}
               >
                 {isProcessing ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1911,9 +1911,9 @@ export function ScriptTab({
             <div className="rounded-md border border-surface-200 bg-surface-50 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-surface-800">分集完成后延后开始分镜</p>
+                  <p className="text-sm font-medium text-surface-800">分集完成后自动衔接后续分镜流程</p>
                   <p className="mt-1 text-xs text-surface-500">
-                    资源图必须全部完成后才能开始分镜图像生成；开启后也不会跳过这一步校验。
+                    重新分集会替换旧分集，并清空旧分镜后按新结果重建；若开启这里，系统会在资源准备完成后自动继续拆分分镜，但不会跳过资源图校验。
                   </p>
                 </div>
                 <Switch checked={autoStoryboardAfterSplit} onCheckedChange={setAutoStoryboardAfterSplit} />
@@ -1923,7 +1923,7 @@ export function ScriptTab({
               <Button variant="outline" onClick={() => setShowRegenerateDialog(false)}>取消</Button>
               <Button onClick={handleGenerateEpisodes}>
                 <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                开始自动分集
+                {episodes.length > 0 ? '确认重新分集' : '开始自动分集'}
               </Button>
             </div>
           </div>

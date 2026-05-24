@@ -944,7 +944,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
     const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
     if (!selectedEpisodeId) return false
-    if (modelKeys === undefined && !window.confirm(`这将清除本集所有已生成的${storyboardImageLabel}并重新生成，确认继续？`)) return false
+    if (modelKeys === undefined && !window.confirm(`这只会重置本集已有的${storyboardImageLabel}生成结果并重新出图，不会重新拆分${storyboardItemLabel}结构。若要按新的文案/镜头重新拆分，请使用“${extractStoryboardLabel}”。确认继续？`)) return false
     try {
       const { effectiveModelName, selectedModelKeys, description } = resolveStoryboardModelSelection(modelKeys ?? (modelKey ? [modelKey] : undefined))
       if (selectedModelKeys.length > 1) {
@@ -1367,7 +1367,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               variant="outline"
               size="sm"
               className="border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 hover:text-primary-800 disabled:opacity-60"
-              title={awaitingAutoStoryboard ? (isAdProject ? `资源提取完成后会自动按广告题材拆分镜头${adPromptHint ? `（${adPromptHint}）` : ''}` : '资源提取完成后会自动发起镜头拆分') : (isAdProject ? `${extractStoryboardLabel}（会联动当前广告题材、目标受众与 CTA）` : extractStoryboardLabel)}
+              title={awaitingAutoStoryboard ? (isAdProject ? `资源提取完成后会自动按广告题材拆分镜头${adPromptHint ? `（${adPromptHint}）` : ''}` : '资源提取完成后会自动发起镜头拆分') : (isAdProject ? `${extractStoryboardLabel}（会删除当前集旧镜头结构并按当前广告题材、目标受众与 CTA 重新拆分）` : `${extractStoryboardLabel}（会删除当前集旧${storyboardItemLabel}并重新拆分结构）`)}
             >
               {isExtractingStoryboards ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <LayoutGrid className="mr-1.5 h-3.5 w-3.5" />}
               {awaitingAutoStoryboard ? (isAdProject ? '等待自动拆分广告镜头' : '等待自动拆分镜头') : isExtractingStoryboards ? (isAdProject ? '广告镜头拆分中…' : '镜头拆分中…') : extractStoryboardLabel}
@@ -1459,11 +1459,11 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                 size="sm"
                 variant="outline"
                 disabled={isActive}
-                title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `重置本集所有${storyboardImageLabel}并重新生成；多选模型时会为同一条${storyboardItemLabel}追加多版候选`}
+                title={isActive ? `${storyboardGenerateLabel}进行中，请等待或先暂停` : `仅重置本集已有${storyboardImageLabel}并重新出图，不会重新拆分${storyboardItemLabel}结构；多选模型时会为同一条${storyboardItemLabel}追加多版候选`}
                 onClick={() => openBatchStoryboardDialog('force')}
               >
                 <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                重新生成本集
+                重生成图（本集）
               </Button>
             </>
           )}
@@ -1554,7 +1554,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               {batchStoryboardAction.kind === 'retryFailed'
                 ? (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 重试失败${storyboardItemLabel}` : `批量重试失败${storyboardItemLabel}`)
                 : batchStoryboardAction.kind === 'force'
-                  ? (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 重新生成${storyboardImageLabel}` : `重新生成${storyboardImageLabel}`)
+                  ? (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 重生成${storyboardImageLabel}` : `重生成${storyboardImageLabel}`)
                   : (selectedStoryboardBatchEpisode ? `第 ${selectedStoryboardBatchEpisode.episode_number} 集 · 生成${storyboardImageLabel}` : `批量生成${storyboardImageLabel}`)}
             </DialogTitle>
           </DialogHeader>
@@ -1563,7 +1563,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
                 <p className="text-[12px] leading-5 text-amber-800">
-                  单模型重新生成仍会按原流程覆盖刷新；如果同时选择多个模型，系统会为同一条{storyboardItemLabel}追加多版候选图，保留当前结果供你稍后挑选。
+                  这里是“重生成图”，不是“重新拆分镜头”。单模型会按原流程覆盖刷新当前{storyboardImageLabel}；如果同时选择多个模型，系统会为同一条{storyboardItemLabel}追加多版候选图，保留当前结果供你稍后挑选。
                 </p>
               </div>
             )}
@@ -1667,7 +1667,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
               {batchStoryboardAction.kind === 'retryFailed'
                 ? '开始重试'
                 : batchStoryboardAction.kind === 'force'
-                  ? '确认重新生成'
+                  ? '确认重生成图'
                   : '开始生成'}
             </Button>
           </div>
