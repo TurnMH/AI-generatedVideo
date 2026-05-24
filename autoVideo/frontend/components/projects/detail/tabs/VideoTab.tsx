@@ -482,6 +482,10 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const selectedVideoMotionMeta = VIDEO_MOTION_OPTIONS.find((item) => item.key === selectedVideoMotionMode) ?? VIDEO_MOTION_OPTIONS[0]
   const showVideoCapabilityMatrix = false
   const showVideoStyleLibrary = false
+  const isStoryboardSerialCandidate = (storyboard?: Pick<Storyboard, 'scene_group_key' | 'is_scene_first_clip'> | null) =>
+    Boolean(storyboard?.scene_group_key)
+  const includeStoryboardForVideoTask = (storyboard?: Pick<Storyboard, 'image_url' | 'scene_group_key'> | null) =>
+    Boolean(storyboard?.image_url || isStoryboardSerialCandidate(storyboard))
   const videoEpisodeOptions = useMemo(() => {
     const storyboardCounts = new Map<number, { total: number; completed: number; pending: number; firstClipTotal: number; firstClipReady: number }>()
     const taskCounts = new Map<number, { total: number; active: number; failed: number; succeeded: number }>()
@@ -492,7 +496,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       current.total += 1
       if (sb.status === 'completed' && sb.image_url) current.completed += 1
       if (sb.status === 'pending') current.pending += 1
-      if (isSerialProject && sb.scene_group_key && sb.is_scene_first_clip) {
+      if (isStoryboardSerialCandidate(sb) && sb.is_scene_first_clip) {
         current.firstClipTotal += 1
         if (sb.status === 'completed' && sb.image_url) current.firstClipReady += 1
       }
@@ -522,7 +526,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
           pendingStoryboardCount: storyboard.pending,
           firstClipTotal: storyboard.firstClipTotal,
           firstClipReady: storyboard.firstClipReady,
-          canGenerateVideo: isSerialProject ? storyboard.firstClipReady > 0 : storyboard.completed > 0,
+          canGenerateVideo: storyboard.firstClipReady > 0 || storyboard.completed > 0,
           taskCount: task.total,
           activeTaskCount: task.active,
           failedTaskCount: task.failed,
@@ -531,7 +535,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       })
       .filter((item) => item.totalStoryboardCount > 0 || item.taskCount > 0)
       .sort((left, right) => left.episodeNumber - right.episodeNumber)
-  }, [episodes, storyboards, tasks, isSerialProject])
+  }, [episodes, storyboards, tasks])
   const videoEpisodeOptionMap = useMemo(
     () => new Map(videoEpisodeOptions.map((item) => [item.episodeId, item])),
     [videoEpisodeOptions]
@@ -808,7 +812,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     // 串行模式：非首帧分镜无 image_url（由视频服务用前一片段末帧填充），但仍需包含在 clips 列表里以触发串行链。
     // 非串行模式：只包含有 image_url 的分镜。
     const sortedSbs = completedSbs
-      .filter((sb) => sb.image_url || (isSerialProject && sb.scene_group_key))
+      .filter((sb) => includeStoryboardForVideoTask(sb))
       .sort((a, b) => a.sequence_number - b.sequence_number)
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
     // Prefer LLM-refined prompt_used; fall back to raw scene_description for older storyboards.
@@ -825,7 +829,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
 
     // 需要至少一张有效的首帧图片才能生成视频
     if (!imageUrls.some(Boolean)) {
-      toast({ title: isSerialProject ? '当前集暂无可用首帧图片' : '当前集暂无已完成的分镜图片', variant: 'destructive' })
+      toast({ title: isSerial ? '当前集暂无可用首帧图片' : '当前集暂无已完成的分镜图片', variant: 'destructive' })
       return
     }
 
@@ -1041,10 +1045,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     // 串行模式：非首帧分镜（image_url 为空但有 scene_group_key）也需要包含，
     // 视频服务会用前一片段末帧作为其首帧。
     const eligibleSbs = completedSb
-      .filter((sb) => sb.image_url || (isSerialProject && sb.scene_group_key))
+      .filter((sb) => includeStoryboardForVideoTask(sb))
       .sort((a, b) => a.sequence_number - b.sequence_number)
+    const hasSerialCandidate = eligibleSbs.some((sb) => isStoryboardSerialCandidate(sb))
     if (eligibleSbs.length === 0 || !eligibleSbs.some((sb) => sb.image_url)) {
-      toast({ title: isSerialProject ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜图片', variant: 'destructive' })
+      toast({ title: hasSerialCandidate ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜图片', variant: 'destructive' })
       return
     }
     const byEpisode = new Map<number, string[]>()
