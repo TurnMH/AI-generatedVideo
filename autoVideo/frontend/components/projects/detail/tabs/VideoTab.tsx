@@ -146,6 +146,10 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const [aiAnalysisClip, setAiAnalysisClip] = useState<VClip | null>(null)
   // clip 详情弹窗（串行/并行均可查看）
   const [clipDetailInfo, setClipDetailInfo] = useState<{ clip: VClip; task: VTask } | null>(null)
+  const [taskDetailInfo, setTaskDetailInfo] = useState<VTask | null>(null)
+  const [taskDetailScenes, setTaskDetailScenes] = useState<EditableVideoScene[]>([])
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false)
+  const [taskDetailSaving, setTaskDetailSaving] = useState(false)
   const parsedAnalysis = (() => {
     if (!aiAnalysisClip?.chain_failure_analysis) return null
     try { return JSON.parse(aiAnalysisClip.chain_failure_analysis) as { reason: string; suggestions: string[] } } catch { return null }
@@ -197,6 +201,18 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     total: number
   }
 
+  interface EditableVideoScene {
+    storyboardId: number
+    sequenceNumber: number
+    sceneDescription: string
+    promptUsed: string
+    status: string
+    imageUrl?: string
+    location?: string
+    cameraMovement?: string
+    dialogue?: string
+  }
+
   const composeStageLabel: Record<string, string> = {
     concatenating: '拼接片段中…',
     adding_audio: '添加音频中…',
@@ -244,6 +260,20 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   )
   const rawSbV = (sbData as { data?: Storyboard[] })?.data
   const storyboards: Storyboard[] = Array.isArray(rawSbV) ? rawSbV : []
+  const episodeStoryboardsMap = useMemo(() => {
+    const map = new Map<number, Storyboard[]>()
+    for (const storyboard of storyboards) {
+      const eid = Number(storyboard.episode_id)
+      if (!Number.isFinite(eid) || eid <= 0) continue
+      const bucket = map.get(eid) ?? []
+      bucket.push(storyboard)
+      map.set(eid, bucket)
+    }
+    for (const [eid, items] of map.entries()) {
+      map.set(eid, [...items].sort((a, b) => a.sequence_number - b.sequence_number))
+    }
+    return map
+  }, [storyboards])
 
   // Fetch episodes for display
   const { data: episodesData } = useSWR(
@@ -891,6 +921,102 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       mutateTasks()
     } catch {
       toast({ title: '分镜重试失败', variant: 'destructive' })
+    }
+  }
+
+  const openTaskDetail = async (task: VTask) => {
+    setTaskDetailInfo(task)
+    const episodeId = task.episode_id ? Number(task.episode_id) : NaN
+    if (!Number.isFinite(episodeId) || episodeId <= 0) {
+      setTaskDetailScenes([])
+      return
+    }
+
+    const cached = episodeStoryboardsMap.get(episodeId)
+    if (cached && cached.length > 0) {
+      setTaskDetailScenes(
+        cached.map((storyboard) => ({
+          storyboardId: storyboard.id,
+          sequenceNumber: storyboard.sequence_number,
+          sceneDescription: storyboard.scene_description || '',
+          promptUsed: storyboard.prompt_used || '',
+          status: storyboard.status,
+          imageUrl: storyboard.image_url,
+          location: storyboard.location,
+          cameraMovement: storyboard.camera_movement,
+          dialogue: storyboard.dialogue,
+        }))
+      )
+      return
+    }
+
+    setTaskDetailLoading(true)
+    try {
+      const res = await storyboardAPI.listAll(projectId, { episode_id: episodeId }) as { data?: Storyboard[] }
+      const rows = (res.data ?? []).sort((a, b) => a.sequence_number - b.sequence_number)
+      setTaskDetailScenes(
+        rows.map((storyboard) => ({
+          storyboardId: storyboard.id,
+          sequenceNumber: storyboard.sequence_number,
+          sceneDescription: storyboard.scene_description || '',
+          promptUsed: storyboard.prompt_used || '',
+          status: storyboard.status,
+          imageUrl: storyboard.image_url,
+          location: storyboard.location,
+          cameraMovement: storyboard.camera_movement,
+          dialogue: storyboard.dialogue,
+        }))
+      )
+    } catch {
+      setTaskDetailScenes([])
+      toast({ title: '加载视频详情失败', description: '未能读取当前视频关联的分镜数据', variant: 'destructive' })
+    } finally {
+      setTaskDetailLoading(false)
+    }
+  }
+
+  const updateTaskDetailScene = (storyboardId: number, field: 'sceneDescription' | 'promptUsed', value: string) => {
+    setTaskDetailScenes((prev) => prev.map((scene) => (
+      scene.storyboardId === storyboardId ? { ...scene, [field]: value } : scene
+    )))
+  }
+
+  const handleSaveTaskDetail = async () => {
+    if (!taskDetailInfo?.episode_id) return false
+    if (taskDetailScenes.length === 0) {
+      toast({ title: '当前没有可保存的镜头信息', variant: 'default' })
+      return false
+    }
+
+    setTaskDetailSaving(true)
+    try {
+      await Promise.all(taskDetailScenes.map((scene) => storyboardAPI.update(projectId, scene.storyboardId, {
+        scene_description: scene.sceneDescription,
+        prompt_used: scene.promptUsed,
+      })))
+      toast({ title: '已保存视频详情中的提示词与描述', variant: 'success' })
+      await globalMutate(['storyboards-for-video', projectId])
+      return true
+    } catch {
+      toast({ title: '保存失败', description: '请稍后重试', variant: 'destructive' })
+      return false
+    } finally {
+      setTaskDetailSaving(false)
+    }
+  }
+
+  const handleRegenerateFromTaskDetail = async () => {
+    if (!taskDetailInfo) return
+    const saved = await handleSaveTaskDetail()
+    if (!saved) return
+    const modelName = taskDetailInfo.model_name || selectedVideoModel
+    try {
+      await videoAPI.retry(projectId, taskDetailInfo.id, modelName)
+      toast({ title: '已按修改后的提示词重新生成', description: '视频任务已重新提交', variant: 'success' })
+      setTaskDetailInfo(null)
+      mutateTasks()
+    } catch {
+      toast({ title: '重新生成失败', description: '任务重试未成功提交', variant: 'destructive' })
     }
   }
 
@@ -2034,8 +2160,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                   return (
                     <Card key={t.id} className={`transition-shadow hover:shadow-sm ${isActive ? 'border-blue-200 bg-blue-50/30' : ''}`}>
                       <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-4">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="flex items-start gap-4">
                             <div className="flex h-14 w-24 items-center justify-center overflow-hidden rounded-md bg-surface-900 text-surface-400">
                               {t.status === 'succeeded' && (t.result_url || t.hls_url) ? (
                                 <button onClick={() => setPreviewUrl(t.result_url || t.hls_url)} className="flex h-full w-full items-center justify-center hover:text-white transition-colors">
@@ -2066,7 +2192,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                               {t.error_msg && <p className="text-xs text-red-500 truncate max-w-md">{t.error_msg}</p>}
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                             {clipsTotal > 0 && (
                               <div className="text-right">
                                 <div className="flex items-center gap-2">
@@ -2125,6 +2251,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             )}
+                            <Button size="sm" variant="outline" onClick={() => openTaskDetail(t)}>
+                              <Eye className="mr-1 h-3.5 w-3.5" /> 查看详情
+                            </Button>
                             {clipsDone > 0 && clipsDone === clipsTotal && !isActive && (
                               <Button size="sm" variant="outline" title="将所有片段合成为完整视频" onClick={async () => {
                                 try {
@@ -2253,212 +2382,145 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
 
                         {clips.length > 0 && (() => {
                           const sortedClips = [...clips].sort((a, b) => a.clip_order - b.clip_order)
-                          const renderClip = (clip: VClip) => {
-                            const isSerialClip = !!(t.serial_scene || clip.scene_group_key)
-                            const isSerialNonFirst = isSerialClip && (clip.scene_seq ?? 0) > 0
-                            const hasEndFrame = !!(clip.end_frame_image_url)
-                            return (
-                            <div
-                              className={`group relative rounded-md overflow-hidden border cursor-pointer transition-all ${
-                                clip.status === 'succeeded' ? 'border-green-300 hover:border-green-500 hover:shadow-md' :
-                                clip.status === 'failed' ? 'border-red-300' :
-                                clip.status === 'processing' ? 'border-blue-300' :
-                                'border-surface-200'
-                              } ${isSerialClip ? 'w-24 h-14' : 'aspect-video'}`}
-                              title={`片段 ${clip.clip_order + 1}${isSerialClip ? ` (组内第${(clip.scene_seq ?? 0) + 1}帧)` : ''}: ${clip.status}${clip.error_msg ? ' — ' + clip.error_msg : ''}`}
-                              onClick={() => {
-                                if (clip.status === 'succeeded' && clip.clip_url && !isSerialClip) {
-                                  setPreviewUrl(clip.clip_url)
-                                } else {
-                                  setClipDetailInfo({ clip, task: t })
-                                }
-                              }}
-                            >
-                              {(() => {
-                                // 优先用末帧图（生成成功后由 frame-extractor 提取），其次用首帧图（分镜图）。
-                                // 对串行非首帧 clip，分镜图为空，但末帧图在生成后可用。
+                          return (
+                            <div className="mt-3 space-y-2">
+                              {sortedClips.map((clip) => {
+                                const isSerialClip = !!(t.serial_scene || clip.scene_group_key)
                                 const thumbSrc = clip.end_frame_image_url || t.image_urls?.[clip.clip_order]
-                                if (thumbSrc) {
-                                  return <img src={thumbSrc} alt="" className="h-full w-full object-cover" />
+                                const clipStatusLabel: Record<string, string> = {
+                                  succeeded: '成功',
+                                  failed: '失败',
+                                  processing: '生成中',
+                                  pending: '等待中',
                                 }
-                                // 串行非首帧 clip 尚未生成时，显示"链式"图标作为占位符
+                                const scene = taskDetailScenes.find((item) => item.sequenceNumber === clip.clip_order + 1)
+                                const isChainBroken = clip.error_msg?.startsWith('serial chain broken')
                                 return (
-                                  <div className="flex h-full w-full items-center justify-center bg-surface-100">
-                                    {isSerialNonFirst
-                                      ? <Link2 className="h-3 w-3 text-surface-400" />
-                                      : <Video className="h-3 w-3 text-surface-300" />}
-                                  </div>
-                                )
-                              })()}
-                              {/* 末帧已提取标识 */}
-                              {hasEndFrame && isSerialClip && (
-                                <div className="absolute left-1 top-1 flex items-center gap-0.5 rounded bg-teal-500/80 px-1 py-0 text-[9px] text-white leading-4" title="末帧已提取，可用于下一片段串行锚点">
-                                  末帧
-                                </div>
-                              )}
-                              {clip.status === 'succeeded' && clip.clip_url ? (
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors">
-                                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500/90 shadow-lg group-hover:scale-110 transition-transform">
-                                    <Play className="h-3.5 w-3.5 text-white ml-0.5" />
-                                  </div>
-                                </div>
-                              ) : clip.status === 'processing' ? (
-                                <div className="absolute inset-0 flex items-center justify-center bg-blue-500/30">
-                                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500/90 shadow-lg animate-pulse">
-                                    <Loader2 className="h-4 w-4 text-white animate-spin" />
-                                  </div>
-                                </div>
-                              ) : clip.status === 'failed' ? (
-                                <div className="absolute inset-0 bg-red-500/20">
-                                  <div className="absolute inset-0 flex items-center justify-center">
-                                    {clip.error_msg?.startsWith('serial chain broken') ? (
-                                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500/90 shadow-lg" title="上游串行片段失败，本片段被级联跳过">
-                                        <Link2Off className="h-4 w-4 text-white" />
-                                      </div>
-                                    ) : (
-                                      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-500/90 shadow-lg">
-                                        <AlertCircle className="h-4 w-4 text-white" />
-                                      </div>
-                                    )}
-                                  </div>
-                                  {/* AI 诊断按钮（仅根因 clip 展示）*/}
-                                  {clip.chain_failure_analysis && (
-                                    <button
-                                      type="button"
-                                      className="absolute left-1 top-1 flex items-center gap-0.5 rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] text-white hover:bg-amber-600/90"
-                                      onClick={(e) => { e.stopPropagation(); setAiAnalysisClip(clip) }}
-                                      title="查看 AI 失败诊断"
-                                    >
-                                      <Info className="h-2.5 w-2.5" /> AI诊断
-                                    </button>
-                                  )}
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <button
-                                        type="button"
-                                        className="absolute right-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white hover:bg-black/80"
-                                        onClick={(event) => event.stopPropagation()}
-                                      >
-                                        重试
-                                      </button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="w-80" onClick={(event) => event.stopPropagation()}>
-                                      <DropdownMenuLabel className="text-[10px] text-surface-400">选择模型重试该分镜</DropdownMenuLabel>
-                                      <DropdownMenuSeparator />
-                                      {vtVideoModelOptions.map((item) => {
-                                        const avail = videoModelAvailability[item.key]
-                                        return (
-                                        <DropdownMenuItem
-                                          key={item.key}
-                                          className={`cursor-pointer px-3 py-2 ${avail === false ? 'opacity-50' : ''}`}
-                                          onClick={() => handleRetryClipWithModel(t.id, clip.id, clip.clip_order, item.key)}
+                                  <div
+                                    key={clip.id}
+                                    className={`rounded-lg border p-3 ${
+                                      clip.status === 'succeeded' ? 'border-green-200 bg-green-50/40' :
+                                      clip.status === 'failed' ? 'border-red-200 bg-red-50/40' :
+                                      clip.status === 'processing' ? 'border-blue-200 bg-blue-50/40' :
+                                      'border-surface-200 bg-surface-50/70'
+                                    }`}
+                                  >
+                                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                                        <button
+                                          type="button"
+                                          className="relative flex h-20 w-32 shrink-0 items-center justify-center overflow-hidden rounded-md border border-surface-200 bg-surface-900 text-surface-300"
+                                          onClick={() => {
+                                            if (clip.status === 'succeeded' && clip.clip_url) {
+                                              setPreviewUrl(clip.clip_url)
+                                            } else {
+                                              setClipDetailInfo({ clip, task: t })
+                                            }
+                                          }}
                                         >
-                                          <div className="flex items-start gap-2 w-full">
-                                            <span className="text-base mt-0.5">{item.icon}</span>
-                                            <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                                              <div className="flex items-center gap-1.5 flex-wrap">
-                                                <span className="text-xs font-semibold">{item.label}</span>
-                                                <span className={`text-[10px] px-1 py-0 rounded font-medium ${item.speed === 'fast' ? 'bg-green-100 text-green-700' : item.speed === 'slow' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
-                                                  {item.speed === 'fast' ? '快速' : item.speed === 'slow' ? '慢速' : '均衡'}
-                                                </span>
-                                                <span className={`text-[10px] px-1 py-0 rounded font-medium ${item.quality === 'high' ? 'bg-purple-100 text-purple-700' : 'bg-surface-100 text-surface-500'}`}>
-                                                  {item.quality === 'high' ? '高质量' : '标准'}
-                                                </span>
-                                                {avail === true && <span className="rounded bg-emerald-100 px-1 py-0 text-[9px] text-emerald-700">● 可用</span>}
-                                                {avail === false && <span className="rounded bg-red-100 px-1 py-0 text-[9px] text-red-600">● 未配置</span>}
-                                              </div>
-                                              <span className="text-[10px] text-surface-400 leading-none">{getProviderLabel(item.provider)}</span>
-                                              <span className="text-[11px] text-surface-500 leading-snug">{item.desc}</span>
-                                              <div className="flex flex-wrap gap-1 mt-0.5">
-                                                {item.tags.map((tag) => (
-                                                  <span key={tag} className="text-[10px] bg-surface-100 text-surface-500 rounded px-1">{tag}</span>
-                                                ))}
-                                              </div>
+                                          {thumbSrc ? (
+                                            <img src={thumbSrc} alt="" className="h-full w-full object-cover" />
+                                          ) : (
+                                            <div className="flex h-full w-full items-center justify-center bg-surface-100">
+                                              {isSerialClip ? <Link2 className="h-4 w-4 text-surface-400" /> : <Video className="h-4 w-4 text-surface-400" />}
+                                            </div>
+                                          )}
+                                          <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+                                            {clip.status === 'processing' ? (
+                                              <Loader2 className="h-5 w-5 animate-spin text-white" />
+                                            ) : clip.status === 'failed' ? (
+                                              isChainBroken ? <Link2Off className="h-5 w-5 text-white" /> : <AlertCircle className="h-5 w-5 text-white" />
+                                            ) : (
+                                              <Play className="h-5 w-5 text-white" />
+                                            )}
+                                          </div>
+                                          <span className="absolute bottom-1 right-1 rounded bg-black/65 px-1.5 text-[10px] text-white">
+                                            #{clip.clip_order + 1}
+                                          </span>
+                                        </button>
+                                        <div className="min-w-0 flex-1 space-y-2">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="text-sm font-medium text-surface-800">片段 {clip.clip_order + 1}</span>
+                                            <VideoTaskStatusBadge status={clip.status} />
+                                            {isSerialClip && clip.scene_group_key ? (
+                                              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] text-indigo-600">
+                                                {clip.scene_group_key}{typeof clip.scene_seq === 'number' ? ` · 第 ${clip.scene_seq + 1} 帧` : ''}
+                                              </span>
+                                            ) : null}
+                                            {clip.end_frame_image_url ? (
+                                              <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] text-teal-700">末帧已提取</span>
+                                            ) : null}
+                                          </div>
+                                          <div className="grid gap-2 text-xs text-surface-500 md:grid-cols-2">
+                                            <div className="rounded-md bg-white/80 px-2.5 py-2">
+                                              <p className="text-[10px] text-surface-400">提示词</p>
+                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scene?.promptUsed || '暂无'}</p>
+                                            </div>
+                                            <div className="rounded-md bg-white/80 px-2.5 py-2">
+                                              <p className="text-[10px] text-surface-400">描述</p>
+                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scene?.sceneDescription || '暂无'}</p>
                                             </div>
                                           </div>
-                                        </DropdownMenuItem>
-                                        )
-                                      })}
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                </div>
-                              ) : (
-                                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                                  <Clock className="h-4 w-4 text-white/60" />
-                                </div>
-                              )}
-                              <span className="absolute bottom-0 right-0 bg-black/60 px-1 text-[10px] text-white leading-4">
-                                {isSerialClip ? `${(clip.scene_seq ?? 0) + 1}/${t.clips?.filter(c => c.scene_group_key === clip.scene_group_key).length ?? 1}` : clip.clip_order + 1}
-                              </span>
-                            </div>
-                          )}
-
-                          if (t.serial_scene || project.project_type === 'video_serial') {
-                            const groupMap = new Map<string, VClip[]>()
-                            for (const c of sortedClips) {
-                              const key = c.scene_group_key || '_default'
-                              if (!groupMap.has(key)) groupMap.set(key, [])
-                              groupMap.get(key)!.push(c)
-                            }
-                            const groups = Array.from(groupMap.entries()).map(([key, items]) => ({ key, clips: items }))
-                            return (
-                              <div className="mt-3 space-y-2">
-                                {groups.map(({ key, clips: groupClips }) => {
-                                  const groupDone = groupClips.filter(c => c.status === 'succeeded').length
-                                  const groupFailed = groupClips.filter(c => c.status === 'failed' && !c.error_msg?.startsWith('serial chain broken')).length
-                                  const groupBroken = groupClips.filter(c => c.error_msg?.startsWith('serial chain broken')).length
-                                  const chainBroken = groupFailed > 0
-                                  return (
-                                  <div key={key} className={`rounded-lg border p-2 ${chainBroken ? 'border-red-200 bg-red-50/30' : 'border-indigo-100 bg-indigo-50/40'}`}>
-                                    <div className="mb-2 flex items-center gap-2 flex-wrap">
-                                      <Film className={`h-3 w-3 shrink-0 ${chainBroken ? 'text-red-400' : 'text-indigo-400'}`} />
-                                      <span className={`text-[11px] font-medium truncate max-w-[200px] ${chainBroken ? 'text-red-600' : 'text-indigo-600'}`}>{key === '_default' ? '默认分组' : key}</span>
-                                      {/* 链健康状态 */}
-                                      {chainBroken ? (
-                                        <span className="flex items-center gap-0.5 rounded bg-red-100 px-1.5 text-[10px] text-red-600">
-                                          <Link2Off className="h-2.5 w-2.5" /> 链断裂 · {groupFailed} 根因
-                                          {groupBroken > 0 && ` · ${groupBroken} 级联`}
+                                          {clip.error_msg ? (
+                                            <p className={`text-xs ${clip.status === 'failed' ? 'text-red-600' : 'text-surface-500'} break-all`}>
+                                              {clip.error_msg}
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                      <div className="flex shrink-0 flex-wrap items-center gap-2 md:w-[220px] md:justify-end">
+                                        <Button size="sm" variant="outline" onClick={() => setClipDetailInfo({ clip, task: t })}>
+                                          <Info className="mr-1 h-3.5 w-3.5" /> 查看片段
+                                        </Button>
+                                        <Button size="sm" variant="outline" onClick={() => openTaskDetail(t)}>
+                                          <Pencil className="mr-1 h-3.5 w-3.5" /> 编辑提示词
+                                        </Button>
+                                        {clip.status === 'failed' ? (
+                                          <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                              <Button size="sm" variant="outline">
+                                                <RefreshCw className="mr-1 h-3.5 w-3.5" /> 重试片段
+                                              </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="end" className="w-80">
+                                              <DropdownMenuLabel className="text-[10px] text-surface-400">选择模型重试该分镜</DropdownMenuLabel>
+                                              <DropdownMenuSeparator />
+                                              {vtVideoModelOptions.map((item) => {
+                                                const avail = videoModelAvailability[item.key]
+                                                return (
+                                                  <DropdownMenuItem
+                                                    key={item.key}
+                                                    className={`cursor-pointer px-3 py-2 ${avail === false ? 'opacity-50' : ''}`}
+                                                    onClick={() => handleRetryClipWithModel(t.id, clip.id, clip.clip_order, item.key)}
+                                                  >
+                                                    <div className="flex items-center gap-2">
+                                                      <span>{item.icon}</span>
+                                                      <span className="text-xs font-medium">{item.label}</span>
+                                                    </div>
+                                                  </DropdownMenuItem>
+                                                )
+                                              })}
+                                            </DropdownMenuContent>
+                                          </DropdownMenu>
+                                        ) : null}
+                                        {clip.chain_failure_analysis ? (
+                                          <Button size="sm" variant="ghost" onClick={() => setAiAnalysisClip(clip)}>
+                                            <Sparkles className="mr-1 h-3.5 w-3.5" /> AI诊断
+                                          </Button>
+                                        ) : null}
+                                        {clip.status === 'succeeded' && clip.clip_url ? (
+                                          <Button size="sm" variant="ghost" onClick={() => setPreviewUrl(clip.clip_url)}>
+                                            <Play className="mr-1 h-3.5 w-3.5" /> 预览
+                                          </Button>
+                                        ) : null}
+                                        <span className="text-[11px] text-surface-400">
+                                          状态：{clipStatusLabel[clip.status] ?? clip.status}{clip.duration_sec > 0 ? ` · ${clip.duration_sec}s` : ''}
                                         </span>
-                                      ) : (
-                                        <span className="rounded bg-indigo-100 px-1.5 text-[10px] text-indigo-500">
-                                          {groupDone}/{groupClips.length} 完成
-                                        </span>
-                                      )}
-                                      {/* 末帧提取进度 */}
-                                      {!chainBroken && groupDone > 0 && (
-                                        <span className="rounded bg-teal-50 px-1.5 text-[10px] text-teal-600">
-                                          {groupClips.filter(c => c.end_frame_image_url).length} 末帧已提取
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center gap-1 flex-wrap">
-                                      {groupClips.map((clip, idx) => (
-                                        <React.Fragment key={clip.id}>
-                                          {idx > 0 && (
-                                            <ChevronRight className={`h-3 w-3 shrink-0 ${
-                                              clip.error_msg?.startsWith('serial chain broken') ? 'text-red-300' :
-                                              groupClips[idx - 1]?.status === 'succeeded' ? 'text-teal-400' :
-                                              'text-indigo-300'
-                                            }`} />
-                                          )}
-                                          {renderClip(clip)}
-                                        </React.Fragment>
-                                      ))}
+                                      </div>
                                     </div>
                                   </div>
-                                  )
-                                })}
-                              </div>
-                            )
-                          }
-
-                          return (
-                            <div className="mt-3 grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2">
-                              {sortedClips.map((clip) => (
-                                <React.Fragment key={clip.id}>
-                                  {renderClip(clip)}
-                                </React.Fragment>
-                              ))}
+                                )
+                              })}
                             </div>
                           )
                         })()}
@@ -2472,7 +2534,97 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         </div>
       )}
 
-      {/* Video preview — fullscreen modal */}
+      <Dialog open={!!taskDetailInfo} onOpenChange={(open) => { if (!open) setTaskDetailInfo(null) }}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-primary-500" />
+              {taskDetailInfo?.episode_id && episodeMap.get(taskDetailInfo.episode_id)
+                ? `第 ${episodeMap.get(taskDetailInfo.episode_id)?.episode_number} 集视频详情`
+                : `视频任务 #${taskDetailInfo?.id ?? ''}`}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-xs text-surface-500">
+              <div className="flex flex-wrap items-center gap-2">
+                <VideoTaskStatusBadge status={taskDetailInfo?.status ?? 'pending'} />
+                <span>模型：{taskDetailInfo?.model_name || '—'}</span>
+                {taskDetailInfo?.style_preset ? <span>风格：{taskDetailInfo.style_preset}</span> : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => { void handleSaveTaskDetail() }} disabled={taskDetailSaving || taskDetailLoading}>
+                  {taskDetailSaving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Pencil className="mr-1 h-3.5 w-3.5" />}
+                  保存修改
+                </Button>
+                <Button size="sm" onClick={() => { void handleRegenerateFromTaskDetail() }} disabled={taskDetailSaving || taskDetailLoading || !taskDetailInfo}>
+                  {taskDetailSaving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+                  保存并重新生成
+                </Button>
+              </div>
+            </div>
+
+            {taskDetailLoading ? (
+              <div className="flex items-center justify-center py-12 text-sm text-surface-500">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在加载视频详情…
+              </div>
+            ) : taskDetailScenes.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-surface-200 bg-surface-50 px-4 py-10 text-center text-sm text-surface-500">
+                当前任务未找到可编辑的镜头数据。
+              </div>
+            ) : (
+              <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+                {taskDetailScenes.map((scene) => (
+                  <div key={scene.storyboardId} className="rounded-lg border border-surface-200 bg-white p-4">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-surface-800">镜头 {scene.sequenceNumber}</span>
+                      <Badge variant="outline" className="text-[10px]">{scene.status}</Badge>
+                      {scene.location ? <span className="text-xs text-surface-400">场景：{scene.location}</span> : null}
+                      {scene.cameraMovement ? <span className="text-xs text-surface-400">运镜：{scene.cameraMovement}</span> : null}
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)]">
+                      <div className="overflow-hidden rounded-md border border-surface-200 bg-surface-100 aspect-video">
+                        {scene.imageUrl ? (
+                          <img src={scene.imageUrl} alt={`镜头 ${scene.sequenceNumber}`} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-surface-400">
+                            <Image className="h-5 w-5" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-3">
+                        <div>
+                          <Label className="mb-2 block text-xs text-surface-500">提示词</Label>
+                          <Textarea
+                            value={scene.promptUsed}
+                            onChange={(e) => updateTaskDetailScene(scene.storyboardId, 'promptUsed', e.target.value)}
+                            className="min-h-[120px]"
+                            placeholder="请输入该视频镜头的提示词"
+                          />
+                        </div>
+                        <div>
+                          <Label className="mb-2 block text-xs text-surface-500">描述</Label>
+                          <Textarea
+                            value={scene.sceneDescription}
+                            onChange={(e) => updateTaskDetailScene(scene.storyboardId, 'sceneDescription', e.target.value)}
+                            className="min-h-[96px]"
+                            placeholder="请输入该视频镜头的描述"
+                          />
+                        </div>
+                        {scene.dialogue ? (
+                          <div className="rounded-md bg-surface-50 px-3 py-2 text-xs text-surface-500">
+                            <span className="font-medium text-surface-600">对白：</span>{scene.dialogue}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* AI 串行失败诊断 Dialog */}
       <Dialog open={!!aiAnalysisClip} onOpenChange={(open) => { if (!open) setAiAnalysisClip(null) }}>
         <DialogContent className="max-w-lg">
