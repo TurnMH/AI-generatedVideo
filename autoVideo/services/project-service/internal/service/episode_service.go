@@ -102,6 +102,19 @@ func isAdProject(project *model.Project) bool {
 	return false
 }
 
+func shouldEnableSceneSerial(projectType string, adCtx adPromptContext, project *model.Project) bool {
+	if strings.TrimSpace(projectType) == "video_serial" {
+		return true
+	}
+	if isAdProject(project) {
+		return true
+	}
+	if adCtx != (adPromptContext{}) {
+		return true
+	}
+	return false
+}
+
 func buildAdPromptGuidance(ctx adPromptContext) string {
 	parts := make([]string, 0, 8)
 	if ctx.CampaignType != "" {
@@ -544,16 +557,16 @@ type StageProgress struct {
 
 // ProgressInfo is the JSON structure persisted in project.progress.
 type ProgressInfo struct {
-	Stage        string         `json:"stage"` // episode_splitting | scene_splitting | script_prepping | idle
-	EpisodeSplit *StageProgress `json:"episode_split,omitempty"`
-	SceneSplit   *StageProgress `json:"scene_split,omitempty"`
-	Message      string         `json:"message,omitempty"`
-	PhaseLabel   string         `json:"phase_label,omitempty"`
-	NextStep     string         `json:"next_step,omitempty"`
-	CurrentEpisode int          `json:"current_episode,omitempty"`
-	TotalEpisodes  int          `json:"total_episodes,omitempty"`
-	StartedAt    string         `json:"started_at,omitempty"`
-	UpdatedAt    string         `json:"updated_at,omitempty"`
+	Stage          string         `json:"stage"` // episode_splitting | scene_splitting | script_prepping | idle
+	EpisodeSplit   *StageProgress `json:"episode_split,omitempty"`
+	SceneSplit     *StageProgress `json:"scene_split,omitempty"`
+	Message        string         `json:"message,omitempty"`
+	PhaseLabel     string         `json:"phase_label,omitempty"`
+	NextStep       string         `json:"next_step,omitempty"`
+	CurrentEpisode int            `json:"current_episode,omitempty"`
+	TotalEpisodes  int            `json:"total_episodes,omitempty"`
+	StartedAt      string         `json:"started_at,omitempty"`
+	UpdatedAt      string         `json:"updated_at,omitempty"`
 }
 
 const (
@@ -718,11 +731,11 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 		SceneSplit: &StageProgress{
 			Total: len(episodes), Completed: 0, Status: "running",
 		},
-		Message: "正在准备分镜拆分…",
-		PhaseLabel: "自动拆分分镜中",
-		NextStep: "分镜拆分完成后即可继续出图或进入后续制作",
+		Message:        "正在准备分镜拆分…",
+		PhaseLabel:     "自动拆分分镜中",
+		NextStep:       "分镜拆分完成后即可继续出图或进入后续制作",
 		CurrentEpisode: 0,
-		TotalEpisodes: len(episodes),
+		TotalEpisodes:  len(episodes),
 	})
 	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "storyboard_generating")
 
@@ -861,7 +874,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 			return "可以继续生成分镜图片、配音或视频"
 		}(),
 		CurrentEpisode: len(episodes),
-		TotalEpisodes: len(episodes),
+		TotalEpisodes:  len(episodes),
 	})
 	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "storyboard_ready")
 	if s.logger != nil {
@@ -1622,11 +1635,11 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 		SceneSplit: &StageProgress{
 			Total: totalEpisodes, Completed: completed, Status: sceneStatus,
 		},
-		Message: message,
-		PhaseLabel: phaseLabel,
-		NextStep: nextStep,
+		Message:        message,
+		PhaseLabel:     phaseLabel,
+		NextStep:       nextStep,
 		CurrentEpisode: completed,
-		TotalEpisodes: totalEpisodes,
+		TotalEpisodes:  totalEpisodes,
 	})
 	_ = s.projectRepo.UpdateStatus(projectID, userID, finalStatus)
 }
@@ -1697,11 +1710,11 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 				SceneSplit: &StageProgress{
 					Total: len(eps), Completed: processedEpisodes, Status: "running",
 				},
-				Message: message,
-				PhaseLabel: phaseLabel,
-				NextStep: nextStep,
+				Message:        message,
+				PhaseLabel:     phaseLabel,
+				NextStep:       nextStep,
 				CurrentEpisode: processedEpisodes + 1,
-				TotalEpisodes: len(eps),
+				TotalEpisodes:  len(eps),
 			})
 
 			if _, err := s.polishEpisodeInternal(autoCtx, ep.ID, project.ID, autoWritingHints, autoProductionHints, autoKwLib); err != nil && s.logger != nil {
@@ -1750,11 +1763,11 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 				SceneSplit: &StageProgress{
 					Total: len(eps), Completed: processedEpisodes, Status: "running",
 				},
-				Message: fmt.Sprintf("已完成 %d/%d 集自动准备，剩余集数会继续处理中…", processedEpisodes, len(eps)),
-				PhaseLabel: phaseLabel,
-				NextStep: nextStep,
+				Message:        fmt.Sprintf("已完成 %d/%d 集自动准备，剩余集数会继续处理中…", processedEpisodes, len(eps)),
+				PhaseLabel:     phaseLabel,
+				NextStep:       nextStep,
 				CurrentEpisode: processedEpisodes,
-				TotalEpisodes: len(eps),
+				TotalEpisodes:  len(eps),
 			})
 		}
 	}(*project, eps, resumed)
@@ -2105,10 +2118,10 @@ type llmEpisode struct {
 // consistent character appearance across all scenes and storyboards.
 type CharacterProfile struct {
 	Name         string   `json:"name"`
-	Appearance   string   `json:"appearance"`               // visual description in Chinese for scene descriptions
-	AppearanceEN string   `json:"appearance_en,omitempty"`  // English visual description for AI image generation prompts
-	VoiceHint    string   `json:"voice_hint"`               // male/female/child/narrator — aids auto-voice assignment
-	SkillHints   []string `json:"skill_hints,omitempty"`    // detected capability tags: combat|exploration|social|special
+	Appearance   string   `json:"appearance"`              // visual description in Chinese for scene descriptions
+	AppearanceEN string   `json:"appearance_en,omitempty"` // English visual description for AI image generation prompts
+	VoiceHint    string   `json:"voice_hint"`              // male/female/child/narrator — aids auto-voice assignment
+	SkillHints   []string `json:"skill_hints,omitempty"`   // detected capability tags: combat|exploration|social|special
 }
 
 // LocationProfile holds the canonical visual description for a scene location.
@@ -2226,16 +2239,26 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 	var storyboardPromptTemplate string
 	projectVisualEra := ""
 	adCtx := adPromptContext{}
+	serialSceneEnabled := strings.TrimSpace(projectType) == "video_serial"
 	assetRefs := s.fetchAssetReferences(ctx, projectID, nil)
 	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil {
 		adCtx = extractAdPromptContext(project)
+		serialSceneEnabled = shouldEnableSceneSerial(projectType, adCtx, project)
 		sk := storyboardStyleKey(storyboardStylePreset(project))
 		storyboardPromptTemplate = s.fetchStoryboardPromptTemplate(ctx, sk)
 		projectVisualEra = inferVisualEra(strings.TrimSpace(project.ScriptText))
-		if s.logger != nil && storyboardPromptTemplate != "" {
-			s.logger.Info("fetched storyboard prompt template",
+		if s.logger != nil {
+			if storyboardPromptTemplate != "" {
+				s.logger.Info("fetched storyboard prompt template",
+					zap.Uint64("project_id", projectID),
+					zap.String("style_key", sk),
+				)
+			}
+			s.logger.Info("scene serial mode resolved",
 				zap.Uint64("project_id", projectID),
-				zap.String("style_key", sk),
+				zap.String("project_type", projectType),
+				zap.Bool("is_ad_project", isAdProject(project)),
+				zap.Bool("serial_scene_enabled", serialSceneEnabled),
 			)
 		}
 	}
@@ -2421,8 +2444,11 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			desc := enrichSceneDescription(scene, prevSceneForContinuity, kwLib, projectVisualEra)
 			sceneGroupKey := ""
 			isSceneFirstClip := false
-			if projectType == "video_serial" {
+			if serialSceneEnabled {
 				sceneGroupKey = normalizeSceneKey(scene.Location)
+				if sceneGroupKey == "" {
+					sceneGroupKey = normalizeSceneKey(scene.Description)
+				}
 			}
 			if sceneGroupKey != "" {
 				if !seenSceneGroupsInEpisode[sceneGroupKey] {
@@ -2449,12 +2475,12 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				promptUsed = applyPromptTemplate(storyboardPromptTemplate, desc, strings.Join(chars, ", "), action, scene.Mood)
 			} else {
 				promptUsed = composeStoryboardPrompt(StoryboardPromptParts{
-				Subject:          desc,
-				CharacterAnchors: charAnchors,
-				PropAnchors:      propAnchors,
-				SceneAnchors:     sceneAnchors,
-				CameraGrammar:    shotTypeToCameraMovement(scene.ShotType),
-			})
+					Subject:          desc,
+					CharacterAnchors: charAnchors,
+					PropAnchors:      propAnchors,
+					SceneAnchors:     sceneAnchors,
+					CameraGrammar:    shotTypeToCameraMovement(scene.ShotType),
+				})
 			}
 
 			_, err := s.storyboardSvc.Create(projectID, CreateStoryboardReq{
@@ -4831,7 +4857,9 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 
 	var llmResp struct {
 		Choices []struct {
-			Message struct{ Content string `json:"content"` } `json:"message"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
@@ -4856,16 +4884,16 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ReviewScore struct {
-	Completeness  int `json:"completeness"`  // 完整度 0-100
-	Integrity     int `json:"integrity"`     // 完善度 0-100
-	Consistency   int `json:"consistency"`   // 一致性 0-100
-	Transitions   int `json:"transitions"`   // 衔接性 0-100
+	Completeness  int `json:"completeness"`   // 完整度 0-100
+	Integrity     int `json:"integrity"`      // 完善度 0-100
+	Consistency   int `json:"consistency"`    // 一致性 0-100
+	Transitions   int `json:"transitions"`    // 衔接性 0-100
 	DialogQuality int `json:"dialog_quality"` // 台词质量 0-100
 }
 
 type ReviewIssue struct {
-	Severity    string `json:"severity"`    // critical | warning | info
-	Type        string `json:"type"`        // character_inconsistency | prop_inconsistency | scene_transition | dialog | plot_gap
+	Severity    string `json:"severity"` // critical | warning | info
+	Type        string `json:"type"`     // character_inconsistency | prop_inconsistency | scene_transition | dialog | plot_gap
 	Description string `json:"description"`
 	Suggestion  string `json:"suggestion"`
 }
@@ -5012,7 +5040,9 @@ character_inconsistency | prop_inconsistency | scene_transition | dialog | plot_
 
 	var llmResp struct {
 		Choices []struct {
-			Message struct{ Content string `json:"content"` } `json:"message"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
@@ -5030,8 +5060,12 @@ character_inconsistency | prop_inconsistency | scene_transition | dialog | plot_
 	}
 	// Clamp scores to 0-100
 	clampScore := func(v int) int {
-		if v < 0 { return 0 }
-		if v > 100 { return 100 }
+		if v < 0 {
+			return 0
+		}
+		if v > 100 {
+			return 100
+		}
 		return v
 	}
 	result.Score.Completeness = clampScore(result.Score.Completeness)
@@ -5326,7 +5360,9 @@ func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, r
 
 	var llmResp struct {
 		Choices []struct {
-			Message struct{ Content string `json:"content"` } `json:"message"`
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
