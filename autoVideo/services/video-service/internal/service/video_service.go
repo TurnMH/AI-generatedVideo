@@ -391,8 +391,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			task.RenderConfig, charDescriptions,
 			perClipCameras, perClipMoods,
 		), clipCharURLs, resolvedModelName), assetAnchorHint)
-		// 串行模式非首帧：仅在当前 clip 的台词/文案基础可用时，才注入强连续性提示。
-		if shouldUseSerialContinuity(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "" {
+		// 串行模式非首帧：文案基础可用时再额外注入强连续性提示，
+		// 但是否继承上一段尾帧由独立的串行链条件决定，不能被这里卡断。
+		if shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "" {
 			prompt = "Seamless continuation from previous scene clip. Maintain visual continuity with identical character appearance, lighting, and environment. " + prompt
 		}
 		tailURL := tailImageURL(imageURLs, c.ClipOrder)
@@ -457,19 +458,22 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	var mu sync.Mutex
 	var failCount int
 
-	serialContinuityByClip := make([]bool, len(clips))
-	serialContinuityEnabled := false
+	serialChainByClip := make([]bool, len(clips))
+	serialPromptByClip := make([]bool, len(clips))
+	serialChainEnabled := false
 	for _, clip := range clips {
-		enabled := shouldUseSerialContinuity(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs)
-		if clip.ClipOrder >= 0 && clip.ClipOrder < len(serialContinuityByClip) {
-			serialContinuityByClip[clip.ClipOrder] = enabled
+		chainEnabled := shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey)
+		promptEnabled := shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs)
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(serialChainByClip) {
+			serialChainByClip[clip.ClipOrder] = chainEnabled
+			serialPromptByClip[clip.ClipOrder] = promptEnabled
 		}
-		if enabled {
-			serialContinuityEnabled = true
+		if chainEnabled {
+			serialChainEnabled = true
 		}
 	}
 
-	if task.SerialScene && serialContinuityEnabled && len(sceneGroupKeys) == len(clips) {
+	if task.SerialScene && serialChainEnabled && len(sceneGroupKeys) == len(clips) {
 		// ── 串行模式：同场景 clips 按序生成，每次成功后提取末帧作为下一个 clip 的首帧 ──
 		// 1. 按 SceneGroupKey 分组（保留顺序）
 		//    注意：scene_group_key 为空的 clip 不属于任何串行组，每个单独成一组（并行生成）。
@@ -509,12 +513,15 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				defer func() { <-groupSem }()
 				var prevEndFrameURL string
 				for _, c := range g.clips {
-					continuityEnabled := false
-					if c.ClipOrder >= 0 && c.ClipOrder < len(serialContinuityByClip) {
-						continuityEnabled = serialContinuityByClip[c.ClipOrder]
+					chainEnabled := false
+					promptEnabled := false
+					if c.ClipOrder >= 0 && c.ClipOrder < len(serialChainByClip) {
+						chainEnabled = serialChainByClip[c.ClipOrder]
+						promptEnabled = serialPromptByClip[c.ClipOrder]
 					}
-					// 除了第一个 clip，且仅当该 clip 文本基础足够可用时，才用上一 clip 的末帧作为首帧
-					if continuityEnabled && prevEndFrameURL != "" {
+					// 非首帧串行 clip 必须继续继承上一段尾帧；
+					// 文案弱时只是不额外强化 prompt，不应把链路本身切断。
+					if chainEnabled && prevEndFrameURL != "" {
 						c.SourceImageURL = prevEndFrameURL
 					}
 					// 串行模式：最多重试 3 次（含首次）
@@ -593,8 +600,10 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 						zap.Int("scene_seq", c.SceneSeq),
 						zap.Int("group_size", len(g.clips)),
 						zap.String("clip_url", c.ClipURL))
-					// 只有当前片段允许连续链时，才为后续片段提取/保存尾帧锚点。
-					if !continuityEnabled {
+					// 只有真正属于串行链的非首帧片段，才要求为后续片段维护尾帧锚点。
+					// prompt 是否强化由 promptEnabled 决定，不影响这里。
+					_ = promptEnabled
+					if !chainEnabled {
 						prevEndFrameURL = ""
 						continue
 					}
@@ -634,8 +643,8 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		// 如果 serial_scene=true 但 scene_group_keys 长度与 clips 不一致，则静默降级为并行。
 		// 此时非首帧 clip 的 SourceImageURL 为空，可能导致生成失败，记录警告便于排查。
 		if task.SerialScene {
-			if !serialContinuityEnabled {
-				s.logger.Info("serial_scene=true but no clip has usable narration/scene text, skipping forced continuity chain",
+			if !serialChainEnabled {
+				s.logger.Info("serial_scene=true but no non-first clip is eligible for serial source chaining",
 					zap.Int64("task_id", taskID),
 					zap.Int("clips_count", len(clips)))
 			} else {
@@ -708,6 +717,17 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	if len(clipURLs) == 0 {
 		s.markFailed(ctx, taskID, "no succeeded clips")
 		return fmt.Errorf("task %d: no succeeded clips", taskID)
+	}
+	if len(clipURLs) != len(clips) {
+		msg := fmt.Sprintf("incomplete clip generation: %d/%d clips succeeded", len(clipURLs), len(clips))
+		_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
+		s.markFailed(ctx, taskID, msg)
+		s.logger.Warn("refusing to compose incomplete multi-clip task",
+			zap.Int64("task_id", taskID),
+			zap.Int("succeeded", len(clipURLs)),
+			zap.Int("failed", failCount),
+			zap.Int("total", len(clips)))
+		return fmt.Errorf("task %d: %s", taskID, msg)
 	}
 
 	s.logger.Info("clips generation done",
@@ -916,6 +936,12 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	}
 	if len(clipURLs) == 0 {
 		return fmt.Errorf("no succeeded clips to compose for task %d", taskID)
+	}
+	if len(clipURLs) != len(clips) {
+		msg := fmt.Sprintf("refusing to compose incomplete task %d: %d/%d clips succeeded", taskID, len(clipURLs), len(clips))
+		_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
+		s.markFailed(ctx, taskID, msg)
+		return fmt.Errorf(msg)
 	}
 
 	// Mark as processing + track compose stages
@@ -1141,9 +1167,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 	}
 
-	// 串行链感知：仅在当前 clip 的台词/文案基础可用时，重试才重新获取上一 clip 的末帧作为首帧。
-	// 避免无效文案把错误连续性放大到后续片段。
-	if shouldUseSerialContinuity(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) {
+	// 串行链感知：重试时只要当前 clip 属于非首帧串行片段，就应重新获取上一 clip 的末帧作为首帧。
+	// 文案是否足够可用只影响连续性 prompt，不应阻断首帧继承。
+	if shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey) {
 		for i := range task.Clips {
 			prev := &task.Clips[i]
 			if prev.SceneGroupKey == clip.SceneGroupKey && prev.SceneSeq == clip.SceneSeq-1 {
@@ -1174,8 +1200,8 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 				break
 			}
 		}
-		// 非首帧连续性提示（与正常生成路径保持一致）
-		if clip.SourceImageURL != "" {
+		// 非首帧连续性提示（与正常生成路径保持一致）：仅在文案基础可用时追加。
+		if shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "" {
 			retryPrompt = "Seamless continuation from previous scene clip. Maintain visual continuity with identical character appearance, lighting, and environment. " + retryPrompt
 		}
 	}
@@ -2291,8 +2317,15 @@ func clipHasUsableContinuityText(task *model.VideoTask, clipOrder int, perClipDi
 	return false
 }
 
-func shouldUseSerialContinuity(task *model.VideoTask, clipOrder int, sceneSeq int, sceneGroupKey string, perClipDialogues, perClipDescs []string) bool {
+func shouldChainSerialSource(task *model.VideoTask, sceneSeq int, sceneGroupKey string) bool {
 	if task == nil || !task.SerialScene || sceneSeq <= 0 || strings.TrimSpace(sceneGroupKey) == "" {
+		return false
+	}
+	return true
+}
+
+func shouldAddSerialContinuityPrompt(task *model.VideoTask, clipOrder int, sceneSeq int, sceneGroupKey string, perClipDialogues, perClipDescs []string) bool {
+	if !shouldChainSerialSource(task, sceneSeq, sceneGroupKey) {
 		return false
 	}
 	return clipHasUsableContinuityText(task, clipOrder, perClipDialogues, perClipDescs)
