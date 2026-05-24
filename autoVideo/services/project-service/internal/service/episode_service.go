@@ -116,7 +116,7 @@ func shouldEnableSceneSerial(projectType string, adCtx adPromptContext, project 
 }
 
 func buildAdPromptGuidance(ctx adPromptContext) string {
-	parts := make([]string, 0, 8)
+	parts := make([]string, 0, 12)
 	if ctx.CampaignType != "" {
 		parts = append(parts, fmt.Sprintf("- 广告题材/形式：%s。后续文案与分镜要匹配这种广告表达，不要回退成泛短剧叙事。", ctx.CampaignType))
 	}
@@ -138,6 +138,9 @@ func buildAdPromptGuidance(ctx adPromptContext) string {
 	parts = append(parts,
 		"- 这是广告项目，不是泛剧情短片：优先突出产品/服务利益点、记忆点、转化动机与消费场景。",
 		"- 剧本格式化时应把原文整理成更利于广告投放的口播/卖点/转场结构；分镜格式化时应强化开头抓人、卖点递进、品牌露出和结尾 CTA 收束。",
+		"- 文案必须优先满足“可念口播”要求：句子要短、信息密度高、少空话套话，读出来要像真人会说的话，而不是方案腔或散文化独白。",
+		"- 优先组织成‘痛点/场景 → 解决方案/核心卖点 → 使用结果/信任背书 → CTA’的广告闭环；如果题材不适合完整闭环，也至少保证 hook、核心利益点、结尾动作三者齐备。",
+		"- 如果原文缺少明确口播句，允许在不改变原意前提下主动重写成更易配音、更易上字幕、更利于转化的广告表达。",
 	)
 	return strings.Join(parts, "\n")
 }
@@ -2720,6 +2723,8 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 原文中以下形式的内容必须提取到 dialogue 字段，禁止遗漏：
 ① [字幕:…] 标注内的全部文字 ② 引号内容（"…" 「…」'…'）③ 冒号引用句（角色名：内容）④ 角色的心理独白
 若一个分镜含多句对白，全部用 \n 拼接放入 dialogue，不截断不省略
+- dialogue 只能放“真的会被念出来/打上字幕的文字”，不能把摄影说明、灯光、美术、转场说明、动作说明混入 dialogue
+- 如果某段只有动作/镜头说明、没有可念文本，dialogue 必须留空，不要为了凑字段瞎写
 
 **镜头连续性规则（必须遵守）：**
 - 如果相邻分镜 location 相同，默认视为同一空间连续动作，人物站位、朝向、手中道具、受伤状态、服装层次必须延续，除非原文明确发生变化
@@ -2727,6 +2732,8 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 - 当人物动作是连续链条时，拆分后的分镜必须保持动作前后逻辑，例如“起身→转头→走近→开口”，不能无缘由跳到结果态
 - description 中必须明确画面主次和空间层次，避免同一分镜同时承载两个互相竞争的动作焦点
 - 同一场景的光线方向和时间感要稳定，不允许上一镜夜色冷光、下一镜无说明变成日景暖光
+- 如果是广告项目，优先拆出适合连续生成的镜头链：同一人物、同一空间、同一动作链、同一口播段，尽量保持在同一 location 下连续推进，减少无必要跳切
+- 如果某个卖点/口播段明显是一口气说完的，应优先拆成可连续承接的 2-3 个镜头（例如近景口播 → 产品细节 → 结果反馈），并在 description 中写清动作延续关系，方便后续尾帧续接
 
 请严格按以下 JSON 格式返回：
 {"scenes": [
@@ -2745,7 +2752,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 		sceneSystemPrompt += "\n\n**本项目专属分镜指引（请务必遵守）：**\n" + skillHints
 	}
 	if adGuidance := buildAdPromptGuidance(adCtx); adGuidance != "" {
-		sceneSystemPrompt += "\n\n**广告项目分镜拆分补充约束（务必遵守）：**\n" + adGuidance + "\n- 广告项目的分镜拆分要优先服务转化表达：开头前 1-3 个镜头尽量快速建立 hook、痛点、反差或结果画面。\n- 中段镜头要围绕卖点、功能、使用方式、受众场景或品牌信任线索组织，而不是平均分配成泛叙事镜头。\n- 结尾镜头要自然收束到品牌露出、行动号召、转化动作或记忆点，保持广告闭环。"
+		sceneSystemPrompt += "\n\n**广告项目分镜拆分补充约束（务必遵守）：**\n" + adGuidance + "\n- 广告项目的分镜拆分要优先服务转化表达：开头前 1-3 个镜头尽量快速建立 hook、痛点、反差或结果画面。\n- 中段镜头要围绕卖点、功能、使用方式、受众场景或品牌信任线索组织，而不是平均分配成泛叙事镜头。\n- 结尾镜头要自然收束到品牌露出、行动号召、转化动作或记忆点，保持广告闭环。\n- 对口播型/UGC 型/讲解型广告，优先拆出“能被直接配音和续接”的连续镜头链，不要把一句完整口播切成毫无承接关系的碎镜头。\n- 当相邻镜头属于同一卖点段落时，description 必须显式写出动作、视线、手势或机位承接关系，方便后续视频生成使用上一镜尾帧做连续参考。"
 	}
 	// Inject consistency bible so the LLM writes visually grounded, consistent scene descriptions.
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
@@ -4815,7 +4822,7 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 		systemPrompt += "\n\n**本项目专属指引（务必遵守）：**\n" + writingHints
 	}
 	if adGuidance := buildAdPromptGuidance(adCtx); adGuidance != "" {
-		systemPrompt += "\n\n**广告项目补充约束（务必遵守）：**\n" + adGuidance + "\n- 输出的 title / summary / optimized_text 都必须体现广告用途，尤其 summary 要像可投放的广告项目简介，而不是泛剧情梗概。\n- 如果原文是广告文案或产品介绍，不要强行改成多人物戏剧冲突；应保持广告表达，并增强 hook、利益点、痛点、解决方案、信任背书和 CTA 的可执行结构。"
+		systemPrompt += "\n\n**广告项目补充约束（务必遵守）：**\n" + adGuidance + "\n- 输出的 title / summary / optimized_text 都必须体现广告用途，尤其 summary 要像可投放的广告项目简介，而不是泛剧情梗概。\n- 如果原文是广告文案或产品介绍，不要强行改成多人物戏剧冲突；应保持广告表达，并增强 hook、利益点、痛点、解决方案、信任背书和 CTA 的可执行结构。\n- optimized_text 中的关键表达要尽量能够直接被字幕/配音复用：避免大段只适合阅读、不适合口播的抽象修辞。"
 	}
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += bible

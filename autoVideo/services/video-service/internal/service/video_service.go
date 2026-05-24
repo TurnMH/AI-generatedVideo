@@ -27,21 +27,21 @@ import (
 
 // VideoService orchestrates video task creation and processing.
 type VideoService struct {
-	repo             repository.VideoTaskRepo
-	ffmpeg           *FFmpegService
-	generators       map[string]generators.VideoGenerator
-	storageURL       string
-	characterBaseURL string
-	logger           *zap.Logger
-	kafkaWriter      *kafka.Writer
-	kafkaTopic       string
-	maxClips         int
-	localMaxClips    int                  // clip concurrency for local GPU models (comfyui-video)
-	motionPromptSvc       *MotionPromptService    // opt-motion-llm: LLM-based motion prompt refinement
-	dubbing               *DubbingService         // per-clip TTS for clip-aligned audio composition
-	frameExtractorURL     string                  // http://localhost:8010 — 末帧提取服务（视频串行流程）
-	whisperURL            string                  // whisper-sidecar URL for narration transcription
-	serialFailureAnalyzer *SerialFailureAnalyzer  // AI 串行失败诊断（分析失败原因并给出优化建议）
+	repo                  repository.VideoTaskRepo
+	ffmpeg                *FFmpegService
+	generators            map[string]generators.VideoGenerator
+	storageURL            string
+	characterBaseURL      string
+	logger                *zap.Logger
+	kafkaWriter           *kafka.Writer
+	kafkaTopic            string
+	maxClips              int
+	localMaxClips         int                    // clip concurrency for local GPU models (comfyui-video)
+	motionPromptSvc       *MotionPromptService   // opt-motion-llm: LLM-based motion prompt refinement
+	dubbing               *DubbingService        // per-clip TTS for clip-aligned audio composition
+	frameExtractorURL     string                 // http://localhost:8010 — 末帧提取服务（视频串行流程）
+	whisperURL            string                 // whisper-sidecar URL for narration transcription
+	serialFailureAnalyzer *SerialFailureAnalyzer // AI 串行失败诊断（分析失败原因并给出优化建议）
 }
 
 // NewVideoService —— 创建视频服务实例，注册生成器并设置并发限制
@@ -391,8 +391,8 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			task.RenderConfig, charDescriptions,
 			perClipCameras, perClipMoods,
 		), clipCharURLs, resolvedModelName), assetAnchorHint)
-		// 串行模式非首帧：注入连续性提示，告知视频模型这是同一场景的接续片段。
-		if task.SerialScene && c.SceneSeq > 0 && c.SourceImageURL != "" {
+		// 串行模式非首帧：仅在当前 clip 的台词/文案基础可用时，才注入强连续性提示。
+		if shouldUseSerialContinuity(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "" {
 			prompt = "Seamless continuation from previous scene clip. Maintain visual continuity with identical character appearance, lighting, and environment. " + prompt
 		}
 		tailURL := tailImageURL(imageURLs, c.ClipOrder)
@@ -457,7 +457,19 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	var mu sync.Mutex
 	var failCount int
 
-	if task.SerialScene && len(sceneGroupKeys) == len(clips) {
+	serialContinuityByClip := make([]bool, len(clips))
+	serialContinuityEnabled := false
+	for _, clip := range clips {
+		enabled := shouldUseSerialContinuity(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs)
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(serialContinuityByClip) {
+			serialContinuityByClip[clip.ClipOrder] = enabled
+		}
+		if enabled {
+			serialContinuityEnabled = true
+		}
+	}
+
+	if task.SerialScene && serialContinuityEnabled && len(sceneGroupKeys) == len(clips) {
 		// ── 串行模式：同场景 clips 按序生成，每次成功后提取末帧作为下一个 clip 的首帧 ──
 		// 1. 按 SceneGroupKey 分组（保留顺序）
 		//    注意：scene_group_key 为空的 clip 不属于任何串行组，每个单独成一组（并行生成）。
@@ -497,8 +509,12 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				defer func() { <-groupSem }()
 				var prevEndFrameURL string
 				for _, c := range g.clips {
-					// 除了第一个 clip，用前一个 clip 的末帧作为首帧
-					if prevEndFrameURL != "" {
+					continuityEnabled := false
+					if c.ClipOrder >= 0 && c.ClipOrder < len(serialContinuityByClip) {
+						continuityEnabled = serialContinuityByClip[c.ClipOrder]
+					}
+					// 除了第一个 clip，且仅当该 clip 文本基础足够可用时，才用上一 clip 的末帧作为首帧
+					if continuityEnabled && prevEndFrameURL != "" {
 						c.SourceImageURL = prevEndFrameURL
 					}
 					// 串行模式：最多重试 3 次（含首次）
@@ -577,6 +593,11 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 						zap.Int("scene_seq", c.SceneSeq),
 						zap.Int("group_size", len(g.clips)),
 						zap.String("clip_url", c.ClipURL))
+					// 只有当前片段允许连续链时，才为后续片段提取/保存尾帧锚点。
+					if !continuityEnabled {
+						prevEndFrameURL = ""
+						continue
+					}
 					// 提取末帧 URL（如果配置了 frame-extractor-service）
 					if s.frameExtractorURL != "" && c.ClipURL != "" {
 						frameURL, err := callFrameExtractor(ctx, c.ClipURL, task.ProjectID, task.UserID, s.frameExtractorURL)
@@ -613,10 +634,16 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		// 如果 serial_scene=true 但 scene_group_keys 长度与 clips 不一致，则静默降级为并行。
 		// 此时非首帧 clip 的 SourceImageURL 为空，可能导致生成失败，记录警告便于排查。
 		if task.SerialScene {
-			s.logger.Warn("serial_scene=true but scene_group_keys length mismatch, falling back to parallel mode",
-				zap.Int64("task_id", taskID),
-				zap.Int("scene_group_keys_count", len(sceneGroupKeys)),
-				zap.Int("clips_count", len(clips)))
+			if !serialContinuityEnabled {
+				s.logger.Info("serial_scene=true but no clip has usable narration/scene text, skipping forced continuity chain",
+					zap.Int64("task_id", taskID),
+					zap.Int("clips_count", len(clips)))
+			} else {
+				s.logger.Warn("serial_scene=true but scene_group_keys length mismatch, falling back to parallel mode",
+					zap.Int64("task_id", taskID),
+					zap.Int("scene_group_keys_count", len(sceneGroupKeys)),
+					zap.Int("clips_count", len(clips)))
+			}
 		}
 		// Generate clips concurrently.
 		// Local GPU models (comfyui-video) use a tighter limit to avoid VRAM exhaustion.
@@ -629,7 +656,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 
 		for _, clip := range clips {
 			wg.Add(1)
-		go func(c *model.VideoClip) {
+			go func(c *model.VideoClip) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -1114,9 +1141,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 	}
 
-	// 串行链感知：非首帧 clip 重试时，重新获取上一 clip 的末帧作为首帧。
-	// 避免因上次生成时帧提取失败而导致本次重试仍用空 SourceImageURL。
-	if task.SerialScene && clip.SceneSeq > 0 && clip.SceneGroupKey != "" {
+	// 串行链感知：仅在当前 clip 的台词/文案基础可用时，重试才重新获取上一 clip 的末帧作为首帧。
+	// 避免无效文案把错误连续性放大到后续片段。
+	if shouldUseSerialContinuity(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) {
 		for i := range task.Clips {
 			prev := &task.Clips[i]
 			if prev.SceneGroupKey == clip.SceneGroupKey && prev.SceneSeq == clip.SceneSeq-1 {
@@ -1489,22 +1516,22 @@ func (s *VideoService) SetSerialFailureAnalyzer(a *SerialFailureAnalyzer) {
 }
 
 type VideoContentExtractResult struct {
-	VideoURL       string `json:"video_url"`
-	FrameURL       string `json:"frame_url"`
-	FrameURLs      []string `json:"frame_urls,omitempty"`
-	FrameItems     []VideoFrameContentItem `json:"frame_items,omitempty"`
-	Language       string `json:"language"`
-	NarrationText  string `json:"narration_text"`
-	ExtractedText  string `json:"extracted_text"`
-	Summary        string `json:"summary"`
-	AudioEnabled   bool   `json:"audio_enabled"`
-	VisionEnabled  bool   `json:"vision_enabled"`
-	VisionModel    string `json:"vision_model"`
+	VideoURL      string                  `json:"video_url"`
+	FrameURL      string                  `json:"frame_url"`
+	FrameURLs     []string                `json:"frame_urls,omitempty"`
+	FrameItems    []VideoFrameContentItem `json:"frame_items,omitempty"`
+	Language      string                  `json:"language"`
+	NarrationText string                  `json:"narration_text"`
+	ExtractedText string                  `json:"extracted_text"`
+	Summary       string                  `json:"summary"`
+	AudioEnabled  bool                    `json:"audio_enabled"`
+	VisionEnabled bool                    `json:"vision_enabled"`
+	VisionModel   string                  `json:"vision_model"`
 }
 
 type VideoFrameContentItem struct {
 	FrameURL      string `json:"frame_url"`
-	ExtractedText  string `json:"extracted_text"`
+	ExtractedText string `json:"extracted_text"`
 	Summary       string `json:"summary"`
 }
 
@@ -1545,12 +1572,11 @@ func (s *VideoService) ExtractVideoContent(ctx context.Context, projectID, userI
 			if result.NarrationText == "" {
 				result.NarrationText = strings.TrimSpace(transResp.SRT)
 			}
-                }
-        } else {
-                // 本地开发环境 Mock 数据
-        result.NarrationText = "由于本地未启动 Whisper 音频转写服务，这是自动生成的测试音频解说文案。这是一条展示产品的短视频，视频中主要突出了产品的特色，推荐大家购买使用！"
+		}
+	} else {
+		// 本地开发环境 Mock 数据
+		result.NarrationText = "由于本地未启动 Whisper 音频转写服务，这是自动生成的测试音频解说文案。这是一条展示产品的短视频，视频中主要突出了产品的特色，推荐大家购买使用！"
 	}
-
 
 	if s.frameExtractorURL == "" {
 		if result.NarrationText != "" {
@@ -1796,9 +1822,9 @@ func callFrameExtractorFrames(ctx context.Context, videoURL string, projectID, u
 		frameCount = 1
 	}
 	body, err := json.Marshal(map[string]interface{}{
-		"video_url":  videoURL,
-		"project_id": projectID,
-		"user_id":    userID,
+		"video_url":   videoURL,
+		"project_id":  projectID,
+		"user_id":     userID,
 		"frame_count": frameCount,
 	})
 	if err != nil {
@@ -1819,7 +1845,7 @@ func callFrameExtractorFrames(ctx context.Context, videoURL string, projectID, u
 		return nil, fmt.Errorf("frame-extractor HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	var result struct {
-		FrameURL string `json:"frame_url"`
+		FrameURL  string   `json:"frame_url"`
 		FrameURLs []string `json:"frame_urls"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
@@ -2210,6 +2236,66 @@ func joinDialogues(dialogues []string) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func countReadableRunes(text string) int {
+	count := 0
+	for _, r := range strings.TrimSpace(text) {
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func hasUsableNarrationText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	if countReadableRunes(trimmed) < 8 {
+		return false
+	}
+	lines := strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n")
+	validLines := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			continue
+		}
+		validLines++
+		if countReadableRunes(line) >= 8 {
+			return true
+		}
+	}
+	return validLines >= 2
+}
+
+func clipHasUsableContinuityText(task *model.VideoTask, clipOrder int, perClipDialogues, perClipDescs []string) bool {
+	if task == nil {
+		return false
+	}
+	if hasUsableNarrationText(stringSliceValue(perClipDialogues, clipOrder)) {
+		return true
+	}
+	if hasUsableNarrationText(stringSliceValue(perClipDescs, clipOrder)) {
+		return true
+	}
+	if clipOrder == 0 && hasUsableNarrationText(task.SubtitleText) {
+		return true
+	}
+	return false
+}
+
+func shouldUseSerialContinuity(task *model.VideoTask, clipOrder int, sceneSeq int, sceneGroupKey string, perClipDialogues, perClipDescs []string) bool {
+	if task == nil || !task.SerialScene || sceneSeq <= 0 || strings.TrimSpace(sceneGroupKey) == "" {
+		return false
+	}
+	return clipHasUsableContinuityText(task, clipOrder, perClipDialogues, perClipDescs)
 }
 
 func stringSliceValue(items []string, idx int) string {
