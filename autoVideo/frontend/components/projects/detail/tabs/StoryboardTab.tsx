@@ -655,6 +655,38 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     setSelectedEpisodeVideoMotionMode(preset.motion)
   }
 
+  const isStoryboardSerialCandidate = (storyboard?: Pick<Storyboard, 'scene_group_key'> | null) =>
+    Boolean(storyboard?.scene_group_key)
+
+  const includeStoryboardForVideoTask = (storyboard?: Pick<Storyboard, 'image_url' | 'scene_group_key'> | null) =>
+    Boolean(storyboard?.image_url || isStoryboardSerialCandidate(storyboard))
+
+  const filterReadyVideoStoryboards = (items: Storyboard[]) => {
+    const ordered = [...items].sort((a, b) => a.sequence_number - b.sequence_number)
+    const serialGroups = new Map<string, Storyboard[]>()
+    const eligible: Storyboard[] = []
+
+    for (const storyboard of ordered) {
+      if (!includeStoryboardForVideoTask(storyboard)) continue
+      if (!isStoryboardSerialCandidate(storyboard)) {
+        eligible.push(storyboard)
+        continue
+      }
+      const key = `${storyboard.episode_id ?? 0}:${storyboard.scene_group_key}`
+      const current = serialGroups.get(key) ?? []
+      current.push(storyboard)
+      serialGroups.set(key, current)
+    }
+
+    for (const group of serialGroups.values()) {
+      const firstClip = group.find((storyboard) => storyboard.is_scene_first_clip) ?? group[0]
+      if (!firstClip?.image_url) continue
+      eligible.push(...group)
+    }
+
+    return eligible.sort((a, b) => a.sequence_number - b.sequence_number)
+  }
+
   const handleGenerateVideoByEpisode = async (
     episodeId: number,
     options?: {
@@ -665,10 +697,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
   ) => {
     const completedSbs = ((await storyboardAPI.listAll(projectId, { episode_id: episodeId, status: 'completed' })) as { data?: Storyboard[] }).data ?? []
-    const isSerialProject = project.project_type === 'video_serial'
-    const sortedSbs = completedSbs
-      .filter((sb) => sb.image_url || (isSerialProject && sb.scene_group_key))
-      .sort((a, b) => a.sequence_number - b.sequence_number)
+    const sortedSbs = filterReadyVideoStoryboards(completedSbs)
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
     // Prefer LLM-refined prompt_used; fall back to raw scene_description for older storyboards.
     const sceneDescriptions = sortedSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
@@ -680,10 +709,10 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     const sceneAssetIds = sortedSbs.map((sb) => sb.asset_ids || [])
     const sceneDescription = sceneDescriptions.filter(Boolean).join(' ')
     const sceneGroupKeys = sortedSbs.map((sb) => sb.scene_group_key || '')
-    const isSerialScene = isSerialProject || sceneGroupKeys.some(Boolean)
+    const isSerialScene = sceneGroupKeys.some(Boolean) || project.project_type === 'video_serial'
 
     if (!imageUrls.some(Boolean)) {
-      toast({ title: isSerialProject ? '此集暂无可用首帧图片' : '此集暂无已完成的分镜图片', variant: 'destructive' })
+      toast({ title: isSerialScene ? '此集暂无可用首帧图片' : '此集暂无已完成的分镜图片', variant: 'destructive' })
       return
     }
 
@@ -728,7 +757,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
       const clarityLabel = VIDEO_CLARITY_OPTIONS.find((item) => item.key === (options?.clarity || selectedEpisodeVideoClarity))?.label ?? (options?.clarity || selectedEpisodeVideoClarity)
       toast({
         title: `第 ${ep?.episode_number ?? '?'} 集${storyboardVideoLabel}生成已启动（${label}）`,
-        description: `${selectedEpisodeVideoStyleLabel} / ${selectedEpisodeVideoMotionLabel} / ${frameLabel} / ${sizeLabel} / ${clarityLabel} · ${isSerialProject ? `${sceneGroupKeys.filter(Boolean).length} 个场景组` : `${imageUrls.filter(Boolean).length} 张图`}`,
+        description: `${selectedEpisodeVideoStyleLabel} / ${selectedEpisodeVideoMotionLabel} / ${frameLabel} / ${sizeLabel} / ${clarityLabel} · ${isSerialScene ? `${sceneGroupKeys.filter(Boolean).length} 个场景组` : `${imageUrls.filter(Boolean).length} 张图`}`,
         variant: 'success',
       })
       return true
@@ -763,12 +792,10 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
 
   const handleGenerateAllEpisodeVideos = async (modelName: string) => {
     const completedSbs = ((await storyboardAPI.listAll(projectId, { status: 'completed' })) as { data?: Storyboard[] }).data ?? []
-    const isSerialProject = project.project_type === 'video_serial'
-    const eligibleSbs = completedSbs
-      .filter((sb) => sb.image_url || (isSerialProject && sb.scene_group_key))
-      .sort((a, b) => a.sequence_number - b.sequence_number)
+    const eligibleSbs = filterReadyVideoStoryboards(completedSbs)
+    const hasSerialCandidate = eligibleSbs.some((sb) => isStoryboardSerialCandidate(sb)) || project.project_type === 'video_serial'
     if (eligibleSbs.length === 0 || !eligibleSbs.some((sb) => sb.image_url)) {
-      toast({ title: isSerialProject ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜图片', variant: 'destructive' })
+      toast({ title: hasSerialCandidate ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜图片', variant: 'destructive' })
       return
     }
     const byEpisode = new Map<number, string[]>()
@@ -806,7 +833,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
     setGeneratingAllVideos(true)
     try {
-      const isSerialScene = isSerialProject || eligibleSbs.some((sb) => sb.scene_group_key)
+      const isSerialScene = eligibleSbs.some((sb) => sb.scene_group_key) || project.project_type === 'video_serial'
       const episodeBatch = Array.from(byEpisode.entries()).map(([epId, urls]) => {
         const dlgs = byEpisodeDialogue.get(epId) ?? []
         const durs = byEpisodeDuration.get(epId) ?? []
@@ -831,7 +858,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
         }
       })
       await videoAPI.generateBatch(projectId, { episodes: episodeBatch, model_name: modelName, serial_scene: isSerialScene || undefined })
-      toast({ title: `已启动 ${episodeBatch.length} 集${storyboardVideoLabel}生成（共 ${isSerialProject ? `${eligibleSbs.filter((sb) => sb.scene_group_key).length} 个场景链` : `${eligibleSbs.filter((sb) => sb.image_url).length} 张图`})`, variant: 'success' })
+      toast({ title: `已启动 ${episodeBatch.length} 集${storyboardVideoLabel}生成（共 ${isSerialScene ? `${eligibleSbs.filter((sb) => sb.scene_group_key).length} 个场景链` : `${eligibleSbs.filter((sb) => sb.image_url).length} 张图`})`, variant: 'success' })
     } catch {
       toast({ title: `批量${storyboardVideoLabel}生成失败`, variant: 'destructive' })
     } finally {

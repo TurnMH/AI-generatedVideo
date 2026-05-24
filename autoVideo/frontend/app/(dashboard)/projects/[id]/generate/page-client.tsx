@@ -63,6 +63,7 @@ type VideoLaunchPlan = {
     scene_characters?: string[][]
     scene_asset_ids?: number[][]
     scene_description?: string
+    scene_group_keys?: string[]
   }>
   fallbackRequest?: {
     image_urls: string[]
@@ -74,8 +75,11 @@ type VideoLaunchPlan = {
     scene_characters?: string[][]
     scene_asset_ids?: number[][]
     scene_description?: string
+    serial_scene?: true
+    scene_group_keys?: string[]
   }
   totalClips: number
+  serialScene: boolean
 }
 
 export default function GeneratePage() {
@@ -208,9 +212,31 @@ export default function GeneratePage() {
   }
 
   const buildVideoLaunchPlan = (storyboards: Storyboard[]): VideoLaunchPlan => {
-    const eligibleSbs = [...storyboards]
-      .filter((sb) => sb.image_url)
-      .sort((a, b) => a.sequence_number - b.sequence_number)
+    const ordered = [...storyboards].sort((a, b) => a.sequence_number - b.sequence_number)
+    const serialGroups = new Map<string, Storyboard[]>()
+    const eligibleSbs: Storyboard[] = []
+
+    for (const sb of ordered) {
+      const isSerialCandidate = Boolean(sb.scene_group_key)
+      if (!sb.image_url && !isSerialCandidate) continue
+      if (!isSerialCandidate) {
+        eligibleSbs.push(sb)
+        continue
+      }
+      const key = `${sb.episode_id ?? 0}:${sb.scene_group_key}`
+      const group = serialGroups.get(key) ?? []
+      group.push(sb)
+      serialGroups.set(key, group)
+    }
+
+    for (const group of serialGroups.values()) {
+      const firstClip = group.find((sb) => sb.is_scene_first_clip) ?? group[0]
+      if (!firstClip?.image_url) continue
+      eligibleSbs.push(...group)
+    }
+
+    eligibleSbs.sort((a, b) => a.sequence_number - b.sequence_number)
+    const serialScene = eligibleSbs.some((sb) => Boolean(sb.scene_group_key))
     const byEpisode = new Map<number, {
       imageUrls: string[]
       descriptions: string[]
@@ -220,6 +246,7 @@ export default function GeneratePage() {
       moods: string[]
       characters: string[][]
       assetIds: number[][]
+      sceneGroupKeys: string[]
     }>()
 
     for (const sb of eligibleSbs) {
@@ -234,10 +261,11 @@ export default function GeneratePage() {
           moods: [],
           characters: [],
           assetIds: [],
+          sceneGroupKeys: [],
         })
       }
       const bucket = byEpisode.get(episodeId)!
-      bucket.imageUrls.push(sb.image_url)
+      bucket.imageUrls.push(sb.image_url || '')
       bucket.descriptions.push(sb.prompt_used || sb.scene_description || '')
       bucket.dialogues.push(sb.dialogue || '')
       bucket.durations.push(sb.duration || 0)
@@ -245,6 +273,7 @@ export default function GeneratePage() {
       bucket.moods.push(sb.mood || '')
       bucket.characters.push(sb.characters || [])
       bucket.assetIds.push(sb.asset_ids || [])
+      bucket.sceneGroupKeys.push(sb.scene_group_key || '')
     }
 
     const episodes = Array.from(byEpisode.entries())
@@ -260,6 +289,7 @@ export default function GeneratePage() {
         scene_characters: bucket.characters.some((items) => items.length > 0) ? bucket.characters : undefined,
         scene_asset_ids: bucket.assetIds.some((items) => items.length > 0) ? bucket.assetIds : undefined,
         scene_description: bucket.descriptions.filter(Boolean).join(' ') || undefined,
+        scene_group_keys: serialScene && bucket.sceneGroupKeys.some(Boolean) ? bucket.sceneGroupKeys : undefined,
       }))
 
     const fallbackBucket = byEpisode.get(0)
@@ -274,6 +304,8 @@ export default function GeneratePage() {
           scene_characters: fallbackBucket.characters.some((items) => items.length > 0) ? fallbackBucket.characters : undefined,
           scene_asset_ids: fallbackBucket.assetIds.some((items) => items.length > 0) ? fallbackBucket.assetIds : undefined,
           scene_description: fallbackBucket.descriptions.filter(Boolean).join(' ') || undefined,
+          serial_scene: serialScene || undefined,
+          scene_group_keys: serialScene && fallbackBucket.sceneGroupKeys.some(Boolean) ? fallbackBucket.sceneGroupKeys : undefined,
         }
       : undefined
 
@@ -281,6 +313,7 @@ export default function GeneratePage() {
       episodes,
       fallbackRequest,
       totalClips: eligibleSbs.length,
+      serialScene,
     }
   }
 
@@ -289,7 +322,7 @@ export default function GeneratePage() {
       const completedSb = ((await storyboardAPI.listAll(projectId, { status: 'completed' })) as { data?: Storyboard[] }).data ?? []
       const plan = buildVideoLaunchPlan(completedSb)
       if (plan.totalClips === 0) {
-        toast({ title: '暂无已完成的分镜图片，请先生成分镜', variant: 'destructive' })
+        toast({ title: plan.serialScene ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜', variant: 'destructive' })
         return
       }
       setVideoLaunchPlan(plan)
@@ -304,7 +337,7 @@ export default function GeneratePage() {
     setVideoLoading(true)
     try {
       if (videoLaunchPlan.episodes.length > 0) {
-        await videoAPI.generateBatch(projectId, { episodes: videoLaunchPlan.episodes })
+        await videoAPI.generateBatch(projectId, { episodes: videoLaunchPlan.episodes, serial_scene: videoLaunchPlan.serialScene || undefined })
       }
       if (videoLaunchPlan.fallbackRequest) {
         await videoAPI.generate(projectId, videoLaunchPlan.fallbackRequest)
