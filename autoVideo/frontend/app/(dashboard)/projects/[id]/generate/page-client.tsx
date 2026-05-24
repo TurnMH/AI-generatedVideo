@@ -86,8 +86,8 @@ export default function GeneratePage() {
   const router = useRouter()
   const params = useParams()
   const pathname = usePathname()
-  const routeBase = pathname?.includes('/ads/') ? '/ads' : '/projects'
-  const routeSegment = pathname?.includes('/ads/') ? 'ads' : 'projects'
+  const routeBase = '/projects'
+  const routeSegment = 'projects'
   const projectId = resolveProjectIdParam(params.id, pathname, routeSegment) ?? 0
   const hasValidProjectId = projectId > 0
   const { toast } = useToast()

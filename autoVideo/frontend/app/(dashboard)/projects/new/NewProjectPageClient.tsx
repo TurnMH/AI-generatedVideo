@@ -51,27 +51,10 @@ import { STYLE_OPTIONS, ASPECT_RATIOS, RESOLUTIONS, WATERMARK_POSITIONS, VIDEO_S
 import { initialFormData, type FormData } from '@/lib/projects/new/form-types'
 import { PROJECT_PRESET_TEMPLATES, summarizePresetTemplate, buildDraftScriptFileName, recommendPresetTemplate } from '@/lib/projects/new/preset-templates'
 import { MEDIA_STARTER_TEMPLATES, MEDIA_STYLE_OPTIONS, type MediaStarterTemplate } from '@/lib/projects/new/media-templates'
-import {
-  AD_CAMPAIGN_TEMPLATES,
-  AD_CAMPAIGN_TYPE_OPTIONS,
-  AD_DURATION_OPTIONS,
-  AD_OBJECTIVE_OPTIONS,
-  getAdOptionLabel,
-} from '@/lib/projects/new/ad-templates'
 import { mapVideoModelToRuntimeKey, findPreferredVideoModelId } from '@/lib/projects/models'
 import { StepIndicator } from '@/components/projects/new/StepIndicator'
 import { ModelSelector } from '@/components/projects/new/ModelSelector'
 import { CostEstimation } from '@/components/projects/new/CostEstimation'
-
-
-
-
-
-
-
-
-
-
 
 
 // ─── Page ────────────────────────────────────────────────────
@@ -218,7 +201,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
   }>
   const visibleModelSelectors = display.modelSelectorKeys.map((key) => ({ key, ...modelSelectorDefs[key] }))
   const mediaStarterTemplates = MEDIA_STARTER_TEMPLATES[mediaKind]
-  const showGenericPresetTemplates = display.showPresetTemplates && mediaKind !== 'ad'
+  const showGenericPresetTemplates = display.showPresetTemplates
   const visibleStyleTags = stripProjectMediaTags(form.style_tags)
   const mediaStyleOptions = useMemo(() => {
     const base = MEDIA_STYLE_OPTIONS[mediaKind]
@@ -256,9 +239,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
       reader.onload = () => {
         const text = reader.result as string
         update('scriptPreview', text.slice(0, 2000))
-        if (mediaKind === 'ad') {
-          update('ad_copy_text', text)
-        }
       }
       reader.readAsText(file)
     } else {
@@ -319,33 +299,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     toast({ title: `已应用模板：${preset.label}`, description: preset.desc, variant: 'success' })
   }
 
-  const applyAdCampaignTemplate = (templateKey: string) => {
-    const template = AD_CAMPAIGN_TEMPLATES.find((item) => item.key === templateKey)
-    if (!template) return
-    const preferredVideoModelId = findPreferredVideoModelId(videoModels, template.preferredVideoRuntimeKeys)
-    setForm((prev) => ({
-      ...prev,
-      style_tags: ensureProjectMediaTag(Array.from(template.styleTags), 'ad'),
-      ad_campaign_type: template.campaignType,
-      ad_objective: template.objective,
-      ad_target_audience: template.targetAudience,
-      ad_cta: template.cta,
-      ad_duration_preference: template.durationPreference,
-      video_model_id: preferredVideoModelId ?? prev.video_model_id,
-      video_style_preset: normalizeVideoStylePreset(template.videoStylePreset),
-      video_motion_mode: template.videoMotionMode,
-      storyboard_aspect_ratio: template.storyboardAspectRatio,
-      storyboard_resolution: template.storyboardResolution,
-      storyboard_duration: template.storyboardDuration,
-      consistency_strength: template.consistencyStrength,
-      target_episodes: template.targetEpisodes,
-      enable_dubbing: template.enableDubbing,
-      enable_subtitle: template.enableSubtitle,
-    }))
-    setSelectedPresetTemplate(template.key)
-    toast({ title: `已应用广告专题模板：${template.label}`, description: template.desc, variant: 'success' })
-  }
-
   useEffect(() => {
     if (typeof window === 'undefined') return
     const searchParams = new URLSearchParams(window.location.search)
@@ -374,9 +327,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
               { type: draft.scriptMimeType || 'text/plain;charset=utf-8' }
             )
             next.scriptPreview = draft.scriptContent.slice(0, 2000)
-            if (nextMediaKind === 'ad') {
-              next.ad_copy_text = draft.scriptContent
-            }
           }
 
           return next
@@ -444,11 +394,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         next.storyboard_aspect_ratio = '1:1'
       }
 
-      if (mediaKind === 'ad') {
-        if (!prev.ad_target_audience) next.ad_target_audience = '目标消费人群'
-        if (!prev.ad_cta) next.ad_cta = '立即了解'
-      }
-
       const unchanged =
         next.style_tags.length === prev.style_tags.length &&
         next.style_tags.every((tag, index) => tag === prev.style_tags[index]) &&
@@ -481,21 +426,10 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     if (!validateStep(step)) return
     setSubmitting(true)
     try {
-      const adBriefDescription = mediaKind === 'ad'
-        ? [
-            form.description.trim(),
-            `广告类型：${getAdOptionLabel(AD_CAMPAIGN_TYPE_OPTIONS, form.ad_campaign_type)}`,
-            `投放目标：${getAdOptionLabel(AD_OBJECTIVE_OPTIONS, form.ad_objective)}`,
-            `目标受众：${form.ad_target_audience.trim() || '未填写'}`,
-            `行动号召：${form.ad_cta.trim() || '未填写'}`,
-            `时长偏好：${getAdOptionLabel(AD_DURATION_OPTIONS, form.ad_duration_preference)}`,
-          ].filter(Boolean).join('\n')
-        : form.description.trim()
-
       const payload: Record<string, unknown> = {
         title: form.title.trim(),
-        description: adBriefDescription,
-        project_type: mediaKind === 'ad' ? 'video' : mediaKind,
+        description: form.description.trim(),
+        project_type: mediaKind,
         style_tags: ensureProjectMediaTag(stripProjectMediaTags(form.style_tags), mediaKind),
       }
 
@@ -543,15 +477,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_region ? { region: form.liveaction_region.trim() } : {}),
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_era ? { era: form.liveaction_era.trim() } : {}),
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_ethnicity ? { ethnicity: form.liveaction_ethnicity.trim() } : {}),
-          ...(mediaKind === 'ad'
-            ? {
-                campaign_type: form.ad_campaign_type,
-                campaign_objective: form.ad_objective,
-                target_audience: form.ad_target_audience.trim(),
-                call_to_action: form.ad_cta.trim(),
-                duration_preference: form.ad_duration_preference,
-              }
-            : {}),
         }
       }
       if (display.showConsistency) {
@@ -569,20 +494,15 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           storyboard_config: { ...(payload.storyboard_config ?? {}), video_model: videoRuntimeKey },
         } as Partial<Project>)
       }
-
-      const uploadableScriptFile = form.scriptFile ?? (
-        mediaKind === 'ad' && form.ad_copy_text.trim()
-          ? new File([form.ad_copy_text.trim()], `${form.title.trim() || 'ad-copy'}.txt`, { type: 'text/plain;charset=utf-8' })
-          : null
-      )
+      const uploadableScriptFile = form.scriptFile
 
       if (uploadableScriptFile) {
         await projectAPI.uploadScript(projectId, uploadableScriptFile)
-        // 上传了剧本/广告文案文件时，自动触发分集+资源提取+分镜提取全链路（fire-and-forget）
+        // 上传了剧本文件时，自动触发分集+资源提取+分镜提取全链路（fire-and-forget）
         void projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
       }
 
-      if (mediaKind === 'video' || mediaKind === 'ad') {
+      if (mediaKind === 'video') {
         window.localStorage.setItem(`project-video-style-selection:${projectId}`, form.video_style_preset)
         window.localStorage.setItem(`project-video-motion-selection:${projectId}`, form.video_motion_mode)
         if (videoRuntimeKey) {
@@ -592,7 +512,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
 
       const autoStart = uploadableScriptFile ? '?autoStart=1' : ''
       toast({ title: `${mediaMeta.label}项目已创建`, description: `「${form.title}」创建成功`, variant: 'success' })
-      router.push(mediaKind === 'video' || mediaKind === 'ad' ? `${mediaMeta.listHref}/${projectId}${autoStart}` : `${mediaMeta.listHref}?project=${projectId}`)
+      router.push(mediaKind === 'video' ? `${mediaMeta.listHref}/${projectId}${autoStart}` : `${mediaMeta.listHref}?project=${projectId}`)
     } catch {
       toast({ title: '创建失败', description: '请检查输入后重试', variant: 'destructive' })
     } finally {
@@ -795,69 +715,10 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 <div className="rounded-xl border border-surface-200 bg-surface-50/70 p-4">
                   <p className="text-sm font-medium text-surface-800">已切换为 {mediaMeta.label} 创建模式</p>
                   <p className="mt-1 text-xs leading-5 text-surface-500">
-                    当前页面已自动隐藏通用视频题材模板，优先展示更贴近广告投放与成片需求的专题配置。
+                    当前页面会根据所选介质展示对应的创建配置。
                   </p>
                 </div>
               )}
-
-              {mediaKind === 'ad' ? (
-                <div className="space-y-3 rounded-xl border border-surface-200 bg-surface-50/70 p-4">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <Label className="flex items-center gap-2 text-sm font-medium">
-                        <Sparkles className="h-4 w-4 text-amber-500" />
-                        广告专题模板
-                      </Label>
-                      <p className="mt-1 text-xs text-surface-500">
-                        直接带出广告类型、投放目标、CTA、时长偏好、推荐视频风格与分镜节奏，不再混用大而泛的题材模板。
-                      </p>
-                    </div>
-                    <Badge variant="outline" className="w-fit">
-                      当前：{selectedPresetTemplate === 'custom'
-                        ? '自定义'
-                        : AD_CAMPAIGN_TEMPLATES.find((item) => item.key === selectedPresetTemplate)?.label ?? '自定义'}
-                    </Badge>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {AD_CAMPAIGN_TEMPLATES.map((template) => {
-                      const active = template.key === selectedPresetTemplate
-                      return (
-                        <button
-                          key={template.key}
-                          type="button"
-                          onClick={() => applyAdCampaignTemplate(template.key)}
-                          className={`rounded-xl border p-4 text-left transition-colors ${
-                            active
-                              ? 'border-primary-300 bg-primary-50'
-                              : 'border-surface-200 bg-white hover:border-surface-300 hover:bg-surface-50'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="text-sm font-medium text-surface-800">{template.label}</p>
-                              <p className="mt-1 text-xs leading-5 text-surface-500">{template.desc}</p>
-                            </div>
-                            {active ? <Check className="h-4 w-4 text-primary-500" /> : null}
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-1.5">
-                            {template.tags.map((tag) => (
-                              <span key={tag} className="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] text-primary-700">
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                          <div className="mt-3 grid gap-2 text-[11px] text-surface-500 sm:grid-cols-2">
-                            <span>目标：{getAdOptionLabel(AD_OBJECTIVE_OPTIONS, template.objective)}</span>
-                            <span>CTA：{template.cta}</span>
-                            <span>形式：{getAdOptionLabel(AD_CAMPAIGN_TYPE_OPTIONS, template.campaignType)}</span>
-                            <span>时长：{getAdOptionLabel(AD_DURATION_OPTIONS, template.durationPreference)}</span>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
 
               {mediaStarterTemplates.length > 0 ? (
                 <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
@@ -981,77 +842,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 </div>
               )}
 
-              {mediaKind === 'ad' ? (
-                <div className="grid gap-4 rounded-xl border border-surface-200 bg-white p-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>广告类型</Label>
-                    <Select value={form.ad_campaign_type} onValueChange={(v) => update('ad_campaign_type', v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {AD_CAMPAIGN_TYPE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>投放目标</Label>
-                    <Select value={form.ad_objective} onValueChange={(v) => update('ad_objective', v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {AD_OBJECTIVE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>目标受众</Label>
-                    <Input
-                      placeholder="例如：25-35 岁新中产女性 / 电商高意向用户"
-                      value={form.ad_target_audience}
-                      onChange={(e) => update('ad_target_audience', e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>行动号召（CTA）</Label>
-                    <Input
-                      placeholder="例如：立即下单 / 点击了解 / 预约试用"
-                      value={form.ad_cta}
-                      onChange={(e) => update('ad_cta', e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label>广告时长偏好</Label>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      {AD_DURATION_OPTIONS.map((option) => {
-                        const active = option.value === form.ad_duration_preference
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => {
-                              update('ad_duration_preference', option.value)
-                              update('storyboard_duration', option.storyboardDuration)
-                            }}
-                            className={`rounded-lg border px-3 py-3 text-left transition-colors ${
-                              active
-                                ? 'border-primary-300 bg-primary-50'
-                                : 'border-surface-200 bg-surface-50 hover:border-surface-300 hover:bg-white'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm font-medium text-surface-800">{option.label}</span>
-                              {active ? <Check className="h-4 w-4 text-primary-500" /> : null}
-                            </div>
-                            <p className="mt-1 text-xs text-surface-500">默认单镜头 {option.storyboardDuration} 秒</p>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </>
           )}
 
@@ -1420,28 +1210,6 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
             <>
               <div className="space-y-2">
                 <Label>{display.scriptLabel}</Label>
-                {mediaKind === 'ad' ? (
-                  <div className="space-y-2 rounded-xl border border-surface-200 bg-surface-50/70 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-medium text-surface-800">广告文案输入</p>
-                        <p className="mt-1 text-xs text-surface-500">可直接粘贴广告口播、卖点文案、分镜文案或投放脚本；如果不上传文件，将自动把这里的内容作为文案文件提交。</p>
-                      </div>
-                      <Badge variant="outline">支持直接输入</Badge>
-                    </div>
-                    <Textarea
-                      placeholder="例如：前 3 秒钩子、核心卖点、用户痛点、产品展示、CTA……"
-                      value={form.ad_copy_text}
-                      onChange={(e) => {
-                        update('ad_copy_text', e.target.value)
-                        if (!form.scriptFile) {
-                          update('scriptPreview', e.target.value.slice(0, 2000))
-                        }
-                      }}
-                      rows={8}
-                    />
-                  </div>
-                ) : null}
                 <input
                   ref={scriptInputRef}
                   type="file"
@@ -1487,13 +1255,11 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                     title={display.scriptUploadHint}
                   >
                     <Upload className="h-8 w-8" />
-                    <span className="text-sm">{mediaKind === 'ad' ? '上传广告文案文件（可选）' : display.scriptUploadTitle}</span>
-                    <span className="text-xs">{mediaKind === 'ad' ? '支持 .txt、.md、.docx；也可以只用上面的输入框直接创建。' : display.scriptUploadHint}</span>
+                    <span className="text-sm">{display.scriptUploadTitle}</span>
+                    <span className="text-xs">{display.scriptUploadHint}</span>
                   </button>
                 )}
               </div>
-
-              
 
               {display.showCostEstimation && (
                 <CostEstimation

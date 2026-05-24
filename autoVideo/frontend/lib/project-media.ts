@@ -1,10 +1,9 @@
 import type { Project } from '@/types'
 
-export type ProjectMediaKind = 'video' | 'ad' | 'video_serial' | 'comics' | 'music' | 'image'
+export type ProjectMediaKind = 'video' | 'video_serial' | 'comics' | 'music' | 'image'
 
 export const PROJECT_MEDIA_TAGS: Record<ProjectMediaKind, string> = {
   video: 'media:video',
-  ad: 'media:ad',
   video_serial: 'media:video_serial',
   comics: 'media:comics',
   music: 'media:music',
@@ -43,20 +42,6 @@ export const PROJECT_MEDIA_META: Record<
     emptyDescription: '点击「新建视频项目」开始创建您的第一个 AI 视频项目',
     selectLabel: '选择视频项目',
     selectPlaceholder: '请选择视频项目',
-  },
-  ad: {
-    label: '广告',
-    listTitle: '广告项目列表',
-    countLabel: '个广告项目',
-    listHref: '/ads',
-    createHref: '/ads/new',
-    createLabel: '新建广告项目',
-    createTitle: '新建广告项目',
-    createDescription: '创建一个面向广告创意、分镜和投放视频的项目',
-    emptyTitle: '还没有广告项目',
-    emptyDescription: '点击「新建广告项目」开始创建您的第一个广告视频项目',
-    selectLabel: '选择广告项目',
-    selectPlaceholder: '请选择广告项目',
   },
   video_serial: {
     label: '视频（串行）',
@@ -117,7 +102,7 @@ export const PROJECT_MEDIA_META: Record<
 }
 
 export function normalizeProjectMediaKind(raw?: string | null): ProjectMediaKind {
-  if (raw === 'comics' || raw === 'music' || raw === 'image' || raw === 'video' || raw === 'ad' || raw === 'video_serial') {
+  if (raw === 'comics' || raw === 'music' || raw === 'image' || raw === 'video' || raw === 'video_serial') {
     return raw
   }
   return 'video'
@@ -137,7 +122,6 @@ export function getProjectMediaKind(project: Pick<Project, 'style_tags' | 'proje
     return project.project_type
   }
   const tags = project.style_tags ?? []
-  if (tags.includes(PROJECT_MEDIA_TAGS.ad)) return 'ad'
   if (tags.includes(PROJECT_MEDIA_TAGS.comics)) return 'comics'
   if (tags.includes(PROJECT_MEDIA_TAGS.music)) return 'music'
   if (tags.includes(PROJECT_MEDIA_TAGS.image)) return 'image'

@@ -28,32 +28,6 @@ export const MEDIA_STARTER_TEMPLATES: Record<ProjectMediaKind, MediaStarterTempl
       consistencyStrength: 84,
     },
   ],
-  ad: [
-    {
-      key: 'ad-performance-short',
-      label: '信息流短广告',
-      desc: '适合新品投放、品牌活动预热和信息流短视频广告。',
-      title: '信息流短广告项目',
-      description: '面向信息流投放的广告视频项目，强调卖点清晰、节奏明快、镜头转化效率和品牌识别。',
-      styleTags: ['广告', '信息流', '品牌短片', '转化导向'],
-      targetEpisodes: 6,
-      storyboardAspectRatio: '9:16',
-      storyboardResolution: '1080x1920',
-      consistencyStrength: 86,
-    },
-    {
-      key: 'ad-brand-film',
-      label: '品牌质感广告',
-      desc: '适合品牌主视觉、调性塑造和高质感宣传片。',
-      title: '品牌质感广告项目',
-      description: '强调品牌气质、镜头质感和统一视觉风格的广告视频项目，适合高质量品牌宣传。',
-      styleTags: ['广告', '品牌宣传', '高质感', '产品主视觉'],
-      targetEpisodes: 8,
-      storyboardAspectRatio: '16:9',
-      storyboardResolution: '1920x1080',
-      consistencyStrength: 90,
-    },
-  ],
   video_serial: [],
   comics: [
     {
@@ -126,11 +100,10 @@ export const MEDIA_STARTER_TEMPLATES: Record<ProjectMediaKind, MediaStarterTempl
 }
 
 export const MEDIA_STYLE_OPTIONS: Record<ProjectMediaKind, string[]> = {
-  video: ['国风', '史诗', '写实', '动漫', '悬疑', '治愈', '都市夜景', '纪录片', '科幻', '复古胶片', '广告感', '战争'],
-  ad: ['广告', '信息流', '品牌宣传', '高质感', '产品特写', '快节奏', '转化导向', '时尚', '生活方式', '新品发布', '口播', '电商'],
-  video_serial: ['国风', '史诗', '写实', '动漫', '悬疑', '治愈', '都市夜景', '纪录片', '科幻', '复古胶片', '广告感', '战争'],
+  video: ['国风', '史诗', '写实', '动漫', '悬疑', '治愈', '都市夜景', '纪录片', '科幻', '复古胶片', '战争'],
+  video_serial: ['国风', '史诗', '写实', '动漫', '悬疑', '治愈', '都市夜景', '纪录片', '科幻', '复古胶片', '战争'],
   comics: ['漫画', '动漫', '国风', '热血', '仙侠', '黑白网点', '夸张透视', '条漫', '角色演出', '校园', '奇幻', '悬疑'],
   music: ['BGM', '主题曲', '国风', '史诗', '热血', '治愈', '悬疑', '电子', '钢琴', '弦乐', '片尾', '战斗'],
-  image: ['海报', '主视觉', '人物设定', '场景概念', '写实', '水墨', '插画', '国风', '广告感', '极简', '赛博朋克', '封面'],
+  image: ['海报', '主视觉', '人物设定', '场景概念', '写实', '水墨', '插画', '国风', '极简', '赛博朋克', '封面'],
 }
 

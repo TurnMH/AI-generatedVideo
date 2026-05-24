@@ -13,7 +13,7 @@ export function parseProjectIdParam(param: string | string[] | undefined): numbe
 
 export function parseProjectIdFromPathname(
   pathname: string | null | undefined,
-  routeSegment: 'projects' | 'ads' | 'video-serial'
+  routeSegment: 'projects' | 'video-serial'
 ): number | null {
   if (!pathname) return null
 
@@ -27,7 +27,7 @@ export function parseProjectIdFromPathname(
 export function resolveProjectIdParam(
   param: string | string[] | undefined,
   pathname: string | null | undefined,
-  routeSegment: 'projects' | 'ads' | 'video-serial'
+  routeSegment: 'projects' | 'video-serial'
 ): number | null {
   const parsed = parseProjectIdParam(param)
   if (parsed) return parsed

@@ -28,12 +28,6 @@ export interface FormData {
   storyboard_duration: number
   consistency_strength: number
   video_motion_mode: string
-  ad_campaign_type: string
-  ad_objective: string
-  ad_target_audience: string
-  ad_cta: string
-  ad_duration_preference: string
-  ad_copy_text: string
 }
 
 export const initialFormData: FormData = {
@@ -66,10 +60,4 @@ export const initialFormData: FormData = {
   storyboard_duration: 5,
   consistency_strength: 75,
   video_motion_mode: 'gentle',
-  ad_campaign_type: 'performance',
-  ad_objective: 'conversion',
-  ad_target_audience: '',
-  ad_cta: '',
-  ad_duration_preference: '15s',
-  ad_copy_text: '',
 }

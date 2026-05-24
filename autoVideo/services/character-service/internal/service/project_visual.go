@@ -466,8 +466,6 @@ func visualCueForStyleTag(tag string) string {
 		return "整体保持真实材质、自然肤感和非卡通化表达（realistic textures, natural skin detail）"
 	case "纪录片":
 		return "优先真实场景、自然光与纪实视角（documentary tone, natural light, real locations）"
-	case "广告感":
-		return "突出商业级质感、干净布光与高端成片感（commercial polish, premium lighting）"
 	case "欧美电影感", "美剧感":
 		return "参考真人影视构图、真实场景与电影级光影层次（live-action cinematic framing, real-world sets）"
 	case "都市夜景":
@@ -770,7 +768,7 @@ func eraFacetsZH(era string) (wardrobe, arch, props string) {
 		props = "时代（未来）器物：悬浮全息界面、无人机、精密几何金属器（Futuristic props: holographic displays, drones, geometric machined artifacts）"
 	case liveActionVisualKeyword(lower, "现代", "modern", "contemporary", "当代", "现在"):
 		wardrobe = "时代（当代）服饰：当季流行服装、常见休闲装与正装（Contemporary garments: current-season fashion, casual and business attire）"
-		arch = "时代（当代）建筑：玻璃幕墙钢混建筑、电动汽车、数字屏幕广告（Contemporary architecture: glass-steel-concrete buildings, EVs, digital signage）"
+		arch = "时代（当代）建筑：玻璃幕墙钢混建筑、电动汽车、数字屏幕（Contemporary architecture: glass-steel-concrete buildings, EVs, digital signage）"
 		props = "时代（当代）器物：智能手机、笔记本电脑、数字屏幕、LED 灯具（Contemporary props: smartphones, laptops, digital screens, LED lighting）"
 	case liveActionVisualKeyword(lower, "古代", "ancient", "古典", "classical"):
 		wardrobe = "时代（古代）服饰：手缝纤维织物、天然染色、传统配饰（Ancient garments: hand-sewn fibers, natural dyes, period accessories）"

@@ -197,8 +197,6 @@ func storyboardStyleTagCue(tag string) string {
 		return "realistic materials, natural texture detail, grounded visual treatment."
 	case "纪录片":
 		return "documentary tone, natural light, real-world observation."
-	case "广告感":
-		return "commercial polish, premium lighting, refined hero composition."
 	case "欧美电影感", "美剧感":
 		return "cinematic live-action framing, authentic locations, layered production lighting."
 	case "都市夜景":

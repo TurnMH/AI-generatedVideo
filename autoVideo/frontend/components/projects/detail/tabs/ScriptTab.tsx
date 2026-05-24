@@ -143,27 +143,6 @@ function resolveDraftTargetEpisodes(
   return targetEpisodes > 0 ? String(targetEpisodes) : ''
 }
 
-function getAdMeta(project: Project): {
-  campaignType: string
-  objective: string
-  targetAudience: string
-  callToAction: string
-  durationPreference: string
-} {
-  const config = (project.storyboard_config ?? {}) as unknown as Record<string, unknown>
-  const pick = (key: string) => {
-    const value = config[key]
-    return typeof value === 'string' ? value.trim() : ''
-  }
-  return {
-    campaignType: pick('campaign_type'),
-    objective: pick('campaign_objective'),
-    targetAudience: pick('target_audience'),
-    callToAction: pick('call_to_action'),
-    durationPreference: pick('duration_preference'),
-  }
-}
-
 export function ScriptTab({
   projectId,
   project,
@@ -176,19 +155,6 @@ export function ScriptTab({
   onAutoStoryboardQueued?: () => void
 }) {
   const { toast } = useToast()
-  const isAdProject = (project.style_tags ?? []).includes('media:ad')
-  const adMeta = useMemo(() => getAdMeta(project), [project])
-  const adPromptHint = useMemo(() => {
-    if (!isAdProject) return ''
-    const parts = [
-      adMeta.campaignType ? `广告题材：${adMeta.campaignType}` : '',
-      adMeta.objective ? `投放目标：${adMeta.objective}` : '',
-      adMeta.targetAudience ? `目标受众：${adMeta.targetAudience}` : '',
-      adMeta.callToAction ? `CTA：${adMeta.callToAction}` : '',
-      adMeta.durationPreference ? `时长偏好：${adMeta.durationPreference}` : '',
-    ].filter(Boolean)
-    return parts.join('｜')
-  }, [adMeta, isAdProject])
   const getApiErrorMessage = (error: unknown) => {
     const response = (error as { response?: { data?: { message?: string; error?: string } } })?.response?.data
     return response?.message || response?.error || (error as { message?: string })?.message || ''
@@ -906,7 +872,7 @@ export function ScriptTab({
       const updated: Episode = raw?.data ?? (res as unknown as Episode)
       if (selectedEpisode?.id === ep.id) setSelectedEpisode(updated)
       mutateEpisodes()
-      toast({ title: isAdProject ? '广告文案格式化完成' : '剧本格式化完成', description: isAdProject ? '已按当前广告题材、目标受众与 CTA 生成更适合投放的广告脚本格式，可在详情中查看并确认应用。' : '已生成优化后的剧本格式内容，可在详情中查看并确认应用', variant: 'success' })
+      toast({ title: '剧本格式化完成', description: '已生成优化后的剧本格式内容，可在详情中查看并确认应用', variant: 'success' })
     } catch {
       toast({ title: '格式转化失败，请重试', variant: 'destructive' })
     } finally {
@@ -922,7 +888,7 @@ export function ScriptTab({
       const updated: Episode = raw?.data ?? (res as unknown as Episode)
       if (selectedEpisode?.id === ep.id) setSelectedEpisode(updated)
       mutateEpisodes()
-      toast({ title: '已应用优化内容', description: isAdProject ? '优化后的广告脚本格式已替换原有正文。' : '优化后的剧本格式已替换原有正文', variant: 'success' })
+      toast({ title: '已应用优化内容', description: '优化后的剧本格式已替换原有正文', variant: 'success' })
     } catch {
       toast({ title: '应用失败，请重试', variant: 'destructive' })
     } finally {
@@ -951,7 +917,7 @@ export function ScriptTab({
     try {
       await projectAPI.autoOptimizeReview(projectId, ep.id)
       // 202 Accepted — backend processes async; spinner kept until polling detects completion
-      toast({ title: 'AI 一键优化已启动', description: isAdProject ? '正在结合当前广告题材、目标受众与 CTA 在后台处理，完成后状态将自动更新。' : '正在后台处理，完成后状态将自动更新' })
+      toast({ title: 'AI 一键优化已启动', description: '正在后台处理，完成后状态将自动更新' })
     } catch {
       setAutoOptimizingEpisode(null)
       toast({ title: '一键优化启动失败，请重试', variant: 'destructive' })
@@ -962,7 +928,7 @@ export function ScriptTab({
     setBatchOptimizing(true)
     try {
       await projectAPI.batchOptimize(projectId)
-      toast({ title: isAdProject ? '批量广告脚本格式化已启动' : '批量格式转化已启动', description: isAdProject ? '后台会结合当前广告题材、目标受众与 CTA 处理所有广告片段，完成后状态将自动更新。' : '后台正在处理所有分集，完成后状态将自动更新', variant: 'success' })
+      toast({ title: '批量格式转化已启动', description: '后台正在处理所有分集，完成后状态将自动更新', variant: 'success' })
     } catch {
       toast({ title: '批量格式转化启动失败', variant: 'destructive' })
     } finally {
@@ -1075,12 +1041,12 @@ export function ScriptTab({
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">{isAdProject ? '广告文案文件' : '剧本文件'}</CardTitle>
+            <CardTitle className="text-base">剧本文件</CardTitle>
             <div className="flex gap-2">
               <input ref={fileRef} type="file" accept=".txt,.pdf,.docx,.md" className="hidden" onChange={handleUpload} />
-              <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} title={isAdProject ? '上传新版本的广告文案文件' : '上传新版本的剧本文件'}>
+              <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()} title="上传新版本的剧本文件">
                 <Upload className="mr-1.5 h-3.5 w-3.5" />
-                {isAdProject ? '上传新版本文案' : '上传新版本'}
+                上传新版本
               </Button>
             </div>
           </div>
@@ -1092,14 +1058,14 @@ export function ScriptTab({
                 <div className="flex flex-wrap items-center gap-4">
                   <span className="flex items-center gap-1.5">
                     <FileText className="h-4 w-4 text-primary-500" />
-                    {project.script_file_url.split('/').pop() || (isAdProject ? '广告文案文件' : '剧本文件')}
+                    {project.script_file_url.split('/').pop() || '剧本文件'}
                   </span>
                   <span>{formatBytes(project.script_file_size || 0)}</span>
                   <span>上传于 {format(new Date(project.updated_at), 'yyyy-MM-dd HH:mm')}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {hasScriptText && (
-                    <Button size="sm" variant="outline" onClick={() => setShowScriptPreviewDialog(true)} title={isAdProject ? '查看广告文案全文' : '查看剧本全文'}>
+                    <Button size="sm" variant="outline" onClick={() => setShowScriptPreviewDialog(true)} title="查看剧本全文">
                       <Eye className="mr-1.5 h-3.5 w-3.5" />
                       查看全文
                     </Button>
@@ -1108,7 +1074,7 @@ export function ScriptTab({
                     size="sm"
                     variant="outline"
                     onClick={() => window.open(project.script_file_url, '_blank', 'noopener,noreferrer')}
-                    title={isAdProject ? '打开原始广告文案文件' : '打开原始剧本文件'}
+                    title="打开原始剧本文件"
                   >
                     <Download className="mr-1.5 h-3.5 w-3.5" />
                     打开原文件
@@ -1119,7 +1085,7 @@ export function ScriptTab({
 
             </div>
           ) : (
-            <p className="text-sm text-surface-400">{isAdProject ? '尚未上传广告文案文件' : '尚未上传剧本文件'}</p>
+            <p className="text-sm text-surface-400">尚未上传剧本文件</p>
           )}
         </CardContent>
       </Card>
@@ -1128,16 +1094,16 @@ export function ScriptTab({
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">{isAdProject ? '广告片段列表' : '分集列表'}</CardTitle>
+            <CardTitle className="text-base">分集列表</CardTitle>
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={handleOpenCreateEpisode}
-                title={isAdProject ? '手动补充一个广告片段，可直接用于素材、分镜和成片流程' : '手动补充一集，可直接用于资源提取、分镜和视频流程'}
+                title="手动补充一集，可直接用于资源提取、分镜和视频流程"
               >
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
-                {isAdProject ? '手动创建广告片段' : '手动创建分集'}
+                手动创建分集
               </Button>
               <Button
                 size="sm"
@@ -1376,7 +1342,7 @@ export function ScriptTab({
                   </div>
                   <p className="mt-1 text-sm leading-6 text-primary-800">{splitProgressSummary}</p>
                   <p className="mt-1 text-xs leading-5 text-primary-600">
-                    {isAdProject ? '广告片段拆分、素材提取、分镜格式化等进度已统一汇总到上方“广告文案与片段”总览，这里仅保留当前阶段摘要。片段完成后会自动出现在下方列表。' : '分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。'}
+                    分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。
                   </p>
                   {splitProgressPercent > 0 ? (
                     <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-primary-100">
@@ -1389,7 +1355,7 @@ export function ScriptTab({
               {scriptProgressStalled && (
                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>{isAdProject ? '广告文案解析超过 2 分钟无进展，可能已卡住。' : '剧本解析超过 2 分钟无进展，可能已卡住。'}</span>
+                    <span>剧本解析超过 2 分钟无进展，可能已卡住。</span>
                     <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
                       <RefreshCw className="mr-1 h-3 w-3" />
                       重新拉起
@@ -1521,7 +1487,7 @@ export function ScriptTab({
             </div>
           ) : episodes.length === 0 ? (
             <div className="py-6 text-center text-sm text-surface-400">
-              {isAdProject ? '暂无广告片段，点击右上角“手动创建广告片段”添加，或上传广告文案后由 AI 自动拆分。' : '暂无分集，点击右上角「手动创建分集」添加，或上传剧本后 AI 自动分集。'}
+              暂无分集，点击右上角「手动创建分集」添加，或上传剧本后 AI 自动分集。
             </div>
           ) : (
             <>
@@ -1550,11 +1516,6 @@ export function ScriptTab({
                     <p className="mt-0.5 text-xs text-violet-600">
                       {formattingCount > 0 ? `当前 ${formattingCount} 集正在格式化` : `剩余 ${pendingCount} 集待处理`}，格式化完成后即可进入各集工作台进行资源生成与出图
                     </p>
-                    {isAdProject && adPromptHint && (
-                      <p className="mt-1 text-[11px] text-violet-700">
-                        当前广告格式化会联动：{adPromptHint}
-                      </p>
-                    )}
                     <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
                       <div
                         className="h-full rounded-full bg-violet-500 transition-all duration-700"
@@ -1741,10 +1702,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-purple-600 hover:bg-purple-50 hover:text-purple-800"
                         onClick={() => { handleAutoOptimizeReview(ep); setSelectedEpisode(ep) }}
                         disabled={autoOptimizingEpisode === ep.id || optimizingEpisode === ep.id || reviewingEpisode === ep.id}
-                        title={isAdProject ? `AI 自动完成：广告脚本格式化 → 审查 → 弥补不足${adPromptHint ? `（${adPromptHint}）` : ''}` : 'AI 自动完成：转剧本格式 → 审查 → 弥补不足'}
+                        title="AI 自动完成：转剧本格式 → 审查 → 弥补不足"
                       >
                         {autoOptimizingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
-                        {isAdProject ? 'AI 广告优化' : 'AI 一键优化'}
+                        AI 一键优化
                       </Button>
                       <Button
                         size="sm"
@@ -1752,10 +1713,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-amber-600 hover:bg-amber-50 hover:text-amber-800"
                         onClick={() => handleOptimizeEpisode(ep)}
                         disabled={optimizingEpisode === ep.id || autoOptimizingEpisode === ep.id}
-                        title={isAdProject ? `将本片段原始广告文案转化为更适合投放的广告脚本格式${adPromptHint ? `（${adPromptHint}）` : ''}` : '将本集小说原文转化为标准剧本格式'}
+                        title="将本集小说原文转化为标准剧本格式"
                       >
                         {optimizingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        {isAdProject ? '转广告脚本格式' : '转剧本格式'}
+                        转剧本格式
                         {ep.optimize_status === 'done' && <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] text-amber-700">✓</span>}
                       </Button>
                       {ep.optimize_status === 'done' && ep.optimized_text && (
@@ -1765,7 +1726,7 @@ export function ScriptTab({
                           className="h-6 px-2 text-xs text-amber-500 hover:bg-amber-50"
                           onClick={() => handleApplyOptimizedText(ep)}
                           disabled={applyingOptimized === ep.id}
-                          title={isAdProject ? '将优化后的广告脚本格式应用为正式内容' : '将优化后的剧本格式应用为正式内容'}
+                          title="将优化后的剧本格式应用为正式内容"
                         >
                           {applyingOptimized === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
                           确认应用
@@ -1777,10 +1738,10 @@ export function ScriptTab({
                         className="h-6 px-2 text-xs text-green-600 hover:bg-green-50 hover:text-green-800"
                         onClick={() => { handleReviewEpisode(ep); setSelectedEpisode(ep) }}
                         disabled={reviewingEpisode === ep.id || autoOptimizingEpisode === ep.id}
-                        title={isAdProject ? 'AI 审查当前广告脚本的投放表达、信息完整度与一致性' : 'AI 审查本集剧本质量与一致性'}
+                        title="AI 审查本集剧本质量与一致性"
                       >
                         {reviewingEpisode === ep.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        {isAdProject ? 'AI 审查广告脚本' : 'AI 审查'}
+                        AI 审查
                         {ep.review_status === 'done' && <span className="ml-1 rounded bg-green-100 px-1 text-[9px] text-green-700">✓</span>}
                       </Button>
                     </div>
@@ -2001,11 +1962,11 @@ export function ScriptTab({
       <Dialog open={showScriptPreviewDialog} onOpenChange={setShowScriptPreviewDialog}>
         <DialogContent className="max-w-5xl">
           <DialogHeader>
-            <DialogTitle>{isAdProject ? '广告文案全文' : '剧本全文'}</DialogTitle>
+            <DialogTitle>剧本全文</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-surface-500">
-              <span>{project.script_file_url.split('/').pop() || (isAdProject ? '广告文案文件' : '剧本文件')}</span>
+              <span>{project.script_file_url.split('/').pop() || '剧本文件'}</span>
               <span>{scriptText.length} 字</span>
             </div>
             <div className="max-h-[70vh] overflow-auto rounded-lg border bg-surface-50 p-4">
