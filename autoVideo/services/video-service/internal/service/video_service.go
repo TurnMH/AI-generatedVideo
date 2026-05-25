@@ -958,6 +958,11 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 
 	// Mark as processing + track compose stages
 	_ = s.repo.UpdateTaskStatus(ctx, taskID, model.StatusProcessing, "", "", 0)
+	composeRouteExplain := explainVideoGeneratorRoute(task.ModelName)
+	applyRouteExplainToTask(task, firstNonEmpty(task.RequestedModel, task.ModelName), composeRouteExplain)
+	if err := s.repo.UpdateTask(ctx, task); err != nil {
+		s.logger.Warn("compose: persist task route metadata failed", zap.Int64("task_id", taskID), zap.Error(err))
+	}
 
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageConcating)
 	transitionPlan2, transitionDurations2 := resolveTransitionPlan(task.RenderConfig, len(clipURLs), composedSceneGroupKeys, composedSceneDescs, composedCameras, composedMoods)
@@ -1113,11 +1118,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if modelName != "" {
 		task.ModelName = resolvedModelName
 	}
-	task.RequestedModel = resolvedModelName
-	task.RoutedGenerator = routeExplain.RoutedGenerator
-	task.RuntimeProvider = routeExplain.RuntimeProvider
-	task.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, resolvedModelName)
-	task.RouteReason = routeExplain.RouteReason
+	applyRouteExplainToTask(task, resolvedModelName, routeExplain)
 	if err := s.repo.UpdateTask(ctx, task); err != nil {
 		return err
 	}
