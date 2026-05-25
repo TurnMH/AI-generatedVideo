@@ -176,6 +176,8 @@
 
 `POST /api/v1/projects/:pid/dubbing/voices/recommend`
 
+`POST /api/v1/projects/:pid/dubbing/voices/recommend-batch`
+
 `POST /api/v1/projects/:pid/dubbing/generate-batch`
 
 `GET /api/v1/projects/:pid/dubbing/tasks`
@@ -196,6 +198,13 @@
 - 请求体支持：`name` `gender` `age_group` `category` `style`
 - 返回 `recommended`：按角色条件挑出的推荐音色
 - 当前适合角色页、角色批量绑定页直接接入
+
+批量角色推荐接口说明：
+- `POST /api/v1/projects/:pid/dubbing/voices/recommend-batch`
+- 请求体：`{ "items": [...] }`
+- 每个 item 支持：`name` `gender` `age_group` `category` `style`
+- 返回 `items`：逐角色推荐结果
+- 返回 `summary.characters` 与 `summary.recommended_total`
 
 ### 视频内容提取（MVP）
 

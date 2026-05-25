@@ -60,6 +60,10 @@ type recommendVoiceReq struct {
 	Style    string `json:"style"`
 }
 
+type batchRecommendVoiceReq struct {
+	Items []recommendVoiceReq `json:"items" binding:"required,min=1"`
+}
+
 func compactVoiceDebugSummary(raw map[string]any) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -207,6 +211,40 @@ func (h *DubbingHandler) RecommendVoice(c *gin.Context) {
 		"recommended": recommended,
 		"summary": gin.H{
 			"count": len(recommended),
+		},
+	})
+}
+
+func (h *DubbingHandler) RecommendVoicesBatch(c *gin.Context) {
+	var req batchRecommendVoiceReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	items := make([]gin.H, 0, len(req.Items))
+	totalRecommended := 0
+	for _, item := range req.Items {
+		recommended := service.RecommendVoiceCatalog(item.Gender, item.AgeGroup, item.Category, item.Style)
+		totalRecommended += len(recommended)
+		items = append(items, gin.H{
+			"character": gin.H{
+				"name":      item.Name,
+				"gender":    item.Gender,
+				"age_group": item.AgeGroup,
+				"category":  item.Category,
+				"style":     item.Style,
+			},
+			"recommended": recommended,
+			"summary": gin.H{
+				"count": len(recommended),
+			},
+		})
+	}
+	response.OK(c, gin.H{
+		"items": items,
+		"summary": gin.H{
+			"characters":        len(req.Items),
+			"recommended_total": totalRecommended,
 		},
 	})
 }
