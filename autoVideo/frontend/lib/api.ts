@@ -638,6 +638,27 @@ export interface DubbingTaskCreateResponse {
   }
 }
 
+export interface VoiceCatalogItem {
+  key: string
+  provider?: string
+  voice_name?: string
+  locale?: string
+  gender?: string
+  style?: string
+  suggested_scenes?: string[]
+  auto_assignable?: boolean
+  category?: string
+}
+
+export interface VoiceCatalogResponse {
+  code: number
+  data: {
+    items?: VoiceCatalogItem[]
+    recommended?: VoiceCatalogItem[]
+    summary?: Record<string, unknown>
+  }
+}
+
 export const dubbingAPI = {
   generate: (
     projectId: number,
@@ -706,6 +727,8 @@ export const dubbingAPI = {
     api.post(`/api/v1/projects/${projectId}/dubbing/tasks/retry-batch`, { items }),
   listVoices: () =>
     api.get<{ code: number; data: { voices: { key: string; name: string; label: string }[] } }>('/api/v1/voices'),
+  listVoiceCatalog: (projectId: number) =>
+    api.get<VoiceCatalogResponse>(`/api/v1/projects/${projectId}/dubbing/voices`),
   generateForStoryboard: (
     projectId: number,
     storyboardId: number,

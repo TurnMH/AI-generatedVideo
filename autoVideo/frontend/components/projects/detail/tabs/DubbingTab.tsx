@@ -160,10 +160,10 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const [retryingGroup, setRetryingGroup] = useState<'dubbing' | 'subtitle' | null>(null)
   const [aggregatingDialogues, setAggregatingDialogues] = useState<Record<number, boolean>>({})
 
-  // Dynamically fetch voice list; fall back to static list if API unavailable
+  // Dynamically fetch project voice catalog; fall back to static list if API unavailable
   const { data: voicesDataDub } = useSWR(
-    'voices',
-    () => dubbingAPI.listVoices().then((r) => (r as { data?: { voices?: { key: string; label: string }[] } }).data?.voices ?? null),
+    projectId ? ['project-voice-catalog', projectId] : null,
+    () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
   const VOICE_OPTIONS = [

@@ -295,10 +295,10 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const selectedChatModelName = selectedChatModel?.name
   const selectedChatModelLabel = selectedChatModel?.name ?? '系统默认文本模型'
 
-  // Dynamically fetch voice list; fall back to static list if API unavailable
+  // Dynamically fetch project voice catalog; fall back to static list if API unavailable
   const { data: voicesData } = useSWR(
-    'voices',
-    () => dubbingAPI.listVoices().then((r) => (r as { data?: { voices?: { key: string; label: string }[] } }).data?.voices ?? null),
+    projectId ? ['project-voice-catalog', projectId] : null,
+    () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
   const ASSET_VOICE_OPTIONS = [
