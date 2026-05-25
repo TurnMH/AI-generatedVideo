@@ -103,7 +103,7 @@ var defaultPromptTemplates = []model.PromptTemplate{
 		Version:      "1.0",
 		IsActive:     true,
 		SortOrder:    30,
-		Content: `{scene}, {characters}, {action}, {mood}, 电影感构图, 戏剧性布光, 浅景深, 摄影级构图, 黄金比例, 散景背景, 变形镜头光晕, 超写实, 8k, 极致细节, 获奖摄影`,
+		Content: `{scene}, {characters}, {action}, {mood}, 明确人物在画面左/中/右的位置关系, 明确人物朝向与视线落点, 明确人物与门窗桌椅楼梯等关键环境锚点的相对位置, 同场景延续上一镜的站位与运动方向, 新场景首镜优先建立空间结构, 电影感构图, 戏剧性布光, 浅景深, 摄影级构图, 黄金比例, 前景遮挡与中后景层次清晰, 散景背景, 变形镜头光晕, 超写实, 8k, 极致细节, 获奖摄影`,
 	},
 	{
 		Name:        "分镜图片生成（二维动漫）",
@@ -114,7 +114,7 @@ var defaultPromptTemplates = []model.PromptTemplate{
 		Version:      "1.0",
 		IsActive:     true,
 		SortOrder:    31,
-		Content: `{scene}, {characters}, {action}, {mood}, 二维动漫风格, 线条清晰, 色彩鲜明, 表情丰富, 动态构图, 漫画分镜风格, 高质量动漫插画, 详细背景`,
+		Content: `{scene}, {characters}, {action}, {mood}, 明确人物在画面左/中/右的位置关系, 明确人物朝向与视线落点, 明确人物与关键场景物件的相对位置, 同场景保持空间连续和动作延续, 新场景首镜优先建立环境锚点, 二维动漫风格, 线条清晰, 色彩鲜明, 表情丰富, 动态构图, 漫画分镜风格, 高质量动漫插画, 详细背景`,
 	},
 	{
 		Name:        "分镜图片生成（三维动漫）",
@@ -125,7 +125,7 @@ var defaultPromptTemplates = []model.PromptTemplate{
 		Version:      "1.0",
 		IsActive:     true,
 		SortOrder:    32,
-		Content: `{scene}, {characters}, {action}, {mood}, 三维动漫CG风格, 皮克斯级渲染, 环境光遮蔽, 全局光照, 动态构图, 8k超高清, 极致细节`,
+		Content: `{scene}, {characters}, {action}, {mood}, 明确人物在画面左/中/右的位置关系, 明确人物朝向与视线落点, 明确主体与背景建筑/道具的景深层级和相对位置, 同场景保持空间连续和动作延续, 新场景首镜优先建立环境锚点, 三维动漫CG风格, 皮克斯级渲染, 环境光遮蔽, 全局光照, 动态构图, 8k超高清, 极致细节`,
 	},
 	{
 		Name:        "分镜图片生成（中国水墨国风）",
@@ -136,7 +136,7 @@ var defaultPromptTemplates = []model.PromptTemplate{
 		Version:      "1.0",
 		IsActive:     true,
 		SortOrder:    33,
-		Content: `{scene}, {characters}, {action}, {mood}, 中国水墨画风格, 中国传统艺术, 写意笔触, 大气透视, 云山雾绕, 古典建筑, 国风美学, 传世佳作`,
+		Content: `{scene}, {characters}, {action}, {mood}, 明确主体所在方位与相互距离, 明确视线方向与行进方向, 明确人物与亭台门廊山石舟桥等关键景物的相对位置, 同场景保持空间连续和动作延续, 新场景首镜优先建立环境锚点, 中国水墨画风格, 中国传统艺术, 写意笔触, 大气透视, 云山雾绕, 古典建筑, 国风美学, 传世佳作`,
 	},
 
 	// ── 物品/道具 ──────────────────────────────────────────────────────────────
