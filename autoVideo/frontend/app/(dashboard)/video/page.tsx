@@ -186,7 +186,7 @@ export default function VideoManualPage() {
     return next
   }, [models])
 
-  const activeModels = grouped[activeMenu] || []
+  const activeModels = useMemo(() => grouped[activeMenu] || [], [grouped, activeMenu])
   const activeMeta = MANUAL_MENU_ITEMS.find((item) => item.key === activeMenu) || MANUAL_MENU_ITEMS[0]
   const fallbackModelKey = activeModels[0]?.key || ''
   const effectiveModelKey = activeModels.some((item) => item.key === form.modelName) ? form.modelName : fallbackModelKey
@@ -388,11 +388,10 @@ export default function VideoManualPage() {
   }
 
   const renderForm = () => {
-    const disabledReason = activeMenu === 'text'
-      ? ''
-      : activeMenu === 'face-swap'
-        ? ''
-        : ''
+    const noModelsAvailable = activeModels.length === 0
+    const disabledReason = noModelsAvailable
+      ? `当前「${activeMeta.label}」没有可用视频模型，请切换分类或检查 model-status。`
+      : ''
 
     return (
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
@@ -458,14 +457,15 @@ export default function VideoManualPage() {
 
             <div className="space-y-2">
               <Label>视频模型</Label>
-              <Select value={effectiveModelKey || selectedModel?.key || ''} onValueChange={(value) => setForm((prev) => ({ ...prev, modelName: value }))}>
-                <SelectTrigger><SelectValue placeholder="选择模型" /></SelectTrigger>
+              <Select value={effectiveModelKey || selectedModel?.key || ''} onValueChange={(value) => setForm((prev) => ({ ...prev, modelName: value }))} disabled={noModelsAvailable}>
+                <SelectTrigger><SelectValue placeholder={noModelsAvailable ? '当前分类无可用模型' : '选择模型'} /></SelectTrigger>
                 <SelectContent>
                   {activeModels.map((model) => (
                     <SelectItem key={model.key} value={model.key}>{getModelDisplayName(model.key)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {noModelsAvailable && <div className="text-xs text-amber-300">当前分类暂无可用模型，提交已禁用。</div>}
             </div>
 
             <div className="space-y-2">
@@ -539,7 +539,7 @@ export default function VideoManualPage() {
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
-                  <div className="font-medium">当前仅开放参数收口，不直接提交</div>
+                  <div className="font-medium">当前分类暂无可用模型</div>
                   <div className="mt-1 text-amber-100/80">{disabledReason}</div>
                 </div>
               </div>
@@ -552,23 +552,23 @@ export default function VideoManualPage() {
 
           <div className="flex flex-wrap gap-3">
             {activeMenu === 'text' ? (
-              <Button onClick={() => createManualVideoTask('text')} disabled={submitting}>
+              <Button onClick={() => createManualVideoTask('text')} disabled={submitting || noModelsAvailable}>
                 {submitting ? '正在创建文生视频任务…' : '创建文生视频任务'}
               </Button>
             ) : activeMenu === 'image' ? (
-              <Button onClick={handleImageGenerate} disabled={submitting}>
+              <Button onClick={handleImageGenerate} disabled={submitting || noModelsAvailable}>
                 {submitting ? '正在创建图生视频任务…' : '创建图生视频任务'}
               </Button>
             ) : activeMenu === 'reference' ? (
-              <Button onClick={() => createManualVideoTask('reference')} disabled={submitting}>
+              <Button onClick={() => createManualVideoTask('reference')} disabled={submitting || noModelsAvailable}>
                 {submitting ? '正在创建融合生视频任务…' : '创建融合生视频任务'}
               </Button>
             ) : activeMenu === 'start-end' ? (
-              <Button onClick={() => createManualVideoTask('start-end')} disabled={submitting}>
+              <Button onClick={() => createManualVideoTask('start-end')} disabled={submitting || noModelsAvailable}>
                 {submitting ? '正在创建首尾针视频任务…' : '创建首尾针视频任务'}
               </Button>
             ) : activeMenu === 'face-swap' ? (
-              <Button onClick={() => createManualVideoTask('face-swap')} disabled={submitting}>
+              <Button onClick={() => createManualVideoTask('face-swap')} disabled={submitting || noModelsAvailable}>
                 {submitting ? '正在创建人物一致性任务…' : '创建人物一致性任务'}
               </Button>
             ) : (
