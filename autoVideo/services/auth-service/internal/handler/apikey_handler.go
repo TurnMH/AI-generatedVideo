@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/autovideo/auth-service/internal/service"
 	"github.com/autovideo/auth-service/pkg/middleware"
@@ -12,8 +13,21 @@ import (
 )
 
 type APIKeyHandler struct {
-	apiKeySvc service.APIKeyService
-	logger    *zap.Logger
+	apiKeySvc              service.APIKeyService
+	logger                 *zap.Logger
+	sharedRuntimeProviders map[string]struct{}
+}
+
+func defaultSharedRuntimeProviders() map[string]struct{} {
+	providers := []string{
+		"runtime.video.llm",
+		"runtime.video.music",
+	}
+	out := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		out[provider] = struct{}{}
+	}
+	return out
 }
 
 type runtimeAPIKeyResponse struct {
@@ -30,7 +44,11 @@ type runtimeAPIKeyResponse struct {
 
 // NewAPIKeyHandler —— 创建 APIKeyHandler 实例，注入 API Key 服务依赖
 func NewAPIKeyHandler(apiKeySvc service.APIKeyService) *APIKeyHandler {
-	return &APIKeyHandler{apiKeySvc: apiKeySvc, logger: zap.NewNop()}
+	return &APIKeyHandler{
+		apiKeySvc:              apiKeySvc,
+		logger:                 zap.NewNop(),
+		sharedRuntimeProviders: defaultSharedRuntimeProviders(),
+	}
 }
 
 type addAPIKeyRequest struct {
@@ -122,19 +140,29 @@ func (h *APIKeyHandler) ListSystemAPIKeysHandler(c *gin.Context) {
 
 // ListRuntimeAPIKeysHandler —— 获取 runtime.* 前缀的系统级 API Key 明文列表，供服务间调用。
 func (h *APIKeyHandler) ListRuntimeAPIKeysHandler(c *gin.Context) {
+	callerService := strings.TrimSpace(c.GetHeader("X-Internal-Service"))
+	if callerService == "" {
+		callerService = strings.TrimSpace(c.Query("service"))
+	}
+	if callerService == "" {
+		h.logger.Warn("runtime api keys rejected: missing caller service")
+		response.Error(c, http.StatusBadRequest, 4001, "missing caller service")
+		return
+	}
+
 	keys, err := h.apiKeySvc.ListRuntimeAPIKeys()
 	if err != nil {
 		response.InternalError(c, "list runtime api keys failed")
 		return
 	}
-	callerService := c.GetHeader("X-Internal-Service")
-	if callerService == "" {
-		callerService = c.Query("service")
-	}
 	out := make([]runtimeAPIKeyResponse, 0, len(keys))
+	sharedCount := 0
 	for _, key := range keys {
-		if callerService != "" && key.OwnerService != "" && key.OwnerService != callerService {
+		if !h.allowRuntimeKeyForCaller(callerService, key.Provider, key.OwnerService) {
 			continue
+		}
+		if key.OwnerService != "" && key.OwnerService != callerService {
+			sharedCount++
 		}
 		out = append(out, runtimeAPIKeyResponse{
 			Provider:     key.Provider,
@@ -151,6 +179,21 @@ func (h *APIKeyHandler) ListRuntimeAPIKeysHandler(c *gin.Context) {
 	h.logger.Info("runtime api keys fetched",
 		zap.String("caller_service", callerService),
 		zap.Int("returned_count", len(out)),
+		zap.Int("shared_count", sharedCount),
 	)
 	response.Success(c, out)
+}
+
+func (h *APIKeyHandler) allowRuntimeKeyForCaller(callerService, provider, ownerService string) bool {
+	callerService = strings.TrimSpace(callerService)
+	provider = strings.TrimSpace(provider)
+	ownerService = strings.TrimSpace(ownerService)
+	if callerService == "" || provider == "" {
+		return false
+	}
+	if ownerService == "" || ownerService == callerService {
+		return true
+	}
+	_, ok := h.sharedRuntimeProviders[provider]
+	return ok
 }

@@ -13,6 +13,11 @@
 > 2. `system_api_keys` 中的 `runtime.*` 视为配置同步后的镜像，不应人工逐条修改
 > 3. `config.local.yaml` 是初始化与覆盖来源，不等于业务服务启动后的最终生效值
 >
+> **/internal/runtime-api-keys 最小权限约束：**
+> - 调用方必须显式提供 `X-Internal-Service`（或兼容查询参数 `?service=`）
+> - 默认只返回 `OwnerService` 与调用方一致的 runtime key
+> - 当前仅保留极少数共享辅助 provider 的跨服务放行（如 `runtime.video.llm`、`runtime.video.music`），不应把该接口视为全量密钥广播口
+>
 > **video-service 特别说明：**
 > - `runtime.video.llm` / `runtime.video.music` 属于辅助链 provider，不等于主视频生成 provider
 > - `kling*` 请求名在当前实现中可能真实路由到 `runtime.video.vclm`，不能只按展示名判断真实执行方
