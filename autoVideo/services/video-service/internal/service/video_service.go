@@ -287,11 +287,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		return fmt.Errorf("no generator available for model %q", resolvedModelName)
 	}
 
-	task.RequestedModel = resolvedModelName
-	task.RoutedGenerator = routeExplain.RoutedGenerator
-	task.RuntimeProvider = routeExplain.RuntimeProvider
-	task.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, resolvedModelName)
-	task.RouteReason = routeExplain.RouteReason
+	applyRouteExplainToTask(task, resolvedModelName, routeExplain)
 	if err := s.repo.UpdateTask(ctx, task); err != nil {
 		s.logger.Warn("persist task route metadata failed", zap.Int64("task_id", taskID), zap.Error(err))
 	}
@@ -459,12 +455,15 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		if err != nil {
 			c.Status = model.StatusFailed
 			c.ErrorMsg = err.Error()
+			applyRouteExplainToClip(c, resolvedModelName, routeExplain)
 			return err
 		}
 		c.ClipURL = result.ClipURL
 		c.DurationSec = result.DurationSec
 		c.ModelUsed = result.ModelUsed
 		c.Status = model.StatusSucceeded
+		applyRouteExplainToClip(c, resolvedModelName, routeExplain)
+		c.EffectiveModel = firstNonEmpty(result.ModelUsed, c.EffectiveModel)
 		return nil
 	}
 
@@ -1101,6 +1100,10 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if err != nil {
 		return err
 	}
+	applyRouteExplainToTask(task, resolvedModelName, routeExplain)
+	if updateErr := s.repo.UpdateTask(ctx, task); updateErr != nil {
+		s.logger.Warn("persist retry route metadata failed", zap.Int64("task_id", taskID), zap.Error(updateErr))
+	}
 
 	prevTaskStatus := task.Status
 	prevTaskError := task.ErrorMsg
@@ -1121,6 +1124,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 
 	clip.Status = model.StatusProcessing
 	clip.ErrorMsg = ""
+	applyRouteExplainToClip(clip, resolvedModelName, routeExplain)
 	clip.ClipURL = ""
 	clip.DurationSec = 0
 	clip.ModelUsed = ""
@@ -1362,6 +1366,27 @@ func (s *VideoService) uploadVideo(ctx context.Context, taskID, projectID int64,
 		return ur.Data.CdnURL, nil
 	}
 	return "", fmt.Errorf("upload: no url in response: %s", string(body))
+}
+
+func applyRouteExplainToTask(task *model.VideoTask, requestedModel string, routeExplain VideoRouteExplain) {
+	if task == nil {
+		return
+	}
+	task.RequestedModel = requestedModel
+	task.RoutedGenerator = routeExplain.RoutedGenerator
+	task.RuntimeProvider = routeExplain.RuntimeProvider
+	task.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, requestedModel, task.EffectiveModel)
+	task.RouteReason = routeExplain.RouteReason
+}
+
+func applyRouteExplainToClip(clip *model.VideoClip, requestedModel string, routeExplain VideoRouteExplain) {
+	if clip == nil {
+		return
+	}
+	clip.RequestedModel = requestedModel
+	clip.RoutedGenerator = routeExplain.RoutedGenerator
+	clip.RuntimeProvider = routeExplain.RuntimeProvider
+	clip.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, requestedModel, clip.EffectiveModel)
 }
 
 // markFailed —— 将任务标记为失败状态并记录错误信息
