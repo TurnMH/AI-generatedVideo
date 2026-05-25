@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import useSWR from 'swr'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Film,
   ImagePlus,
@@ -60,7 +60,10 @@ type SubmitSummary = {
   hasStartImage: boolean
   hasTailImage: boolean
   routeNote: string
+  createdAt: string
 }
+
+const MANUAL_VIDEO_HISTORY_KEY = 'manual-video-history-v1'
 
 const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
   { key: 'text', label: '文生视频', description: '仅输入提示词生成视频，优先展示支持纯文本生成的模型。', icon: Film },
@@ -163,6 +166,7 @@ function buildHelperText(tab: ManualMenuKey) {
 
 export default function VideoManualPage() {
   const { toast } = useToast()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const tabParam = searchParams.get('tab')
   const [activeMenu, setActiveMenu] = useState<ManualMenuKey>('text')
@@ -337,7 +341,7 @@ export default function VideoManualPage() {
             : mode === 'text'
               ? '通过 text2video 提交。'
               : '通过 img2video 提交。'
-      setSubmitResult({
+      const summary: SubmitSummary = {
         projectId,
         taskId,
         mode,
@@ -348,7 +352,17 @@ export default function VideoManualPage() {
         hasStartImage: Boolean(imageUrls[0]),
         hasTailImage: Boolean(renderConfig.tail_image_url),
         routeNote,
-      })
+        createdAt: new Date().toISOString(),
+      }
+      setSubmitResult(summary)
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = window.localStorage.getItem(MANUAL_VIDEO_HISTORY_KEY)
+          const prev = raw ? JSON.parse(raw) : []
+          const next = [summary, ...(Array.isArray(prev) ? prev : [])].slice(0, 50)
+          window.localStorage.setItem(MANUAL_VIDEO_HISTORY_KEY, JSON.stringify(next))
+        } catch {}
+      }
       toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
       const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频创建失败`
@@ -501,10 +515,10 @@ export default function VideoManualPage() {
               </div>
               <div className="mt-3 flex flex-wrap gap-3">
                 <Button variant="outline" asChild>
-                  <Link href={`/projects/${submitResult.projectId}`}>打开项目</Link>
+                  <Link href={`/video/history/${submitResult.taskId}`}>打开任务详情</Link>
                 </Button>
                 <Button variant="outline" asChild>
-                  <Link href={`/projects/${submitResult.projectId}?tab=video`}>查看视频页</Link>
+                  <Link href="/video/history">查看历史记录</Link>
                 </Button>
               </div>
             </div>
@@ -566,7 +580,10 @@ export default function VideoManualPage() {
           <h1 className="text-2xl font-semibold text-white">手动创建视频</h1>
           <p className="mt-2 text-sm text-slate-300">按现有 video-service 运行态模型能力分组展示，并补齐最小可操作表单骨架；未坐实的独立能力会按真实链路收口命名。</p>
         </div>
-        <Link href="/projects" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/10">去项目生成链</Link>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => router.push('/video/history')}>查看独立历史页</Button>
+          <Link href="/projects" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/10">去项目生成链</Link>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[300px,minmax(0,1fr)]">
