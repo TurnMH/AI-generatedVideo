@@ -1,6 +1,6 @@
 'use client'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   FolderOpen,
   Settings,
@@ -106,6 +106,7 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const router = useRouter()
   const { user, clearAuth } = useAuthStore()
 
@@ -150,8 +151,9 @@ export function Sidebar() {
                   <ul className="space-y-0.5 pl-1">
                     {item.children.map((child) => {
                       const ChildIcon = child.icon
-                      const childPath = child.href.split('?')[0]
-                      const childActive = pathname === childPath
+                      const [childPath, childQuery] = child.href.split('?')
+                      const childTab = childQuery?.replace(/^tab=/, '')
+                      const childActive = pathname === childPath && (!childTab || searchParams.get('tab') === childTab)
                       return (
                         <li key={child.href}>
                           <Link
