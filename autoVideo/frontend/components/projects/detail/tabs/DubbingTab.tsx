@@ -156,6 +156,8 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const [episodeVoiceOverrides, setEpisodeVoiceOverrides] = useState<Record<number, VoiceOverride>>({})
   const [subtitleTexts, setSubtitleTexts] = useState<Record<number, string>>({})
   const [loadingSubtitle, setLoadingSubtitle] = useState<number | null>(null)
+  const [previewingEpisodeId, setPreviewingEpisodeId] = useState<number | null>(null)
+  const [previewAudioUrlByEpisode, setPreviewAudioUrlByEpisode] = useState<Record<number, string>>({})
   const [retryingTaskIds, setRetryingTaskIds] = useState<number[]>([])
   const [retryingGroup, setRetryingGroup] = useState<'dubbing' | 'subtitle' | null>(null)
   const [aggregatingDialogues, setAggregatingDialogues] = useState<Record<number, boolean>>({})
@@ -166,11 +168,19 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
+  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) => {
+    if (voice.label) return voice.label
+    const parts = [voice.voice_name || voice.key || voice.value || '未命名音色']
+    if (voice.gender) parts.push(voice.gender)
+    if (voice.style) parts.push(voice.style)
+    if (voice.category) parts.push(voice.category)
+    return parts.join(' · ')
+  }
   const VOICE_OPTIONS = [
     { value: 'auto', label: '自动按人物分配' },
     ...(voicesDataDub ?? FALLBACK_VOICE_OPTIONS).map((v) => {
       const key = (v as { key?: string }).key ?? (v as { value?: string }).value ?? ''
-      return { value: key, label: v.label }
+      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) }
     }),
   ]
   const VOICE_RATE_OPTIONS = [
@@ -791,6 +801,39 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
                   </div>
                 </div>
 
+                <div className="mb-2 flex items-center justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[10px]"
+                    disabled={!episodeVoiceOptions.voice_model || episodeVoiceOptions.voice_model === 'auto' || previewingEpisodeId === ep.id}
+                    onClick={async () => {
+                      try {
+                        setPreviewingEpisodeId(ep.id)
+                        const res = await dubbingAPI.previewVoice(projectId, {
+                          voice_model: episodeVoiceOptions.voice_model,
+                          voice_rate: episodeVoiceOptions.voice_rate,
+                          voice_pitch: episodeVoiceOptions.voice_pitch,
+                          voice_volume: episodeVoiceOptions.voice_volume,
+                        })
+                        const audioUrl = res.data?.audio_url
+                        if (!audioUrl) throw new Error('empty audio url')
+                        setPreviewAudioUrlByEpisode((prev) => ({ ...prev, [ep.id]: audioUrl }))
+                        const audio = new Audio(audioUrl)
+                        await audio.play()
+                        toast({ title: `第 ${ep.episode_number} 集音色试听已开始`, variant: 'success' })
+                      } catch {
+                        toast({ title: '音色试听失败', variant: 'destructive' })
+                      } finally {
+                        setPreviewingEpisodeId(null)
+                      }
+                    }}
+                  >
+                    {previewingEpisodeId === ep.id ? '试听中...' : '试听当前音色'}
+                  </Button>
+                </div>
+
                 <div className="mb-3 grid grid-cols-2 gap-2 rounded-md border border-dashed border-surface-200 bg-surface-50 p-3 md:grid-cols-4">
                   <select
                     value={episodeVoiceOptions.voice_model}
@@ -833,6 +876,11 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
                     ))}
                   </select>
                 </div>
+                {previewAudioUrlByEpisode[ep.id] && (
+                  <div className="mb-3 rounded-md border border-surface-200 bg-white p-2">
+                    <audio controls className="h-8 w-full" src={previewAudioUrlByEpisode[ep.id]} />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {/* Dubbing */}

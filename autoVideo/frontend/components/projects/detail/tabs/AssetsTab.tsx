@@ -301,11 +301,19 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
+  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) => {
+    if (voice.label) return voice.label
+    const parts = [voice.voice_name || voice.key || voice.value || '未命名音色']
+    if (voice.gender) parts.push(voice.gender)
+    if (voice.style) parts.push(voice.style)
+    if (voice.category) parts.push(voice.category)
+    return parts.join(' · ')
+  }
   const ASSET_VOICE_OPTIONS = [
     { value: '', label: '未绑定音色' },
     ...(voicesData ?? FALLBACK_VOICE_OPTIONS).map((v) => {
       const key = (v as { key?: string }).key ?? (v as { value?: string }).value ?? ''
-      return { value: key, label: v.label }
+      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) }
     }),
   ]
 
@@ -763,6 +771,8 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   }
 
   const TYPE_LABELS: Record<AssetType, string> = { character: '人物', scene: '场景', prop: '物品', image: '图片' }
+  const [previewingVoiceAssetId, setPreviewingVoiceAssetId] = useState<number | null>(null)
+  const [voicePreviewAudioUrl, setVoicePreviewAudioUrl] = useState<Record<number, string>>({})
   const selectedAssetPreviewUrl = selectedAsset ? getSelectedGeneratedImageUrl(selectedAsset) : ''
   const selectedAssetLinkedStoryboards = selectedAsset ? (assetStoryboardUsageMap.get(selectedAsset.id) ?? []) : []
   const selectedAssetScopedLinkedStoryboards = selectedAsset ? (scopedAssetStoryboardUsageMap.get(selectedAsset.id) ?? []) : []
@@ -1135,21 +1145,52 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                 </div>
 
                 {asset.type === 'character' && (
-                  <div className="mt-2 flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                    <Mic className="h-3 w-3 flex-shrink-0 text-surface-400" />
-                    <select
-                      value={asset.voice_model ?? ''}
-                      onChange={async (e) => {
-                        await assetAPI.update(projectId, asset.id, { voice_model: e.target.value })
-                        mutateAssets()
-                      }}
-                      className="flex-1 rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] text-surface-700 focus:outline-none focus:ring-1 focus:ring-primary-400"
-                      title="绑定配音音色（配音模式为「自动按人物分配」时生效）"
-                    >
-                      {ASSET_VOICE_OPTIONS.map(v => (
-                        <option key={v.value} value={v.value}>{v.label}</option>
-                      ))}
-                    </select>
+                  <div className="mt-2 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1.5">
+                      <Mic className="h-3 w-3 flex-shrink-0 text-surface-400" />
+                      <select
+                        value={asset.voice_model ?? ''}
+                        onChange={async (e) => {
+                          await assetAPI.update(projectId, asset.id, { voice_model: e.target.value })
+                          mutateAssets()
+                        }}
+                        className="flex-1 rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] text-surface-700 focus:outline-none focus:ring-1 focus:ring-primary-400"
+                        title="绑定配音音色（配音模式为「自动按人物分配」时生效）"
+                      >
+                        {ASSET_VOICE_OPTIONS.map(v => (
+                          <option key={v.value} value={v.value}>{v.label}</option>
+                        ))}
+                      </select>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px]"
+                        disabled={!asset.voice_model || previewingVoiceAssetId === asset.id}
+                        onClick={async () => {
+                          if (!asset.voice_model) return
+                          try {
+                            setPreviewingVoiceAssetId(asset.id)
+                            const res = await dubbingAPI.previewVoice(projectId, { voice_model: asset.voice_model })
+                            const audioUrl = res.data?.audio_url
+                            if (!audioUrl) throw new Error('empty audio url')
+                            setVoicePreviewAudioUrl((prev) => ({ ...prev, [asset.id]: audioUrl }))
+                            const audio = new Audio(audioUrl)
+                            await audio.play()
+                            toast({ title: `正在试听 ${asset.name} 的绑定音色`, variant: 'success' })
+                          } catch {
+                            toast({ title: '音色试听失败', variant: 'destructive' })
+                          } finally {
+                            setPreviewingVoiceAssetId(null)
+                          }
+                        }}
+                      >
+                        {previewingVoiceAssetId === asset.id ? '试听中...' : '试听'}
+                      </Button>
+                    </div>
+                    {voicePreviewAudioUrl[asset.id] && (
+                      <audio controls className="h-7 w-full" src={voicePreviewAudioUrl[asset.id]} />
+                    )}
                   </div>
                 )}
                 {(asset.status === 'failed' || asset.status === 'qa_failed') && asset.error_msg && (

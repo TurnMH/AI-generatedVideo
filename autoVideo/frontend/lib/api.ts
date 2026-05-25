@@ -659,6 +659,17 @@ export interface VoiceCatalogResponse {
   }
 }
 
+export interface VoicePreviewResponse {
+  code: number
+  data: {
+    audio_url: string
+    duration_sec?: number
+    voice_key?: string
+    voice_name?: string
+    text?: string
+  }
+}
+
 export const dubbingAPI = {
   generate: (
     projectId: number,
@@ -729,6 +740,11 @@ export const dubbingAPI = {
     api.get<{ code: number; data: { voices: { key: string; name: string; label: string }[] } }>('/api/v1/voices'),
   listVoiceCatalog: (projectId: number) =>
     api.get<VoiceCatalogResponse>(`/api/v1/projects/${projectId}/dubbing/voices`),
+  previewVoice: (
+    projectId: number,
+    data: { voice_model?: string; voice_rate?: string; voice_pitch?: string; voice_volume?: string; text?: string }
+  ) =>
+    api.post<VoicePreviewResponse>(`/api/v1/projects/${projectId}/dubbing/voices/preview`, data),
   generateForStoryboard: (
     projectId: number,
     storyboardId: number,
