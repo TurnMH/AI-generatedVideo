@@ -3071,6 +3071,9 @@ Rules:
    - Characters appearing across multiple scenes MUST wear exactly the same clothing and hairstyle unless explicitly changed.
    - If the VISUAL BRIDGE prompt is provided, your FIRST scene must visually extend from it: same color grading, same character frame position, matching depth planes.
    - Frame position consistency: if a character is on the left in scene N, keep them left in scene N+1 unless a motivated move is described.
+   - Spatial anchor consistency: doors, windows, tables, sofas, beds, stairs, counters, vehicles, or other key anchor objects must stay in consistent relative positions unless the prompt explicitly describes a re-blocking or camera relocation.
+   - Eyeline continuity: if two characters were facing each other in the prior frame, do not silently reverse their facing direction or swap screen direction.
+   - Depth continuity: preserve who is foreground, midground, and background across adjacent shots unless a visible transition justifies the change.
 8. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
 9. Incorporate provided art style and skill guidelines naturally into every prompt.
 10. The "shot_type" field dictates framing: close-up → face fills 60%+ of frame; medium → waist-up, environment visible; wide → full figure + environment; establishing → location dominant, figure small.
@@ -3083,7 +3086,8 @@ Rules:
 17. FIRST SHOT OF A NEW LOCATION: prefer a readable establishing or environment-anchored composition before pushing into close coverage, unless the scene input explicitly demands an immediate crash-in close-up.
 18. ONE DECISIVE VISUAL IDEA PER FRAME: do not describe two unrelated focal actions or multiple competing hero subjects in the same prompt.
 19. COSTUME AND PROP LOCK: wardrobe layers, accessories, injuries, dirt, blood, wetness, and damage state must remain stable across adjacent prompts until the input explicitly changes them.
-20. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
+20. TRANSITION EXPLICITNESS: when a character changes screen position, depth plane, or relation to a key prop, describe the visible in-between action (steps closer, circles around the table, stops by the window, turns from the door) instead of teleporting to the new pose.
+21. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
 	if skillHints != "" {
@@ -3110,7 +3114,7 @@ Rules:
 	}
 
 	userContent := fmt.Sprintf(
-		"Generate optimized image generation prompts for %d storyboard scenes from episode %d.%s%s\n\nIMPORTANT: The scenes are ordered. For each scene after the first, visually bridge its prompt from the preceding scene to maintain seamless flow.\n\nScenes (JSON):\n%s\n\nReturn JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ...]}",
+		"Generate optimized image generation prompts for %d storyboard scenes from episode %d.%s%s\n\nIMPORTANT: The scenes are ordered. For each scene after the first, visually bridge its prompt from the preceding scene to maintain seamless flow. Pay special attention to spatial continuity: preserve left/right subject placement, eyeline direction, foreground/midground/background layering, and the relative positions of anchor objects such as doors, windows, tables, beds, counters, vehicles, or stairs. When a character or camera relationship changes, describe the visible transition instead of jumping directly to the result.\n\nScenes (JSON):\n%s\n\nReturn JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ...]}",
 		len(scenes), episodeNum, continuityNote, templateNote, string(inputJSON),
 	)
 
