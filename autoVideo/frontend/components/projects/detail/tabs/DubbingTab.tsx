@@ -156,6 +156,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const [episodeVoiceOverrides, setEpisodeVoiceOverrides] = useState<Record<number, VoiceOverride>>({})
   const [subtitleTexts, setSubtitleTexts] = useState<Record<number, string>>({})
   const [loadingSubtitle, setLoadingSubtitle] = useState<number | null>(null)
+  const [voiceSearch, setVoiceSearch] = useState('')
   const [previewingEpisodeId, setPreviewingEpisodeId] = useState<number | null>(null)
   const [previewAudioUrlByEpisode, setPreviewAudioUrlByEpisode] = useState<Record<number, string>>({})
   const [retryingTaskIds, setRetryingTaskIds] = useState<number[]>([])
@@ -168,21 +169,36 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
-  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) => {
+  const translateVoiceMeta = (value?: string) => {
+    const raw = (value || '').trim()
+    if (!raw) return ''
+    const map: Record<string, string> = {
+      male: '男', female: '女', child: '儿童', narrator: '旁白', calm: '沉稳', deep: '低沉', warm: '温暖', bright: '明亮',
+      multilingual: '多语', mainland: '大陆', mandarin: '普通话', regional: '方言', auto: '自动', assignable: '可自动分配',
+    }
+    return raw.split(/[-_\s/]+/).map(part => map[part.toLowerCase()] || part).join(' / ')
+  }
+  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string }) => {
     if (voice.label) return voice.label
-    const parts = [voice.voice_name || voice.key || voice.value || '未命名音色']
-    if (voice.gender) parts.push(voice.gender)
-    if (voice.style) parts.push(voice.style)
-    if (voice.category) parts.push(voice.category)
-    return parts.join(' · ')
+    const parts = [translateVoiceMeta(voice.voice_name) || voice.key || voice.value || '未命名音色']
+    if (voice.gender) parts.push(translateVoiceMeta(voice.gender))
+    if (voice.style) parts.push(translateVoiceMeta(voice.style))
+    if (voice.category) parts.push(translateVoiceMeta(voice.category))
+    if (voice.locale) parts.push(translateVoiceMeta(voice.locale))
+    return parts.filter(Boolean).join(' · ')
   }
   const VOICE_OPTIONS = [
     { value: 'auto', label: '自动按人物分配' },
     ...(voicesDataDub ?? FALLBACK_VOICE_OPTIONS).map((v) => {
       const key = (v as { key?: string }).key ?? (v as { value?: string }).value ?? ''
-      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) }
+      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string }) }
     }),
   ]
+  const FILTERED_VOICE_OPTIONS = VOICE_OPTIONS.filter((option) => {
+    const q = voiceSearch.trim().toLowerCase()
+    if (!q) return true
+    return option.label.toLowerCase().includes(q) || option.value.toLowerCase().includes(q)
+  })
   const VOICE_RATE_OPTIONS = [
     { value: '-30%', label: '慢 -30%' },
     { value: '-15%', label: '慢 -15%' },
@@ -801,7 +817,13 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
                   </div>
                 </div>
 
-                <div className="mb-2 flex items-center justify-end">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <Input
+                    value={voiceSearch}
+                    onChange={(e) => setVoiceSearch(e.target.value)}
+                    placeholder="搜索音色名称 / 风格 / 分类"
+                    className="h-7 max-w-[260px] text-[10px]"
+                  />
                   <Button
                     type="button"
                     size="sm"
@@ -841,7 +863,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
                     className="h-8 rounded-md border border-surface-200 bg-white px-2 text-xs"
                     title="本集音色"
                   >
-                    {VOICE_OPTIONS.map(v => (
+                    {FILTERED_VOICE_OPTIONS.map(v => (
                       <option key={v.value} value={v.value}>{v.label}</option>
                     ))}
                   </select>

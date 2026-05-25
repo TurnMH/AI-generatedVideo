@@ -148,6 +148,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const sharedEpisode = useProjectEpisodeFilter()
   const [filter, setFilter] = useState<AssetType | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<AssetStatus | 'all'>('all')
+  const [voiceSearchByAsset, setVoiceSearchByAsset] = useState<Record<number, string>>({})
 
   React.useEffect(() => {
     if (episodeId !== undefined) {
@@ -301,19 +302,29 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     () => dubbingAPI.listVoiceCatalog(projectId).then((r) => r.data?.items ?? null),
     { revalidateOnFocus: false, revalidateOnReconnect: false }
   )
-  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) => {
+  const translateVoiceMeta = (value?: string) => {
+    const raw = (value || '').trim()
+    if (!raw) return ''
+    const map: Record<string, string> = {
+      male: '男', female: '女', child: '儿童', narrator: '旁白', calm: '沉稳', deep: '低沉', warm: '温暖', bright: '明亮',
+      multilingual: '多语', mainland: '大陆', mandarin: '普通话', regional: '方言', auto: '自动', assignable: '可自动分配',
+    }
+    return raw.split(/[-_\s/]+/).map(part => map[part.toLowerCase()] || part).join(' / ')
+  }
+  const formatVoiceOptionLabel = (voice: { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string }) => {
     if (voice.label) return voice.label
-    const parts = [voice.voice_name || voice.key || voice.value || '未命名音色']
-    if (voice.gender) parts.push(voice.gender)
-    if (voice.style) parts.push(voice.style)
-    if (voice.category) parts.push(voice.category)
-    return parts.join(' · ')
+    const parts = [translateVoiceMeta(voice.voice_name) || voice.key || voice.value || '未命名音色']
+    if (voice.gender) parts.push(translateVoiceMeta(voice.gender))
+    if (voice.style) parts.push(translateVoiceMeta(voice.style))
+    if (voice.category) parts.push(translateVoiceMeta(voice.category))
+    if (voice.locale) parts.push(translateVoiceMeta(voice.locale))
+    return parts.filter(Boolean).join(' · ')
   }
   const ASSET_VOICE_OPTIONS = [
     { value: '', label: '未绑定音色' },
     ...(voicesData ?? FALLBACK_VOICE_OPTIONS).map((v) => {
       const key = (v as { key?: string }).key ?? (v as { value?: string }).value ?? ''
-      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string }) }
+      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string }) }
     }),
   ]
 
@@ -1170,19 +1181,12 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                   <div className="mt-2 space-y-1.5" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1.5">
                       <Mic className="h-3 w-3 flex-shrink-0 text-surface-400" />
-                      <select
-                        value={asset.voice_model ?? ''}
-                        onChange={async (e) => {
-                          await assetAPI.update(projectId, asset.id, { voice_model: e.target.value })
-                          mutateAssets()
-                        }}
-                        className="flex-1 rounded border border-surface-200 bg-white px-1.5 py-0.5 text-[10px] text-surface-700 focus:outline-none focus:ring-1 focus:ring-primary-400"
-                        title="绑定配音音色（配音模式为「自动按人物分配」时生效）"
-                      >
-                        {ASSET_VOICE_OPTIONS.map(v => (
-                          <option key={v.value} value={v.value}>{v.label}</option>
-                        ))}
-                      </select>
+                      <Input
+                        value={voiceSearchByAsset[asset.id] ?? ''}
+                        onChange={(e) => setVoiceSearchByAsset((prev) => ({ ...prev, [asset.id]: e.target.value }))}
+                        placeholder="搜索音色名称 / 风格 / 分类"
+                        className="h-6 flex-1 text-[10px]"
+                      />
                       <Button
                         type="button"
                         size="sm"
@@ -1209,6 +1213,30 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                       >
                         {previewingVoiceAssetId === asset.id ? '试听中...' : '试听'}
                       </Button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto rounded border border-surface-200 bg-white">
+                      <select
+                        value={asset.voice_model ?? ''}
+                        onChange={async (e) => {
+                          await assetAPI.update(projectId, asset.id, { voice_model: e.target.value })
+                          mutateAssets()
+                        }}
+                        size={Math.min(6, Math.max(3, ASSET_VOICE_OPTIONS.filter(v => {
+                          const q = (voiceSearchByAsset[asset.id] ?? '').trim().toLowerCase()
+                          if (!q) return true
+                          return v.label.toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+                        }).length || 3))}
+                        className="w-full border-0 bg-white px-1.5 py-1 text-[10px] text-surface-700 focus:outline-none"
+                        title="绑定配音音色（配音模式为「自动按人物分配」时生效）"
+                      >
+                        {ASSET_VOICE_OPTIONS.filter(v => {
+                          const q = (voiceSearchByAsset[asset.id] ?? '').trim().toLowerCase()
+                          if (!q) return true
+                          return v.label.toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+                        }).map(v => (
+                          <option key={v.value} value={v.value}>{v.label}</option>
+                        ))}
+                      </select>
                     </div>
                     {voicePreviewAudioUrl[asset.id] && (
                       <audio controls className="h-7 w-full" src={voicePreviewAudioUrl[asset.id]} />
