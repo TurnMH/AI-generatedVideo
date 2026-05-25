@@ -63,6 +63,23 @@ func normalizeRenderConfig(rc model.RenderConfig) model.RenderConfig {
 	return rc
 }
 
+func logTaskRouteState(logger *zap.Logger, event string, task *model.VideoTask) {
+	if logger == nil || task == nil {
+		return
+	}
+	logger.Info(event,
+		zap.Int64("task_id", task.ID),
+		zap.Int64("project_id", task.ProjectID),
+		zap.Any("episode_id", task.EpisodeID),
+		zap.String("status", task.Status),
+		zap.String("requested_model", task.RequestedModel),
+		zap.String("routed_generator", task.RoutedGenerator),
+		zap.String("runtime_provider", task.RuntimeProvider),
+		zap.String("effective_model", task.EffectiveModel),
+		zap.String("route_reason", task.RouteReason),
+	)
+}
+
 // VideoHandler exposes all HTTP endpoints for the video service.
 type VideoHandler struct {
 	svc          *service.VideoService
@@ -241,6 +258,7 @@ func (h *VideoHandler) GetTask(c *gin.Context) {
 		response.NotFound(c, "task not found")
 		return
 	}
+	logTaskRouteState(h.logger, "video task detail fetched", task)
 	response.OK(c, task)
 }
 
@@ -258,6 +276,23 @@ func (h *VideoHandler) ListTasks(c *gin.Context) {
 		h.logger.Error("list tasks", zap.Error(err))
 		response.InternalError(c, "failed to list tasks")
 		return
+	}
+	if h.logger != nil {
+		missingRoute := 0
+		for i := range tasks {
+			if strings.TrimSpace(tasks[i].RequestedModel) == "" || strings.TrimSpace(tasks[i].RoutedGenerator) == "" || strings.TrimSpace(tasks[i].RuntimeProvider) == "" {
+				missingRoute++
+			}
+		}
+		h.logger.Info("video tasks listed",
+			zap.Int64("project_id", projectID),
+			zap.Int64("episode_id", episodeID),
+			zap.Int64("total", total),
+			zap.Int("page", page),
+			zap.Int("page_size", pageSize),
+			zap.Int("items", len(tasks)),
+			zap.Int("missing_route_items", missingRoute),
+		)
 	}
 	response.OK(c, gin.H{
 		"total":     total,
