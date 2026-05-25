@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { videoAPI } from '@/lib/api'
+import { useToast } from '@/components/ui/toast'
 
 type ManualMenuKey = 'text' | 'image' | 'reference' | 'start-end' | 'face-swap'
 
@@ -34,6 +35,7 @@ type BackendTask = {
   routed_generator?: string
   runtime_provider?: string
   effective_model?: string
+  result_url?: string
   render_config?: Record<string, unknown>
 }
 
@@ -65,10 +67,18 @@ function inferModeFromTask(task: BackendTask): string {
 }
 
 export default function ManualVideoHistoryPage() {
+  const { toast } = useToast()
   const [localItems, setLocalItems] = useState<SubmitSummary[]>([])
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const { data, isLoading } = useSWR('manual-video-history-backend', () => videoAPI.listAllTasks({ page: 1, page_size: 100 }))
+  const [busyAction, setBusyAction] = useState('')
+  const { data, isLoading, mutate } = useSWR('manual-video-history-backend', () => videoAPI.listAllTasks({ page: 1, page_size: 100 }), {
+    refreshInterval: (latest) => {
+      const items = ((latest as { data?: { items?: BackendTask[] } } | undefined)?.data?.items || []) as BackendTask[]
+      return items.some((task) => task.status === 'pending' || task.status === 'processing') ? 5000 : 0
+    },
+    revalidateOnFocus: true,
+  })
 
   useEffect(() => {
     try {
@@ -103,6 +113,19 @@ export default function ManualVideoHistoryPage() {
     })
   }, [backendItems, localMap, query, statusFilter])
 
+  const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
+    try {
+      setBusyAction(name)
+      await fn()
+      toast({ title: successText, variant: 'success' })
+      await mutate()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : `${name} 失败`, variant: 'destructive' })
+    } finally {
+      setBusyAction('')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -111,6 +134,7 @@ export default function ManualVideoHistoryPage() {
           <p className="mt-2 text-sm text-slate-300">独立于 projects 页的手动视频任务中心，优先展示后端任务真相。</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => mutate()}>立即刷新</Button>
           <Button variant="outline" asChild><Link href="/video">返回手动创建页</Link></Button>
         </div>
       </div>
@@ -118,7 +142,7 @@ export default function ManualVideoHistoryPage() {
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
           <CardTitle>后端任务历史</CardTitle>
-          <CardDescription className="text-slate-400">支持 task_id / project_id / model / mode 搜索，以及状态筛选</CardDescription>
+          <CardDescription className="text-slate-400">支持 task_id / project_id / model / mode 搜索，以及状态筛选；pending/processing 自动刷新</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),220px]">
@@ -149,9 +173,24 @@ export default function ManualVideoHistoryPage() {
                       {task.created_at || local?.createdAt || '-'} · status={task.status || '-'} · project={task.project_id} · model={task.effective_model || task.model_name || local?.modelName || '-'}
                     </div>
                   </div>
-                  <Button variant="outline" asChild>
-                    <Link href={`/video/history/${task.id}`}>查看详情</Link>
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" asChild>
+                      <Link href={`/video/history/${task.id}`}>详情</Link>
+                    </Button>
+                    {task.project_id > 0 && (
+                      <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction(`retry-${task.id}`, () => videoAPI.retryVideoTask(task.project_id, task.id, task.requested_model || task.model_name), '已触发重试')}>
+                        {busyAction === `retry-${task.id}` ? '处理中…' : '重试'}
+                      </Button>
+                    )}
+                    <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction(`cancel-${task.id}`, () => videoAPI.cancelVideoTask(task.id), '已取消/删除任务')}>
+                      {busyAction === `cancel-${task.id}` ? '处理中…' : '取消'}
+                    </Button>
+                    {task.result_url && (
+                      <Button variant="outline" asChild>
+                        <a href={task.result_url} target="_blank" rel="noreferrer">结果</a>
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             )

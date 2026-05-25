@@ -44,7 +44,13 @@ export default function ManualVideoHistoryDetailPage() {
   const { toast } = useToast()
   const [busyAction, setBusyAction] = useState('')
   const taskId = Number(params?.taskId || 0)
-  const { data, isLoading, mutate } = useSWR(taskId ? `manual-video-task-${taskId}` : null, () => videoAPI.getTask<TaskShape>(taskId))
+  const { data, isLoading, mutate } = useSWR(taskId ? `manual-video-task-${taskId}` : null, () => videoAPI.getTask<TaskShape>(taskId), {
+    refreshInterval: (latest) => {
+      const task = (latest as VideoTaskDetailResponse<TaskShape> | undefined)?.data?.task
+      return task && (task.status === 'pending' || task.status === 'processing') ? 5000 : 0
+    },
+    revalidateOnFocus: true,
+  })
   const payload = data as VideoTaskDetailResponse<TaskShape> | undefined
   const task = payload?.data?.task
   const taskDebug = payload?.data?.task_debug_summary
@@ -68,9 +74,10 @@ export default function ManualVideoHistoryDetailPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-white">手动视频任务详情</h1>
-          <p className="mt-2 text-sm text-slate-300">直接读取后端任务详情接口，不再复用 projects 详情页。</p>
+          <p className="mt-2 text-sm text-slate-300">直接读取后端任务详情接口，不再复用 projects 详情页；pending/processing 自动刷新。</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" onClick={() => mutate()}>立即刷新</Button>
           <Button variant="outline" asChild><Link href="/video/history">返回历史记录</Link></Button>
           <Button variant="outline" asChild><Link href="/video">返回创建页</Link></Button>
         </div>
