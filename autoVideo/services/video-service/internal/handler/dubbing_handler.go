@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -49,6 +50,18 @@ type batchTaskResult struct {
 	TaskID    int64  `json:"task_id,omitempty"`
 	Status    string `json:"status"`
 	Message   string `json:"message,omitempty"`
+}
+
+func parseVoiceDebugSummary(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return map[string]any{"raw": raw, "parse_error": err.Error()}
+	}
+	return payload
 }
 
 func normalizeVoiceOptions(voiceModel, voiceRate, voicePitch, voiceVolume string) (string, string, string, string) {
@@ -385,7 +398,15 @@ func (h *DubbingHandler) ListTasks(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, tasks)
+	items := make([]gin.H, 0, len(tasks))
+	for _, task := range tasks {
+		items = append(items, gin.H{
+			"task":                  task,
+			"voice_debug_available": strings.TrimSpace(task.VoiceDebug) != "",
+			"voice_debug_summary":   parseVoiceDebugSummary(task.VoiceDebug),
+		})
+	}
+	response.OK(c, items)
 }
 
 // GetTask —— 根据任务 ID 查询单个配音/字幕任务详情，返回 JSON
@@ -661,7 +682,15 @@ func (h *DubbingHandler) ListStoryboardTasks(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, tasks)
+	items := make([]gin.H, 0, len(tasks))
+	for _, task := range tasks {
+		items = append(items, gin.H{
+			"task":                  task,
+			"voice_debug_available": strings.TrimSpace(task.VoiceDebug) != "",
+			"voice_debug_summary":   parseVoiceDebugSummary(task.VoiceDebug),
+		})
+	}
+	response.OK(c, items)
 }
 
 // ListVoices —— 返回所有支持的 TTS 音色列表（供前端动态渲染选项）
