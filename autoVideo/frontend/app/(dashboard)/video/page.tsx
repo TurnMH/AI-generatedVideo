@@ -54,7 +54,7 @@ const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
   { key: 'image', label: '图生视频', description: '上传单张首帧图片驱动视频生成。', icon: ImagePlus },
   { key: 'reference', label: '融合生视频', description: '基于参考图/角色图做主体一致性生成。', icon: Layers3 },
   { key: 'start-end', label: '首尾针视频', description: '同时指定首帧与尾帧，生成过渡视频。', icon: ArrowRightLeft },
-  { key: 'face-swap', label: 'AI 换脸', description: '展示具备参考图/人物一致性基础能力的模型，作为换脸入口预留。', icon: ScanFace },
+  { key: 'face-swap', label: '人物一致性参考', description: '复用 reference2video / 角色参考图能力，作为人物一致性增强入口，不冒充独立换脸后端。', icon: ScanFace }
 ]
 
 const EMPTY_FORM: ManualFormState = {
@@ -139,7 +139,7 @@ function buildHelperText(tab: ManualMenuKey) {
     case 'start-end':
       return '首尾针视频底层依赖 startEnd2video 能力，至少需要首帧和尾帧。'
     case 'face-swap':
-      return 'AI 换脸当前只做真实能力入口，不伪装成已完成的专用换脸后端。'
+      return '当前入口会走 reference2video / 人物一致性链，不宣称存在独立 face-swap 后端。'
   }
 }
 
@@ -188,7 +188,7 @@ export default function VideoManualPage() {
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
 
-  const createManualVideoTask = async (mode: 'text' | 'image' | 'reference' | 'start-end') => {
+  const createManualVideoTask = async (mode: 'text' | 'image' | 'reference' | 'start-end' | 'face-swap') => {
     if (!form.prompt.trim()) {
       toast({ title: '请先填写提示词', variant: 'destructive' })
       return
@@ -211,6 +211,14 @@ export default function VideoManualPage() {
       toast({ title: '请至少提供首帧图或参考图', variant: 'destructive' })
       return
     }
+    if (mode === 'face-swap' && !form.faceTargetUrl.trim()) {
+      toast({ title: '请先填写目标首帧 URL', variant: 'destructive' })
+      return
+    }
+    if (mode === 'face-swap' && !form.faceSourceUrl.trim() && referenceUrlLines.length === 0) {
+      toast({ title: '请至少提供一张人物参考图或主参考脸 URL', variant: 'destructive' })
+      return
+    }
     if (mode === 'start-end' && !form.tailImageUrl.trim()) {
       toast({ title: '请先填写尾帧图片 URL', variant: 'destructive' })
       return
@@ -220,7 +228,7 @@ export default function VideoManualPage() {
     setUploadProgress(0)
     setSubmitResult(null)
     try {
-      const modeLabel = mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'
+      const modeLabel = mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'
       const projectRes = await projectAPI.create({
         title: `手动${modeLabel}视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
         description: `手动创建视频-${modeLabel}视频临时项目`,
@@ -240,7 +248,10 @@ export default function VideoManualPage() {
         sourceImageUrl = String(uploadRes?.data?.cdn_url || '').trim()
       }
 
-      const referenceImageUrls = [...referenceUrlLines]
+      const referenceImageUrls = [
+        ...(mode === 'face-swap' && form.faceSourceUrl.trim() ? [form.faceSourceUrl.trim()] : []),
+        ...referenceUrlLines,
+      ]
       if (form.referenceImageFiles.length > 0) {
         for (const file of form.referenceImageFiles) {
           const uploadRes = await storageAPI.upload(projectId, file, {
@@ -264,7 +275,11 @@ export default function VideoManualPage() {
       if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
       if (form.resolution) renderConfig.resolution = form.resolution
       if (mode === 'text' && form.modelName.includes('vidu')) renderConfig.generate_mode = 'text2video'
-      if (mode === 'reference') renderConfig.generate_mode = 'reference2video'
+      if (mode === 'reference' || mode === 'face-swap') renderConfig.generate_mode = 'reference2video'
+      if (mode === 'face-swap') {
+        renderConfig.reference_mode = 'identity-consistency'
+        renderConfig.face_swap_note = 'No dedicated face-swap backend detected; routed through reference2video / character consistency path.'
+      }
       if (mode === 'start-end') {
         renderConfig.generate_mode = 'startEnd2video'
         renderConfig.tail_image_url = tailImageUrl
@@ -273,10 +288,12 @@ export default function VideoManualPage() {
 
       const imageUrls = mode === 'text'
         ? []
-        : sourceImageUrl
-          ? [sourceImageUrl]
-          : [referenceImageUrls[0]]
-      if (mode === 'reference' && referenceImageUrls.length > 0) {
+        : mode === 'face-swap'
+          ? [faceTargetUrl || sourceImageUrl || referenceImageUrls[0]]
+          : sourceImageUrl
+            ? [sourceImageUrl]
+            : [referenceImageUrls[0]]
+      if ((mode === 'reference' || mode === 'face-swap') && referenceImageUrls.length > 0) {
         renderConfig.character_image_urls = referenceImageUrls
       }
 
@@ -293,9 +310,9 @@ export default function VideoManualPage() {
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
 
       setSubmitResult({ projectId, taskId })
-      toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
+      toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'}视频创建失败`
+      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频创建失败`
       toast({ title: message, variant: 'destructive' })
     } finally {
       setSubmitting(false)
@@ -309,9 +326,9 @@ export default function VideoManualPage() {
 
   const renderForm = () => {
     const disabledReason = activeMenu === 'text'
-      ? '当前后端项目级生成接口仍强制要求 image_urls，文生视频暂不在这里直接提交。'
+      ? ''
       : activeMenu === 'face-swap'
-        ? '当前仓内未坐实独立 AI 换脸后端接口，这里先保留参数位与模型筛选。'
+        ? ''
         : ''
 
     return (
@@ -351,7 +368,7 @@ export default function VideoManualPage() {
 
             {(activeMenu === 'reference' || activeMenu === 'face-swap') && (
               <div className="space-y-2 md:col-span-2">
-                <Label>{activeMenu === 'face-swap' ? '参考脸 / 原脸 URL（每行一张）' : '参考图 URL（每行一张）'}</Label>
+                <Label>{activeMenu === 'face-swap' ? '人物参考图 / 脸部参考 URL（每行一张）' : '参考图 URL（每行一张）'}</Label>
                 <Textarea value={form.referenceImages} onChange={(e) => setForm((prev) => ({ ...prev, referenceImages: e.target.value }))} placeholder={'https://ref-1\nhttps://ref-2'} className="min-h-[100px]" />
                 {activeMenu === 'reference' && (
                   <>
@@ -366,11 +383,11 @@ export default function VideoManualPage() {
             {activeMenu === 'face-swap' && (
               <>
                 <div className="space-y-2">
-                  <Label>目标视频首帧 / 目标脸 URL</Label>
+                  <Label>目标首帧 URL</Label>
                   <Input value={form.faceTargetUrl} onChange={(e) => setForm((prev) => ({ ...prev, faceTargetUrl: e.target.value }))} placeholder="https://..." />
                 </div>
                 <div className="space-y-2">
-                  <Label>源脸 URL</Label>
+                  <Label>主参考脸 URL</Label>
                   <Input value={form.faceSourceUrl} onChange={(e) => setForm((prev) => ({ ...prev, faceSourceUrl: e.target.value }))} placeholder="https://..." />
                 </div>
               </>
@@ -476,6 +493,10 @@ export default function VideoManualPage() {
               <Button onClick={() => createManualVideoTask('start-end')} disabled={submitting}>
                 {submitting ? '正在创建首尾针视频任务…' : '创建首尾针视频任务'}
               </Button>
+            ) : activeMenu === 'face-swap' ? (
+              <Button onClick={() => createManualVideoTask('face-swap')} disabled={submitting}>
+                {submitting ? '正在创建人物一致性任务…' : '创建人物一致性任务'}
+              </Button>
             ) : (
               <Button disabled>{disabledReason ? '等待后端链路补齐' : '下一步接真实提交'}</Button>
             )}
@@ -493,7 +514,7 @@ export default function VideoManualPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-white">手动创建视频</h1>
-          <p className="mt-2 text-sm text-slate-300">按现有 video-service 运行态模型能力分组展示，并补齐最小可操作表单骨架。</p>
+          <p className="mt-2 text-sm text-slate-300">按现有 video-service 运行态模型能力分组展示，并补齐最小可操作表单骨架；未坐实的独立能力会按真实链路收口命名。</p>
         </div>
         <Link href="/projects" className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition hover:bg-white/10">去项目生成链</Link>
       </div>
