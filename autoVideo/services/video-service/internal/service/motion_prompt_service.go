@@ -172,9 +172,11 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 1. 轴线法则：同一场景内，人物朝向不得在相邻镜头间无缘由反转；
 2. 动作连续：若前镜头人物抬手，下一镜头应延续此动作（切入同动作的不同景别），不能突然静止；
 3. 能量渐变：相邻分镜的运动强度不能突变（激烈动作后必须接一个静止或慢镜特写作为喘息）；
-4. 视觉重心锚定：描述人物的画面位置（左/右/居中），避免相邻镜头人物位置无规律跳跃；
+4. 视觉重心锚定：描述人物的画面位置（左/右/居中）以及前景/中景/后景层次，避免相邻镜头人物位置无规律跳跃；
 5. 景别衔接节奏：不能连续超过2个相同景别（特写/全景/中景需交替使用）；
-6. 光线意识：运动描述中若涉及转身/移位，考虑光源方向变化对主体面部的影响。
+6. 光线意识：运动描述中若涉及转身/移位，考虑光源方向变化对主体面部的影响；
+7. 空间继承：同一 scene_group 内，门窗、桌椅、床、车、楼梯、柜台等关键锚点不能忽左忽右，除非描述里明确写出镜头绕行或人物换位过程；
+8. 人物调度连续：两人对戏时，要保持谁在画面左侧、谁在右侧、谁在前景/后景的关系，除非先描述一个能看见的过渡动作。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 【内联摄影标注 — 最高优先级执行】
@@ -190,10 +192,12 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 【场景分组元数据 — 必须利用】
 ━━━━━━━━━━━━━━━━━━━━━━━━
 用户输入的每条片段还会携带 scene_group / camera / mood 元数据：
-1. same_scene_as_prev=true 时，优先延续动作、朝向、视线与运动能量；
+1. same_scene_as_prev=true 时，优先延续动作、朝向、视线、左右站位与运动能量；
 2. scene_group 发生变化时，先建立新场景或新空间关系，再自然承接人物；
 3. camera / mood 非空时，把它们视为强约束，不可忽略或随意改写；
-4. 若上一镜与下一镜属于同 scene_group，过渡提示优先写成动作连续、视线引导或匹配切。
+4. 若上一镜与下一镜属于同 scene_group，过渡提示优先写成动作连续、视线引导或匹配切；
+5. 同一 scene_group 的第一条镜头描述，优先补足空间锚点：人物相对位置、门窗或关键道具所在方位、前后景层次；
+6. 如果片段描述本身已经给出人物在左/中/右、靠窗/靠门、前景/后景等信息，必须继承，不得改写成新的空间关系。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 【禁止清单】
@@ -203,6 +207,7 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 ✗ 相邻镜头运动强度突变超过3级（0-10分制）
 ✗ 连续超过2个完全静止镜头
 ✗ 镜头运动方向与人物动作方向完全对抗
+✗ 同场景内人物左右站位、前后景层次、关键锚点位置无缘由跳变
 ✗ 在视觉描述中加入台词或内心独白
 
 每条描述不超过80字，现在时态，动词开头。
@@ -285,9 +290,9 @@ func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions s
 		}
 	}
 	if useChinese {
-		sb.WriteString(fmt.Sprintf("总片段数：%d\n元数据约束：same_scene_as_prev=true 表示必须与上一镜延续动作、轴线和能量。\n\n场景序列：\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("总片段数：%d\n元数据约束：same_scene_as_prev=true 表示必须与上一镜延续动作、轴线、左右站位、空间锚点和能量。请特别关注人物在画面左/中/右的位置、朝向、视线对象，以及与门窗桌椅等关键物件的相对关系。\n\n场景序列：\n", len(descs)))
 	} else {
-		sb.WriteString(fmt.Sprintf("Total clips: %d\nMetadata rule: same_scene_as_prev=true means the clip must continue the prior clip's action line, facing direction, and energy.\n\nScene sequence:\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("Total clips: %d\nMetadata rule: same_scene_as_prev=true means the clip must continue the prior clip's action line, facing direction, left/right blocking, spatial anchors, and energy. Pay special attention to frame position, eyeline target, and relation to key objects such as doors, windows, tables, or stairs.\n\nScene sequence:\n", len(descs)))
 	}
 	for i, d := range descs {
 		meta := formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints, i)

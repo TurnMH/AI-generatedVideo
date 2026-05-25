@@ -97,11 +97,15 @@ const continuityAuditSystemPrompt = `你是一名资深分镜脚本顾问，专�
 5. **情绪/氛围缺失**：mood 为空且描述中有明显情绪词 → 从 [tense, calm, joyful, sad, mysterious, romantic, epic, dramatic, fearful, hopeful] 中选一个合适的填入。
 6. **叙事断层**：相邻两帧之间发生了明显的场景跳转但没有过渡描述 → 在 issues 中注明，不自动插帧（只标记）。
 7. **空间方位漂移**：同一场景组内人物站位（左/中/右）、朝向、与关键道具/背景的相对位置无缘由跳变 → 在 issues 中注明，并尽量在 scene_description 中补一条稳定空间锚点语句。
+8. **空间锚点缺失**：新场景首镜或新场景组前两镜没有交代门窗/桌椅/楼梯/车辆/柜台等关键环境结构，导致后续画面无从继承 → 在 scene_description 中补空间建立句。
+9. **位移动作缺失**：上一帧与下一帧的人物位置明显不同，但中间没有“走近/绕过/后退/转身/换位”等可见过渡动作 → 在 issues 中注明，并在 scene_description 中补足最小必要过渡。
+10. **关键道具连续性丢失**：上一帧仍被人物持有或贴身使用的重要道具，在下一帧无说明地消失/换手/换位置 → 在 issues 中注明，并优先在 scene_description 中补足。
 
 **修改原则**
 - 只补充/更正有明确依据的信息，不凭空发明情节。
 - 不修改 scene_description 的叙事核心，只在周边细节上扩充。
 - 若补充 scene_description，可优先补空间锚点，例如人物位于画面左侧、门在右后景、桌案在身侧等。
+- 若补充 scene_description，优先写观众能直接看到的动作和位置关系，不写抽象心理解释。
 - 若一帧没有任何问题，设 changed: false，其他字段留空。
 
 **输出格式（严格遵守）**：
@@ -142,7 +146,7 @@ func (a *SceneContinuityAuditor) AuditGroup(ctx context.Context, groupKey string
 	}
 
 	userContent := fmt.Sprintf(
-		"请审查以下场景组（%s）的 %d 帧分镜，检查连贯性并输出修补建议（JSON）：\n\n%s",
+		"请审查以下场景组（%s）的 %d 帧分镜，检查连贯性并输出修补建议（JSON）。请重点关注：人物左右站位是否稳定、朝向是否反转、前景/中景/后景层次是否漂移、门窗桌椅等空间锚点是否建立、人物位移动作是否缺少过渡、关键道具是否无故消失。若需要修补，请优先补最小必要的可见动作与空间描述，而不是重写剧情。\n\n%s",
 		groupKey, len(sbs), string(payloadJSON),
 	)
 
