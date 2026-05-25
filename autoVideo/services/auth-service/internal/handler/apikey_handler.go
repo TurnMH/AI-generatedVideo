@@ -18,11 +18,13 @@ type APIKeyHandler struct {
 	sharedRuntimeProviders map[string]struct{}
 }
 
+var sharedRuntimeProviderDefaults = []string{
+	"runtime.video.llm",
+	"runtime.video.music",
+}
+
 func defaultSharedRuntimeProviders() map[string]struct{} {
-	providers := []string{
-		"runtime.video.llm",
-		"runtime.video.music",
-	}
+	providers := sharedRuntimeProviderDefaults
 	out := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
 		out[provider] = struct{}{}
