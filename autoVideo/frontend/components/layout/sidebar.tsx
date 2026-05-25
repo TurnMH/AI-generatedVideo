@@ -22,6 +22,10 @@ import {
   FileText,
   Film,
   Eye,
+  ImagePlus,
+  Layers3,
+  ArrowRightLeft,
+  ScanFace,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/lib/store/auth'
@@ -32,6 +36,18 @@ const navItems = [
     label: '视频',
     href: '/projects',
     icon: FolderOpen,
+  },
+  {
+    label: '手动创建视频',
+    href: '/video',
+    icon: Video,
+    children: [
+      { label: '文生视频', href: '/video?tab=text', icon: Film },
+      { label: '图生视频', href: '/video?tab=image', icon: ImagePlus },
+      { label: '融合生视频', href: '/video?tab=reference', icon: Layers3 },
+      { label: '首尾针视频', href: '/video?tab=start-end', icon: ArrowRightLeft },
+      { label: 'AI 换脸', href: '/video?tab=face-swap', icon: ScanFace },
+    ],
   },
   {
     label: '视频（串行）',
@@ -134,7 +150,8 @@ export function Sidebar() {
                   <ul className="space-y-0.5 pl-1">
                     {item.children.map((child) => {
                       const ChildIcon = child.icon
-                      const childActive = pathname === child.href
+                      const childPath = child.href.split('?')[0]
+                      const childActive = pathname === childPath
                       return (
                         <li key={child.href}>
                           <Link
