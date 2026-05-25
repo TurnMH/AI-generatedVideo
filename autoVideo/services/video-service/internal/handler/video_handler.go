@@ -94,6 +94,30 @@ func NewVideoHandler(svc *service.VideoService, watermarkSvc *service.WatermarkS
 
 // ---- request / response DTOs ----
 
+type routeCoverageSummary struct {
+	TaskMissingRoute bool `json:"task_missing_route"`
+	ClipTotal        int  `json:"clip_total"`
+	ClipMissingRoute int  `json:"clip_missing_route"`
+}
+
+func summarizeRouteCoverage(task *model.VideoTask) routeCoverageSummary {
+	summary := routeCoverageSummary{}
+	if task == nil {
+		return summary
+	}
+	if strings.TrimSpace(task.RequestedModel) == "" || strings.TrimSpace(task.RoutedGenerator) == "" || strings.TrimSpace(task.RuntimeProvider) == "" {
+		summary.TaskMissingRoute = true
+	}
+	summary.ClipTotal = len(task.Clips)
+	for i := range task.Clips {
+		clip := task.Clips[i]
+		if strings.TrimSpace(clip.RequestedModel) == "" || strings.TrimSpace(clip.RoutedGenerator) == "" || strings.TrimSpace(clip.RuntimeProvider) == "" {
+			summary.ClipMissingRoute++
+		}
+	}
+	return summary
+}
+
 type generateReq struct {
 	ProjectID         int64              `json:"project_id" binding:"required"`
 	EpisodeID         *int64             `json:"episode_id"`
@@ -451,11 +475,18 @@ func (h *VideoHandler) ListProjectVideos(c *gin.Context) {
 		response.InternalError(c, "failed to list videos")
 		return
 	}
+	missingRoute := 0
+	for i := range tasks {
+		if strings.TrimSpace(tasks[i].RequestedModel) == "" || strings.TrimSpace(tasks[i].RoutedGenerator) == "" || strings.TrimSpace(tasks[i].RuntimeProvider) == "" {
+			missingRoute++
+		}
+	}
 	response.OK(c, gin.H{
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
-		"items":     tasks,
+		"total":               total,
+		"page":                page,
+		"page_size":           pageSize,
+		"items":               tasks,
+		"missing_route_items": missingRoute,
 	})
 }
 
