@@ -5,6 +5,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { videoAPI } from '@/lib/api'
 
 type ManualMenuKey = 'text' | 'image' | 'reference' | 'start-end' | 'face-swap'
@@ -34,7 +35,6 @@ type BackendTask = {
   runtime_provider?: string
   effective_model?: string
   render_config?: Record<string, unknown>
-  image_urls?: string[]
 }
 
 const HISTORY_KEY = 'manual-video-history-v1'
@@ -66,7 +66,9 @@ function inferModeFromTask(task: BackendTask): string {
 
 export default function ManualVideoHistoryPage() {
   const [localItems, setLocalItems] = useState<SubmitSummary[]>([])
-  const { data, isLoading } = useSWR('manual-video-history-backend', () => videoAPI.listAllTasks({ page: 1, page_size: 50 }))
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const { data, isLoading } = useSWR('manual-video-history-backend', () => videoAPI.listAllTasks({ page: 1, page_size: 100 }))
 
   useEffect(() => {
     try {
@@ -84,6 +86,23 @@ export default function ManualVideoHistoryPage() {
     return payload?.data?.items || []
   }, [data])
 
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return backendItems.filter((task) => {
+      const local = localMap.get(task.id)
+      const mode = (local ? inferModeFromSummary(local) : inferModeFromTask(task)).toLowerCase()
+      const statusOk = statusFilter === 'all' || (task.status || '') === statusFilter
+      const haystack = [
+        String(task.id),
+        String(task.project_id),
+        task.status || '',
+        task.effective_model || task.model_name || local?.modelName || '',
+        mode,
+      ].join(' ').toLowerCase()
+      return statusOk && (!q || haystack.includes(q))
+    })
+  }, [backendItems, localMap, query, statusFilter])
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -99,14 +118,27 @@ export default function ManualVideoHistoryPage() {
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
           <CardTitle>后端任务历史</CardTitle>
-          <CardDescription className="text-slate-400">/api/v1/videos/tasks + 本地提交摘要补充</CardDescription>
+          <CardDescription className="text-slate-400">支持 task_id / project_id / model / mode 搜索，以及状态筛选</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),220px]">
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜 task_id / project_id / model / mode" />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-10 rounded-md border border-white/10 bg-slate-950 px-3 text-sm text-slate-100">
+              <option value="all">全部状态</option>
+              <option value="pending">pending</option>
+              <option value="processing">processing</option>
+              <option value="succeeded">succeeded</option>
+              <option value="failed">failed</option>
+              <option value="paused">paused</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </div>
+
           {isLoading ? (
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">正在加载任务历史…</div>
-          ) : backendItems.length === 0 ? (
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">后端暂无任务记录。</div>
-          ) : backendItems.map((task) => {
+          ) : filteredItems.length === 0 ? (
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">没有匹配的任务。</div>
+          ) : filteredItems.map((task) => {
             const local = localMap.get(task.id)
             return (
               <div key={task.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
@@ -114,7 +146,7 @@ export default function ManualVideoHistoryPage() {
                   <div>
                     <div className="font-medium text-white">{local ? inferModeFromSummary(local) : inferModeFromTask(task)} · task #{task.id}</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      {task.created_at || local?.createdAt || '-'} · status={task.status || '-'} · model={task.effective_model || task.model_name || local?.modelName || '-'}
+                      {task.created_at || local?.createdAt || '-'} · status={task.status || '-'} · project={task.project_id} · model={task.effective_model || task.model_name || local?.modelName || '-'}
                     </div>
                   </div>
                   <Button variant="outline" asChild>

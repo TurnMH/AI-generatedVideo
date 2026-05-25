@@ -1,11 +1,13 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { useParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { videoAPI, type VideoTaskDetailResponse } from '@/lib/api'
+import { useToast } from '@/components/ui/toast'
 
 type TaskShape = {
   id: number
@@ -39,12 +41,27 @@ type TaskShape = {
 
 export default function ManualVideoHistoryDetailPage() {
   const params = useParams<{ taskId: string }>()
+  const { toast } = useToast()
+  const [busyAction, setBusyAction] = useState('')
   const taskId = Number(params?.taskId || 0)
-  const { data, isLoading } = useSWR(taskId ? `manual-video-task-${taskId}` : null, () => videoAPI.getTask<TaskShape>(taskId))
+  const { data, isLoading, mutate } = useSWR(taskId ? `manual-video-task-${taskId}` : null, () => videoAPI.getTask<TaskShape>(taskId))
   const payload = data as VideoTaskDetailResponse<TaskShape> | undefined
   const task = payload?.data?.task
   const taskDebug = payload?.data?.task_debug_summary
   const clipsDebug = payload?.data?.clips_debug || []
+
+  const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
+    try {
+      setBusyAction(name)
+      await fn()
+      toast({ title: successText, variant: 'success' })
+      await mutate()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : `${name} 失败`, variant: 'destructive' })
+    } finally {
+      setBusyAction('')
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -70,16 +87,41 @@ export default function ManualVideoHistoryDetailPage() {
               <CardTitle>task #{task.id}</CardTitle>
               <CardDescription className="text-slate-400">project_id={task.project_id} · status={task.status || '-'}</CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3 text-sm text-slate-200 md:grid-cols-2">
-              <div>model_name：{task.model_name || '-'}</div>
-              <div>effective_model：{task.effective_model || '-'}</div>
-              <div>requested_model：{task.requested_model || '-'}</div>
-              <div>routed_generator：{task.routed_generator || '-'}</div>
-              <div>runtime_provider：{task.runtime_provider || '-'}</div>
-              <div>created_at：{task.created_at || '-'}</div>
-              <div>updated_at：{task.updated_at || '-'}</div>
-              <div>result_url：{task.result_url || '-'}</div>
-              <div className="md:col-span-2">error_msg：{task.error_msg || '-'}</div>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 text-sm text-slate-200 md:grid-cols-2">
+                <div>model_name：{task.model_name || '-'}</div>
+                <div>effective_model：{task.effective_model || '-'}</div>
+                <div>requested_model：{task.requested_model || '-'}</div>
+                <div>routed_generator：{task.routed_generator || '-'}</div>
+                <div>runtime_provider：{task.runtime_provider || '-'}</div>
+                <div>created_at：{task.created_at || '-'}</div>
+                <div>updated_at：{task.updated_at || '-'}</div>
+                <div className="md:col-span-2 break-all">result_url：{task.result_url || '-'}</div>
+                <div className="md:col-span-2">error_msg：{task.error_msg || '-'}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {task.project_id > 0 && (
+                  <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('retry', () => videoAPI.retryVideoTask(task.project_id, task.id, task.requested_model || task.model_name), '已触发重试')}>
+                    {busyAction === 'retry' ? '重试中…' : '重试任务'}
+                  </Button>
+                )}
+                <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('cancel', () => videoAPI.cancelVideoTask(task.id), '已取消/删除任务')}>
+                  {busyAction === 'cancel' ? '处理中…' : '取消任务'}
+                </Button>
+                <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('compose', () => videoAPI.compose(task.id), '已触发重新合成')}>
+                  {busyAction === 'compose' ? '处理中…' : '重新合成'}
+                </Button>
+                {task.project_id > 0 && (
+                  <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('export', () => videoAPI.export(task.project_id, task.id), '已请求导出接口')}>
+                    {busyAction === 'export' ? '处理中…' : '请求导出'}
+                  </Button>
+                )}
+                {task.result_url && (
+                  <Button variant="outline" asChild>
+                    <a href={task.result_url} target="_blank" rel="noreferrer">打开结果视频</a>
+                  </Button>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -117,7 +159,7 @@ export default function ManualVideoHistoryDetailPage() {
                       <div>requested_model：{clip.requested_model || clipTask?.requested_model || '-'}</div>
                       <div>routed_generator：{clip.routed_generator || clipTask?.routed_generator || '-'}</div>
                       <div>runtime_provider：{clip.runtime_provider || clipTask?.runtime_provider || '-'}</div>
-                      <div>clip_url：{clipTask?.clip_url || '-'}</div>
+                      <div className="break-all">clip_url：{clipTask?.clip_url || '-'}</div>
                       <div className="md:col-span-2">error_msg：{clipTask?.error_msg || '-'}</div>
                     </div>
                   </div>
