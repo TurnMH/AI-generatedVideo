@@ -97,9 +97,9 @@ type generateReq struct {
 }
 
 type extractVideoContentReq struct {
-	VideoURL string `json:"video_url" binding:"required"`
-	Language string `json:"language"`
-	OnlyAudio bool `json:"only_audio"`
+	VideoURL  string `json:"video_url" binding:"required"`
+	Language  string `json:"language"`
+	OnlyAudio bool   `json:"only_audio"`
 }
 
 // Generate —— 处理视频生成请求，创建任务并分发到 Kafka，返回 task_id
@@ -161,13 +161,28 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 		AudioURL:         req.AudioURL,
 		SubtitleText:     req.SubtitleText,
 		ModelName:        req.ModelName,
+		RequestedModel:   req.ModelName,
 		SceneDescription: req.SceneDescription,
 		RenderConfig:     req.RenderConfig,
 		DurationSec:      req.ClipDurationSec,
 		Status:           model.StatusPending,
 		SerialScene:      req.SerialScene,
 		SceneGroupKeys:   model.StringArray(req.SceneGroupKeys),
+		RoutedGenerator:  "pending-resolve",
+		RuntimeProvider:  "pending-resolve",
+		EffectiveModel:   "pending-resolve",
+		RouteReason:      "request-accepted",
 	}
+
+	h.logger.Info("video task accepted",
+		zap.Int64("project_id", req.ProjectID),
+		zap.Any("episode_id", req.EpisodeID),
+		zap.String("requested_model", req.ModelName),
+		zap.String("style_preset", req.StylePreset),
+		zap.String("motion_mode", req.MotionMode),
+		zap.Bool("serial_scene", req.SerialScene),
+		zap.Int("image_count", len(req.ImageURLs)),
+	)
 
 	ctx := c.Request.Context()
 	if err := h.svc.CreateTask(ctx, task); err != nil {
@@ -430,7 +445,7 @@ type projectGenerateReq struct {
 	RenderConfig      model.RenderConfig `json:"render_config"`
 	ClipDurationSec   float64            `json:"clip_duration_sec"`
 	// 视频串行生成
-	SerialScene    bool     `json:"serial_scene"`    // true = 同场景分镜串行生成（末帧约束）
+	SerialScene    bool     `json:"serial_scene"`     // true = 同场景分镜串行生成（末帧约束）
 	SceneGroupKeys []string `json:"scene_group_keys"` // 与 image_urls 一一对应的场景 key
 }
 
@@ -512,6 +527,16 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 		SerialScene:    req.SerialScene,
 		SceneGroupKeys: model.StringArray(req.SceneGroupKeys),
 	}
+
+	h.logger.Info("video task accepted",
+		zap.Int64("project_id", pid),
+		zap.Any("episode_id", req.EpisodeID),
+		zap.String("requested_model", req.ModelName),
+		zap.String("style_preset", req.StylePreset),
+		zap.String("motion_mode", req.MotionMode),
+		zap.Bool("serial_scene", req.SerialScene),
+		zap.Int("image_count", len(req.ImageURLs)),
+	)
 
 	ctx := c.Request.Context()
 	if err := h.svc.CreateTask(ctx, task); err != nil {
@@ -641,7 +666,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		SceneAssetIDs     [][]int64  `json:"scene_asset_ids"`    // per-clip related asset IDs
 		AudioURL          string     `json:"audio_url"`
 		SceneDescription  string     `json:"scene_description"`
-		SceneGroupKeys    []string   `json:"scene_group_keys"`  // 串行模式：每 clip 的场景 key
+		SceneGroupKeys    []string   `json:"scene_group_keys"` // 串行模式：每 clip 的场景 key
 	}
 	var req struct {
 		Episodes        []episodeImages    `json:"episodes" binding:"required,min=1"`
@@ -652,7 +677,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		ExportFormat    string             `json:"export_format"`
 		RenderConfig    model.RenderConfig `json:"render_config"`
 		ClipDurationSec float64            `json:"clip_duration_sec"`
-		SerialScene     bool               `json:"serial_scene"`    // 串行模式
+		SerialScene     bool               `json:"serial_scene"` // 串行模式
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())

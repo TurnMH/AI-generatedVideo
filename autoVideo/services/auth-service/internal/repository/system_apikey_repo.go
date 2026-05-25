@@ -70,11 +70,15 @@ func (r *systemAPIKeyRepository) Create(key *model.SystemAPIKey) error {
 	return nil
 }
 
-// ReplaceRuntimeKeys —— 用最新的 runtime.* 配置覆盖数据库中的 runtime 系统渠道镜像
+// ReplaceRuntimeKeys —— 用最新的 runtime.* 配置覆盖数据库中的 runtime 系统渠道镜像。
+// 这是“镜像覆盖机制”，不是后台逐条手工维护表：
+// - 先删除全部 runtime.% 记录
+// - 再写入当前配置文件解析出的最新 runtime.* 集合
+// 因此 runtime.* 的事实来源应始终视为配置同步链，而不是数据库人工编辑。
 func (r *systemAPIKeyRepository) ReplaceRuntimeKeys(keys []model.SystemAPIKey) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("provider LIKE ?", "runtime.%").Delete(&model.SystemAPIKey{}).Error; err != nil {
-			return fmt.Errorf("delete runtime system api keys: %w", err)
+			return fmt.Errorf("delete runtime system api keys before replace: %w", err)
 		}
 		if len(keys) == 0 {
 			return nil
@@ -83,7 +87,7 @@ func (r *systemAPIKeyRepository) ReplaceRuntimeKeys(keys []model.SystemAPIKey) e
 			keys[i].ID = 0
 		}
 		if err := tx.Create(&keys).Error; err != nil {
-			return fmt.Errorf("create runtime system api keys: %w", err)
+			return fmt.Errorf("create replaced runtime system api keys: %w", err)
 		}
 		return nil
 	})

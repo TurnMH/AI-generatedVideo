@@ -7,6 +7,15 @@
 > 环境变量优先级高于配置文件，格式为 `{SERVICE_NAME_UPPER}_{KEY_PATH_UPPER}`。
 
 > 当前运行期密钥约定：本地 `config.local.yaml` 是初始化 / 更新来源；`auth-service` 会把其中的系统运行 key 同步到 `system_api_keys`；业务服务运行时统一从 `auth-service` / 数据库读取活跃 key。
+>
+> **运行态真相源优先级：**
+> 1. 业务服务实际生效值优先看 `auth-service` 下发的 `/internal/runtime-api-keys`
+> 2. `system_api_keys` 中的 `runtime.*` 视为配置同步后的镜像，不应人工逐条修改
+> 3. `config.local.yaml` 是初始化与覆盖来源，不等于业务服务启动后的最终生效值
+>
+> **video-service 特别说明：**
+> - `runtime.video.llm` / `runtime.video.music` 属于辅助链 provider，不等于主视频生成 provider
+> - `kling*` 请求名在当前实现中可能真实路由到 `runtime.video.vclm`，不能只按展示名判断真实执行方
 
 > 如果走 `infra/docker-compose.full.yml`，需要确保 `autoVideo/config.local.yaml` 已存在；compose 会把它挂载到 `auth-service` 容器，并通过 `AUTOVIDEO_CONFIG_FILE=/app/config.local.yaml` 让首启同步生效。
 
@@ -245,6 +254,11 @@ models:
 ---
 
 ## video-service (port 8006)
+
+> 当前 video-service 已增加运行态摘要能力：
+> - 启动时会打印实际消费到的 `runtime.video.*` provider 摘要
+> - 启动时会打印 generator 注册摘要
+> - `kling*` / `vidu*` / `doubao*` / `suanneng` 等请求名与真实 generator/provider 可能不一一对应，应以运行态 explain / 日志为准
 
 ```yaml
 http:
