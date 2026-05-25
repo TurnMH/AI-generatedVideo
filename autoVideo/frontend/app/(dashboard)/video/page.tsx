@@ -164,6 +164,14 @@ function capabilityHints(model: VideoModelStatus, categories: ManualMenuKey[]) {
   return hints
 }
 
+function getModelGenerateModes(model: VideoModelStatus) {
+  return ((model.params || []).find((param) => param.key === 'generate_mode')?.values || []).map((item) => item.value)
+}
+
+function getCategoryLabel(category: ManualMenuKey) {
+  return MANUAL_MENU_ITEMS.find((item) => item.key === category)?.label || category
+}
+
 function buildHelperText(tab: ManualMenuKey) {
   switch (tab) {
     case 'text':
@@ -295,6 +303,7 @@ export default function VideoManualPage() {
         sourceImageUrl = String(uploadRes?.data?.cdn_url || '').trim()
       }
 
+      const faceTargetUrl = form.faceTargetUrl.trim()
       const referenceImageUrls = [
         ...(mode === 'face-swap' && form.faceSourceUrl.trim() ? [form.faceSourceUrl.trim()] : []),
         ...referenceUrlLines,
@@ -615,7 +624,7 @@ export default function VideoManualPage() {
         <Card className="border-white/10 bg-slate-900/60 text-slate-100">
           <CardHeader>
             <CardTitle>手动创建视频</CardTitle>
-            <CardDescription className="text-slate-400">二级菜单</CardDescription>
+            <CardDescription className="text-slate-400">二级菜单（显示当前前端归类命中的模型数量）</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             {MANUAL_MENU_ITEMS.map((item) => {
@@ -632,7 +641,10 @@ export default function VideoManualPage() {
                         <div className="mt-1 text-xs text-slate-400">{item.description}</div>
                       </div>
                     </div>
-                    <span className="rounded-full bg-white/8 px-2 py-1 text-xs text-slate-300">{count}</span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="rounded-full bg-white/8 px-2 py-1 text-xs text-slate-300">{count}</span>
+                      <span className="text-[10px] text-slate-500">models</span>
+                    </div>
                   </div>
                 </button>
               )
@@ -655,12 +667,16 @@ export default function VideoManualPage() {
               {isLoading ? (
                 <div className="flex items-center gap-2 text-sm text-slate-300"><Loader2 className="h-4 w-4 animate-spin" /> 正在加载视频模型能力…</div>
               ) : activeModels.length === 0 ? (
-                <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">当前分类下没有可识别模型。</div>
+                <div className="space-y-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
+                  <div>当前分类下没有可识别模型。</div>
+                  <div className="text-xs text-amber-100/80">可先检查 `/api/v1/videos/model-status` 是否返回了 `generate_mode`，或查看其它分类的模型卡片里的 raw key / generate_mode / 前端分类结果。</div>
+                </div>
               ) : (
                 <div className="grid gap-4 xl:grid-cols-2">
                   {activeModels.map((model) => {
                     const categories = inferModelCategories(model)
                     const hints = capabilityHints(model, categories)
+                    const generateModes = getModelGenerateModes(model)
                     return (
                       <div key={`${activeMenu}-${model.key}`} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                         <div className="flex items-start justify-between gap-3">
@@ -674,6 +690,28 @@ export default function VideoManualPage() {
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {hints.map((hint) => <span key={hint} className="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-300">{hint}</span>)}
+                        </div>
+                        <div className="mt-4 grid gap-3 text-xs text-slate-300 md:grid-cols-3">
+                          <div className="rounded-xl bg-slate-950/50 p-3">
+                            <div className="text-[10px] uppercase tracking-wider text-slate-500">raw key</div>
+                            <div className="mt-1 break-all text-slate-200">{model.key}</div>
+                          </div>
+                          <div className="rounded-xl bg-slate-950/50 p-3 md:col-span-2">
+                            <div className="text-[10px] uppercase tracking-wider text-slate-500">generate_mode</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {generateModes.length > 0 ? generateModes.map((mode) => (
+                                <span key={`${model.key}-${mode}`} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-300">{mode}</span>
+                              )) : <span className="text-slate-500">未返回 generate_mode</span>}
+                            </div>
+                          </div>
+                          <div className="rounded-xl bg-slate-950/50 p-3 md:col-span-3">
+                            <div className="text-[10px] uppercase tracking-wider text-slate-500">前端判定分类</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {categories.length > 0 ? categories.map((category) => (
+                                <span key={`${model.key}-${category}`} className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">{getCategoryLabel(category)}</span>
+                              )) : <span className="text-slate-500">未命中任何分类</span>}
+                            </div>
+                          </div>
                         </div>
                         {!!model.params?.length && (
                           <div className="mt-4 space-y-2">
