@@ -1886,6 +1886,162 @@ func callFrameExtractorFrames(ctx context.Context, videoURL string, projectID, u
 	return nil, fmt.Errorf("empty frame_url in response")
 }
 
+type VideoRouteExplain struct {
+	RequestedModel     string
+	NormalizedModel    string
+	RoutedGenerator    string
+	RuntimeProvider    string
+	ProviderModel      string
+	RouteReason        string
+	SupportsNativeAudio bool
+	IsConfiguredAlias  bool
+}
+
+func runtimeProviderForGenerator(generatorKey string) string {
+	switch generatorKey {
+	case "comfyui-video":
+		return "runtime.video.comfyui"
+	case "sora2":
+		return "runtime.video.sora2"
+	case "wan":
+		return "runtime.video.wan"
+	case "hubagi-voe3.1", "hubagi-TC-GV":
+		return "runtime.video.veo"
+	case "tencent-vclm":
+		return "runtime.video.vclm"
+	case "doubao":
+		return "runtime.video.doubao"
+	case "doubao-seedance":
+		return "runtime.video.doubao.seedance"
+	case "vidu", "vidu-mix":
+		return "runtime.video.vidu"
+	case "vidu-offpeak", "vidu-mix-offpeak":
+		return "runtime.video.vidu.offpeak"
+	case "suanneng":
+		return "runtime.video.suanneng"
+	case "gaga":
+		return "runtime.video.gaga"
+	case "aiping":
+		return "runtime.video.aiping"
+	case "kling":
+		return "runtime.video.kling"
+	case "baidu-bce":
+		return "runtime.video.baidu.bce"
+	case "runninghub":
+		return "runtime.video.runninghub"
+	case "cogvideo":
+		return "runtime.video.replicate"
+	default:
+		return ""
+	}
+}
+
+func supportsNativeAudioForGenerator(generatorKey string) bool {
+	switch generatorKey {
+	case "doubao-seedance", "suanneng":
+		return true
+	default:
+		return false
+	}
+}
+
+func explainVideoGeneratorRoute(modelName string) VideoRouteExplain {
+	raw := strings.TrimSpace(modelName)
+	trimmed := strings.ToLower(raw)
+	explain := VideoRouteExplain{
+		RequestedModel:  raw,
+		NormalizedModel: trimmed,
+	}
+	switch trimmed {
+	case "", "auto":
+		explain.RouteReason = "empty-or-auto"
+		return explain
+	case "comfyui", "comfyui-video", "comfyui-local-video", "local", "local-video":
+		explain.RoutedGenerator = "comfyui-video"
+		explain.RouteReason = "local-comfyui-alias"
+		explain.IsConfiguredAlias = true
+	case "sora", "sora2", "sora-2":
+		explain.RoutedGenerator = "sora2"
+		explain.RouteReason = "sora-family-alias"
+		explain.IsConfiguredAlias = true
+	case "wan", "wanx", "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
+		explain.RoutedGenerator = "wan"
+		explain.ProviderModel = "wanx2.1-i2v-turbo"
+		explain.RouteReason = "wan-image-to-video-alias"
+		explain.IsConfiguredAlias = true
+	case "wan-t2v", "wan2.1-t2v", "wanx2.1-t2v", "wanx2.1-t2v-turbo":
+		explain.RoutedGenerator = "wan"
+		explain.ProviderModel = "wanx2.1-t2v-turbo"
+		explain.RouteReason = "wan-text-to-video-alias"
+		explain.IsConfiguredAlias = true
+	case "wan2.6":
+		explain.RoutedGenerator = "wan"
+		explain.ProviderModel = "wan2.6"
+		explain.RouteReason = "wan-family-alias"
+		explain.IsConfiguredAlias = true
+	case "veo", "veo3.1", "hubagi-veo3.1", "voe3.1", "hubagi-voe3.1", "xingwei-voe3.1":
+		explain.RoutedGenerator = "hubagi-voe3.1"
+		explain.ProviderModel = "voe3.1"
+		explain.RouteReason = "veo-routed-via-hubagi"
+		explain.IsConfiguredAlias = true
+	case "tc-gv", "hubagi-tc-gv", "xingwei-3.1", "hubagi-xingwei-3.1":
+		explain.RoutedGenerator = "hubagi-TC-GV"
+		explain.ProviderModel = "TC-GV"
+		explain.RouteReason = "tc-gv-routed-via-hubagi"
+		explain.IsConfiguredAlias = true
+	case "kling", "kling-v3", "kling-3.0", "xinghe-3.0",
+		"kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni",
+		"kling-v1.5", "kling-v1.6", "kling-v2", "kling-v2.1":
+		explain.RoutedGenerator = "tencent-vclm"
+		explain.RouteReason = "kling-family-defaults-to-vclm"
+		explain.IsConfiguredAlias = true
+	case "doubao", "v4.0", "xingguang-3.0", "doubao-v4", "doubao-v4.0":
+		explain.RoutedGenerator = "doubao"
+		explain.ProviderModel = "V4.0"
+		explain.RouteReason = "doubao-v4-family"
+		explain.IsConfiguredAlias = true
+	case "doubao-seedance", "doubao-seedream", "seedream", "xingtu":
+		explain.RoutedGenerator = "doubao-seedance"
+		explain.RouteReason = "seedance-family"
+		explain.IsConfiguredAlias = true
+	case "doubao-seedream-4-0-250828":
+		explain.RoutedGenerator = "doubao-seedance"
+		explain.ProviderModel = "doubao-seedream-4-0-250828"
+		explain.RouteReason = "seedance-specific-model"
+		explain.IsConfiguredAlias = true
+	case "doubao-seedream-4-5-251128", "seedream-4-5", "doubao-seedream-4.5":
+		explain.RoutedGenerator = "doubao-seedance"
+		explain.ProviderModel = "doubao-seedream-4-5-251128"
+		explain.RouteReason = "seedance-specific-model"
+		explain.IsConfiguredAlias = true
+	case "vidu", "viduq3-pro", "vidu-q3-pro", "xingcheng-2.6", "vidu-3pro", "vidu官方-3pro":
+		explain.RoutedGenerator = "vidu"
+		explain.ProviderModel = "viduq3-pro"
+		explain.RouteReason = "vidu-standard-route"
+		explain.IsConfiguredAlias = true
+	case "vidu-mix", "viduq3-mix", "vidu-q3-mix", "xingchen-3.1", "vidu官方-mix":
+		explain.RoutedGenerator = "vidu-mix"
+		explain.ProviderModel = "viduq3-mix"
+		explain.RouteReason = "vidu-reference-route"
+		explain.IsConfiguredAlias = true
+	case "suanneng", "seedance-1.5-pro", "seedance", "xingguang-2.5", "sophnet":
+		explain.RoutedGenerator = "suanneng"
+		explain.ProviderModel = "doubao-seedance-1-5-pro-251215"
+		explain.RouteReason = "suanneng-ark-compatible-route"
+		explain.IsConfiguredAlias = true
+	case "gaga", "gaga-1", "xingdian2.0", "xingdian-2.0":
+		explain.RoutedGenerator = "gaga"
+		explain.RouteReason = "gaga-family"
+		explain.IsConfiguredAlias = true
+	default:
+		explain.RoutedGenerator = raw
+		explain.RouteReason = "passthrough-raw-model-name"
+	}
+	explain.RuntimeProvider = runtimeProviderForGenerator(explain.RoutedGenerator)
+	explain.SupportsNativeAudio = supportsNativeAudioForGenerator(explain.RoutedGenerator)
+	return explain
+}
+
 func bindRequestedVideoModel(gen generators.VideoGenerator, generatorKey, providerModel string) generators.VideoGenerator {
 	switch typed := gen.(type) {
 	case *generators.KlingGenerator:
@@ -1908,56 +2064,12 @@ func bindRequestedVideoModel(gen generators.VideoGenerator, generatorKey, provid
 }
 
 func resolveVideoGeneratorRoute(modelName string) (string, string) {
-	raw := strings.TrimSpace(modelName)
-	trimmed := strings.ToLower(raw)
-	switch trimmed {
-	case "", "auto":
-		return "", ""
-	case "comfyui", "comfyui-video", "comfyui-local-video", "local", "local-video":
-		return "comfyui-video", ""
-	case "sora", "sora2", "sora-2":
-		return "sora2", ""
-	case "wan", "wanx", "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
-		return "wan", "wanx2.1-i2v-turbo"
-	case "wan-t2v", "wan2.1-t2v", "wanx2.1-t2v", "wanx2.1-t2v-turbo":
-		return "wan", "wanx2.1-t2v-turbo"
-	case "wan2.6":
-		return "wan", "wan2.6"
-	case "veo", "veo3.1", "hubagi-veo3.1", "voe3.1", "hubagi-voe3.1", "xingwei-voe3.1":
-		return "hubagi-voe3.1", "voe3.1"
-	case "tc-gv", "hubagi-tc-gv", "xingwei-3.1", "hubagi-xingwei-3.1":
-		return "hubagi-TC-GV", "TC-GV"
-	// kling 系列路由到 tencent-vclm（腾讯云 VCLM API, TC3-HMAC-SHA256, vclm.tencentcloudapi.com）
-	// 当直连 kling_key 不可用时，使用已配置的腾讯云 SecretId/SecretKey 通过 VCLM 接口生成。
-	// 若将来配置了直连 kling_key，可将这些 case 改回返回 "kling"。
-	case "kling", "kling-v3", "kling-3.0", "xinghe-3.0",
-		"kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni",
-		"kling-v1.5", "kling-v1.6", "kling-v2", "kling-v2.1":
-		return "tencent-vclm", ""
-	case "doubao", "v4.0", "xingguang-3.0", "doubao-v4", "doubao-v4.0":
-		return "doubao", "V4.0"
-	case "doubao-seedance", "doubao-seedream", "seedream", "xingtu":
-		return "doubao-seedance", ""
-	case "doubao-seedream-4-0-250828":
-		return "doubao-seedance", "doubao-seedream-4-0-250828"
-	case "doubao-seedream-4-5-251128", "seedream-4-5", "doubao-seedream-4.5":
-		return "doubao-seedance", "doubao-seedream-4-5-251128"
-	case "vidu", "viduq3-pro", "vidu-q3-pro", "xingcheng-2.6", "vidu-3pro", "vidu官方-3pro":
-		return "vidu", "viduq3-pro"
-	case "vidu-mix", "viduq3-mix", "vidu-q3-mix", "xingchen-3.1", "vidu官方-mix":
-		return "vidu-mix", "viduq3-mix"
-	case "suanneng", "seedance-1.5-pro", "seedance", "xingguang-2.5", "sophnet":
-		return "suanneng", "doubao-seedance-1-5-pro-251215"
-	case "gaga", "gaga-1", "xingdian2.0", "xingdian-2.0":
-		return "gaga", ""
-	default:
-		return raw, ""
-	}
+	explain := explainVideoGeneratorRoute(modelName)
+	return explain.RoutedGenerator, explain.ProviderModel
 }
 
 func normalizeVideoGeneratorKey(modelName string) string {
-	key, _ := resolveVideoGeneratorRoute(modelName)
-	return key
+	return explainVideoGeneratorRoute(modelName).RoutedGenerator
 }
 
 // motionPrompt —— 根据运动模式、风格预设和分镜场景描述生成视频生成提示词

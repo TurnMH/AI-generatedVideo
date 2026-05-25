@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -22,6 +23,69 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+type generatorRegistrationSummary struct {
+	Name            string
+	RuntimeProvider string
+	NativeAudio     bool
+	Available       bool
+	ModelHint       string
+	BaseHint        string
+}
+
+func runtimeProviderForGeneratorName(name string) string {
+	switch name {
+	case "kling":
+		return "runtime.video.kling"
+	case "aiping":
+		return "runtime.video.aiping"
+	case "tencent-vclm":
+		return "runtime.video.vclm"
+	case "wan":
+		return "runtime.video.wan"
+	case "comfyui-video":
+		return "runtime.video.comfyui"
+	case "runninghub":
+		return "runtime.video.runninghub"
+	case "cogvideo":
+		return "runtime.video.replicate"
+	case "sora2":
+		return "runtime.video.sora2"
+	case "doubao":
+		return "runtime.video.doubao"
+	case "doubao-seedance":
+		return "runtime.video.doubao.seedance"
+	case "vidu", "vidu-mix":
+		return "runtime.video.vidu"
+	case "vidu-offpeak", "vidu-mix-offpeak":
+		return "runtime.video.vidu.offpeak"
+	case "suanneng":
+		return "runtime.video.suanneng"
+	case "gaga":
+		return "runtime.video.gaga"
+	case "baidu-bce":
+		return "runtime.video.baidu.bce"
+	default:
+		if name == "hubagi-voe3.1" || name == "hubagi-TC-GV" || len(name) >= 7 && name[:7] == "hubagi-" {
+			return "runtime.video.veo"
+		}
+		return ""
+	}
+}
+
+func logGeneratorRegistrationSummaries(logger *zap.Logger, summaries []generatorRegistrationSummary) {
+	sort.Slice(summaries, func(i, j int) bool { return summaries[i].Name < summaries[j].Name })
+	for _, item := range summaries {
+		logger.Info("video generator registered",
+			zap.String("generator", item.Name),
+			zap.String("runtime_provider", item.RuntimeProvider),
+			zap.Bool("native_audio", item.NativeAudio),
+			zap.Bool("available", item.Available),
+			zap.String("model_hint", item.ModelHint),
+			zap.String("base_hint", item.BaseHint),
+		)
+	}
+}
 
 // main —— 程序入口，初始化日志、数据库、FFmpeg、生成器、Kafka 等组件并启动 HTTP 服务
 func main() {
@@ -56,10 +120,10 @@ func main() {
 
 	// ── Generators ──────────────────────────────────────────
 	var gens []generators.VideoGenerator
+	var genSummaries []generatorRegistrationSummary
 	// Kling: prefer kling_keys pool; fall back to single kling_key
 	klingKeys := append([]string{cfg.Models.KlingKey}, cfg.Models.KlingKeys...)
 	if gen := generators.NewKlingGeneratorWithKeys(cfg.Models.KlingBase, klingKeys...); gen.IsAvailable(context.Background()) {
-		// Apply Kling 3.0 model if configured (星澜3.0)
 		if cfg.Models.KlingModel != "" {
 			gen.WithModel(cfg.Models.KlingModel)
 		}
@@ -67,8 +131,8 @@ func main() {
 			gen.WithOmniModel(cfg.Models.KlingOmniModel)
 		}
 		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.KlingModel, BaseHint: cfg.Models.KlingBase})
 	}
-	// aiping channel (Kling-compatible API for high-concurrency, K3/K3.0-Omni)
 	if cfg.Models.AipingKey != "" {
 		aipingBase := cfg.Models.AipingBase
 		if aipingBase == "" {
@@ -82,12 +146,17 @@ func main() {
 		aipingGen.WithModel(aipingModel)
 		aipingGen.WithName("aiping")
 		gens = append(gens, aipingGen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: aipingGen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(aipingGen.Name()), NativeAudio: aipingGen.SupportsNativeAudio(), Available: true, ModelHint: aipingModel, BaseHint: aipingBase})
 	}
 	if cfg.Models.VclmSecretID != "" && cfg.Models.VclmSecretKey != "" {
-		gens = append(gens, generators.NewTencentVCLMGenerator(cfg.Models.VclmSecretID, cfg.Models.VclmSecretKey, cfg.Models.VclmRegion))
+		gen := generators.NewTencentVCLMGenerator(cfg.Models.VclmSecretID, cfg.Models.VclmSecretKey, cfg.Models.VclmRegion)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "", BaseHint: cfg.Models.VclmRegion})
 	}
 	if cfg.Models.WanKey != "" {
-		gens = append(gens, generators.NewWanGenerator(cfg.Models.WanKey, cfg.Models.WanSecret, cfg.Models.WanBase))
+		gen := generators.NewWanGenerator(cfg.Models.WanKey, cfg.Models.WanSecret, cfg.Models.WanBase)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "wanx2.1-i2v-turbo", BaseHint: cfg.Models.WanBase})
 	}
 	if cfg.Models.ComfyUIURL != "" {
 		gen := generators.NewComfyUIVideoGenerator(cfg.Models.ComfyUIURL, cfg.Models.ComfyUIWorkflow)
@@ -98,33 +167,43 @@ func main() {
 			gen.WithLoRA(cfg.Models.ComfyUILoRAModel, cfg.Models.ComfyUILoRAWeight)
 		}
 		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.ComfyUIWorkflow, BaseHint: cfg.Models.ComfyUIURL})
 	}
 	if cfg.Models.RunningHubKey != "" {
-		gens = append(gens, generators.NewRunningHubGenerator(cfg.Models.RunningHubKey, cfg.Models.RunningHubBase, cfg.Models.RunningHubWorkflow, cfg.Models.RunningHubNodeID))
+		gen := generators.NewRunningHubGenerator(cfg.Models.RunningHubKey, cfg.Models.RunningHubBase, cfg.Models.RunningHubWorkflow, cfg.Models.RunningHubNodeID)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.RunningHubWorkflow, BaseHint: cfg.Models.RunningHubBase})
 	}
 	if cfg.Models.ReplicateKey != "" {
-		gens = append(gens, generators.NewCogVideoGenerator(cfg.Models.ReplicateKey))
+		gen := generators.NewCogVideoGenerator(cfg.Models.ReplicateKey)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "cogvideo", BaseHint: ""})
 	}
 	if cfg.Models.Sora2Key != "" {
-		gens = append(gens, generators.NewSora2Generator(cfg.Models.Sora2Key, cfg.Models.Sora2Base))
+		gen := generators.NewSora2Generator(cfg.Models.Sora2Key, cfg.Models.Sora2Base)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "sora2", BaseHint: cfg.Models.Sora2Base})
 	}
 	if cfg.Models.HubagiKey != "" {
-		gens = append(gens, generators.NewHubagiGenerator(cfg.Models.HubagiKey, cfg.Models.HubagiBase, cfg.Models.HubagiModel))
+		gen := generators.NewHubagiGenerator(cfg.Models.HubagiKey, cfg.Models.HubagiBase, cfg.Models.HubagiModel)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.HubagiModel, BaseHint: cfg.Models.HubagiBase})
 	}
 	if cfg.Models.VeoKey != "" {
-		gens = append(gens, generators.NewHubagiGenerator(cfg.Models.VeoKey, cfg.Models.VeoBase, cfg.Models.VeoModel))
+		gen := generators.NewHubagiGenerator(cfg.Models.VeoKey, cfg.Models.VeoBase, cfg.Models.VeoModel)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.VeoModel, BaseHint: cfg.Models.VeoBase})
 	}
-	// doubao V4.0 (xingguang-3.0)
 	if cfg.Models.DoubaoKey != "" {
-		gens = append(gens, generators.NewDoubaoGenerator(
-			cfg.Models.DoubaoKey, cfg.Models.DoubaoBase, cfg.Models.DoubaoModel, "doubao"))
+		gen := generators.NewDoubaoGenerator(cfg.Models.DoubaoKey, cfg.Models.DoubaoBase, cfg.Models.DoubaoModel, "doubao")
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.DoubaoModel, BaseHint: cfg.Models.DoubaoBase})
 	}
-	// doubao SeedDream (doubao-seedance / xingtu / xingguang-2.5 via ark)
 	if cfg.Models.DoubaoSeedanceKey != "" {
-		gens = append(gens, generators.NewDoubaoSeedanceGenerator(
-			cfg.Models.DoubaoSeedanceKey, cfg.Models.DoubaoSeedanceBase, cfg.Models.DoubaoSeedanceModel, "doubao-seedance"))
+		gen := generators.NewDoubaoSeedanceGenerator(cfg.Models.DoubaoSeedanceKey, cfg.Models.DoubaoSeedanceBase, cfg.Models.DoubaoSeedanceModel, "doubao-seedance")
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.DoubaoSeedanceModel, BaseHint: cfg.Models.DoubaoSeedanceBase})
 	}
-	// vidu Q3 Pro (xingcheng-2.6)
 	if cfg.Models.ViduKey != "" {
 		viduBase := cfg.Models.ViduBase
 		if viduBase == "" {
@@ -134,15 +213,17 @@ func main() {
 		if viduModel == "" {
 			viduModel = "viduq3-pro"
 		}
-		gens = append(gens, generators.NewViduGenerator(cfg.Models.ViduKey, viduBase, viduModel, "vidu"))
-		// vidu Q3 Mix (xingchen-3.1) — reuses the same key
+		gen := generators.NewViduGenerator(cfg.Models.ViduKey, viduBase, viduModel, "vidu")
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: viduModel, BaseHint: viduBase})
 		viduMixModel := cfg.Models.ViduMixModel
 		if viduMixModel == "" {
 			viduMixModel = "viduq3-mix"
 		}
-		gens = append(gens, generators.NewViduGenerator(cfg.Models.ViduKey, viduBase, viduMixModel, "vidu-mix"))
+		mixGen := generators.NewViduGenerator(cfg.Models.ViduKey, viduBase, viduMixModel, "vidu-mix")
+		gens = append(gens, mixGen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: mixGen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(mixGen.Name()), NativeAudio: mixGen.SupportsNativeAudio(), Available: true, ModelHint: viduMixModel, BaseHint: viduBase})
 	}
-	// vidu offpeak — separate API key for off-peak hour cost savings
 	if cfg.Models.ViduOffpeakKey != "" {
 		viduBase := cfg.Models.ViduBase
 		if viduBase == "" {
@@ -156,24 +237,29 @@ func main() {
 		if viduMixModel == "" {
 			viduMixModel = "viduq3-mix"
 		}
-		gens = append(gens, generators.NewViduGenerator(cfg.Models.ViduOffpeakKey, viduBase, viduModel, "vidu-offpeak"))
-		gens = append(gens, generators.NewViduGenerator(cfg.Models.ViduOffpeakKey, viduBase, viduMixModel, "vidu-mix-offpeak"))
+		offpeakGen := generators.NewViduGenerator(cfg.Models.ViduOffpeakKey, viduBase, viduModel, "vidu-offpeak")
+		gens = append(gens, offpeakGen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: offpeakGen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(offpeakGen.Name()), NativeAudio: offpeakGen.SupportsNativeAudio(), Available: true, ModelHint: viduModel, BaseHint: viduBase})
+		offpeakMixGen := generators.NewViduGenerator(cfg.Models.ViduOffpeakKey, viduBase, viduMixModel, "vidu-mix-offpeak")
+		gens = append(gens, offpeakMixGen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: offpeakMixGen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(offpeakMixGen.Name()), NativeAudio: offpeakMixGen.SupportsNativeAudio(), Available: true, ModelHint: viduMixModel, BaseHint: viduBase})
 	}
-	// suanneng Seedance (doubao ARK protocol, model configurable)
 	if cfg.Models.SuannengKey != "" {
-		gens = append(gens, generators.NewSuannengGenerator(
-			cfg.Models.SuannengKey, cfg.Models.SuannengBase, cfg.Models.SuannengModel))
+		gen := generators.NewSuannengGenerator(cfg.Models.SuannengKey, cfg.Models.SuannengBase, cfg.Models.SuannengModel)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.SuannengModel, BaseHint: cfg.Models.SuannengBase})
 	}
-	// gaga-1 (xingdian2.0)
 	if cfg.Models.GagaKey != "" {
-		gens = append(gens, generators.NewGagaGenerator(
-			cfg.Models.GagaKey, cfg.Models.GagaBase, "gaga-1"))
+		gen := generators.NewGagaGenerator(cfg.Models.GagaKey, cfg.Models.GagaBase, "gaga-1")
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "gaga-1", BaseHint: cfg.Models.GagaBase})
 	}
-	// baidu-bce (百度 BCE 图生视频，BCE-AUTH-V1 签名，V20=720p)
 	if cfg.Models.BaiduBCEKey != "" {
-		gens = append(gens, generators.NewBaiduBCEGenerator(
-			cfg.Models.BaiduBCEKey, cfg.Models.BaiduBCESecret, cfg.Models.BaiduBCEModel))
+		gen := generators.NewBaiduBCEGenerator(cfg.Models.BaiduBCEKey, cfg.Models.BaiduBCESecret, cfg.Models.BaiduBCEModel)
+		gens = append(gens, gen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.BaiduBCEModel, BaseHint: "bce-auth-v1"})
 	}
+	logGeneratorRegistrationSummaries(logger, genSummaries)
 	if len(gens) == 0 {
 		logger.Warn("no video generators configured — requests will fail")
 	}

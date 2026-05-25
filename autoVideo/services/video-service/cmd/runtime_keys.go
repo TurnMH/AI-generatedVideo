@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,12 +24,22 @@ type runtimeAPIKey struct {
 	ModelScope string `json:"model_scope"`
 }
 
+type runtimeProviderSummary struct {
+	Provider   string
+	Count      int
+	KeyKind    string
+	HasBaseURL bool
+	HasScope   bool
+	KeyAlias   string
+}
+
 func applyRuntimeConfig(cfg *config.Config) error {
 	keys, err := fetchRuntimeAPIKeys(cfg.AuthService.BaseURL, cfg.JWT.Secret)
 	if err != nil {
 		return err
 	}
 	byProvider := groupRuntimeAPIKeys(keys)
+	logRuntimeKeySummaries(byProvider)
 	if kling := byProvider["runtime.video.kling"]; len(kling) > 0 {
 		cfg.Models.KlingKey = kling[0].PlainKey
 		cfg.Models.KlingKeys = make([]string, 0, len(kling)-1)
@@ -46,7 +58,13 @@ func applyRuntimeConfig(cfg *config.Config) error {
 	applySingle(byProvider["runtime.video.aiping"], &cfg.Models.AipingBase, &cfg.Models.AipingKey, func(scopes []string) {
 		if len(scopes) > 0 { cfg.Models.KlingModel = scopes[0] }
 	})
+	if err := validatePairProvider(byProvider, "runtime.video.vclm"); err != nil {
+		log.Printf("[runtime-keys] warning provider=%s detail=%s", "runtime.video.vclm", err.Error())
+	}
 	applyPair(byProvider["runtime.video.vclm"], &cfg.Models.VclmSecretID, &cfg.Models.VclmSecretKey, &cfg.Models.VclmRegion)
+	if err := validatePairProvider(byProvider, "runtime.video.wan"); err != nil {
+		log.Printf("[runtime-keys] warning provider=%s detail=%s", "runtime.video.wan", err.Error())
+	}
 	applyPair(byProvider["runtime.video.wan"], &cfg.Models.WanKey, &cfg.Models.WanSecret, &cfg.Models.WanBase)
 	applySingle(byProvider["runtime.video.runninghub"], &cfg.Models.RunningHubBase, &cfg.Models.RunningHubKey, func(scopes []string) {
 		if len(scopes) > 0 { cfg.Models.RunningHubWorkflow = scopes[0] }
@@ -75,6 +93,9 @@ func applyRuntimeConfig(cfg *config.Config) error {
 		if len(scopes) > 0 { cfg.Models.SuannengModel = scopes[0] }
 	})
 	applySingle(byProvider["runtime.video.gaga"], &cfg.Models.GagaBase, &cfg.Models.GagaKey, nil)
+	if err := validatePairProvider(byProvider, "runtime.video.baidu.bce"); err != nil {
+		log.Printf("[runtime-keys] warning provider=%s detail=%s", "runtime.video.baidu.bce", err.Error())
+	}
 	applyPair(byProvider["runtime.video.baidu.bce"], &cfg.Models.BaiduBCEKey, &cfg.Models.BaiduBCESecret, nil)
 	if baidu := byProvider["runtime.video.baidu.bce"]; len(baidu) > 0 {
 		scopes := splitScope(baidu[0].ModelScope)
@@ -86,6 +107,15 @@ func applyRuntimeConfig(cfg *config.Config) error {
 	applySingle(byProvider["runtime.video.music"], &cfg.Models.MusicBase, &cfg.Models.MusicKey, func(scopes []string) {
 		if len(scopes) > 0 { cfg.Models.MusicModel = scopes[0] }
 	})
+	if len(byProvider["runtime.video.vclm"]) > 0 {
+		log.Printf("[runtime-keys] info provider=%s detail=%s", "runtime.video.vclm", "kling-family route currently defaults to tencent-vclm")
+	}
+	if len(byProvider["runtime.video.vidu.offpeak"]) > 0 {
+		log.Printf("[runtime-keys] info provider=%s detail=%s", "runtime.video.vidu.offpeak", "vidu offpeak key configured")
+	}
+	if len(byProvider["runtime.video.llm"]) == 0 && len(byProvider["runtime.video.sora2"]) > 0 {
+		log.Printf("[runtime-keys] warning provider=%s detail=%s", "runtime.video.llm", "missing llm key, motion/analyzer logic may fall back to sora2")
+	}
 	return nil
 }
 
@@ -181,6 +211,62 @@ func groupRuntimeAPIKeys(keys []runtimeAPIKey) map[string][]runtimeAPIKey {
 		grouped[key.Provider] = append(grouped[key.Provider], key)
 	}
 	return grouped
+}
+
+func validatePairProvider(grouped map[string][]runtimeAPIKey, provider string) error {
+	keys := grouped[provider]
+	if len(keys) == 0 {
+		return nil
+	}
+	if !strings.Contains(keys[0].PlainKey, ":") {
+		return fmt.Errorf("expected pair-form plain_key like first:second, got alias=%s", keys[0].KeyAlias)
+	}
+	parts := strings.SplitN(keys[0].PlainKey, ":", 2)
+	if strings.TrimSpace(parts[0]) == "" || len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		return fmt.Errorf("invalid pair-form plain_key, got alias=%s", keys[0].KeyAlias)
+	}
+	return nil
+}
+
+func runtimeProviderSummaries(grouped map[string][]runtimeAPIKey) []runtimeProviderSummary {
+	providers := make([]string, 0, len(grouped))
+	for provider := range grouped {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	out := make([]runtimeProviderSummary, 0, len(providers))
+	for _, provider := range providers {
+		items := grouped[provider]
+		summary := runtimeProviderSummary{Provider: provider, Count: len(items)}
+		if len(items) > 0 {
+			summary.KeyAlias = items[0].KeyAlias
+			summary.HasBaseURL = strings.TrimSpace(items[0].BaseURL) != ""
+			summary.HasScope = strings.TrimSpace(items[0].ModelScope) != ""
+			summary.KeyKind = detectKeyKind(provider, items)
+		}
+		out = append(out, summary)
+	}
+	return out
+}
+
+func detectKeyKind(provider string, items []runtimeAPIKey) string {
+	if len(items) > 1 {
+		return "pool"
+	}
+	if len(items) == 0 {
+		return "missing"
+	}
+	if provider == "runtime.video.vclm" || provider == "runtime.video.wan" || provider == "runtime.video.baidu.bce" {
+		return "pair"
+	}
+	return "single"
+}
+
+func logRuntimeKeySummaries(grouped map[string][]runtimeAPIKey) {
+	for _, item := range runtimeProviderSummaries(grouped) {
+		log.Printf("[runtime-keys] provider=%s count=%d key_kind=%s has_base=%t has_scope=%t alias=%s",
+			item.Provider, item.Count, item.KeyKind, item.HasBaseURL, item.HasScope, item.KeyAlias)
+	}
 }
 
 func splitScope(raw string) []string {
