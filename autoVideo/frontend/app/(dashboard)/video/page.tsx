@@ -188,7 +188,7 @@ export default function VideoManualPage() {
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
 
-  const createManualVideoTask = async (mode: 'image' | 'reference' | 'start-end') => {
+  const createManualVideoTask = async (mode: 'text' | 'image' | 'reference' | 'start-end') => {
     if (!form.prompt.trim()) {
       toast({ title: '请先填写提示词', variant: 'destructive' })
       return
@@ -220,7 +220,7 @@ export default function VideoManualPage() {
     setUploadProgress(0)
     setSubmitResult(null)
     try {
-      const modeLabel = mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'
+      const modeLabel = mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'
       const projectRes = await projectAPI.create({
         title: `手动${modeLabel}视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
         description: `手动创建视频-${modeLabel}视频临时项目`,
@@ -263,6 +263,7 @@ export default function VideoManualPage() {
       const renderConfig: Record<string, unknown> = {}
       if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
       if (form.resolution) renderConfig.resolution = form.resolution
+      if (mode === 'text' && form.modelName.includes('vidu')) renderConfig.generate_mode = 'text2video'
       if (mode === 'reference') renderConfig.generate_mode = 'reference2video'
       if (mode === 'start-end') {
         renderConfig.generate_mode = 'startEnd2video'
@@ -270,7 +271,11 @@ export default function VideoManualPage() {
       }
       const duration = Number(form.duration)
 
-      const imageUrls = sourceImageUrl ? [sourceImageUrl] : [referenceImageUrls[0]]
+      const imageUrls = mode === 'text'
+        ? []
+        : sourceImageUrl
+          ? [sourceImageUrl]
+          : [referenceImageUrls[0]]
       if (mode === 'reference' && referenceImageUrls.length > 0) {
         renderConfig.character_image_urls = referenceImageUrls
       }
@@ -288,9 +293,9 @@ export default function VideoManualPage() {
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
 
       setSubmitResult({ projectId, taskId })
-      toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
+      toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'}视频创建失败`
+      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : '文生'}视频创建失败`
       toast({ title: message, variant: 'destructive' })
     } finally {
       setSubmitting(false)
@@ -455,7 +460,11 @@ export default function VideoManualPage() {
           )}
 
           <div className="flex flex-wrap gap-3">
-            {activeMenu === 'image' ? (
+            {activeMenu === 'text' ? (
+              <Button onClick={() => createManualVideoTask('text')} disabled={submitting}>
+                {submitting ? '正在创建文生视频任务…' : '创建文生视频任务'}
+              </Button>
+            ) : activeMenu === 'image' ? (
               <Button onClick={handleImageGenerate} disabled={submitting}>
                 {submitting ? '正在创建图生视频任务…' : '创建图生视频任务'}
               </Button>

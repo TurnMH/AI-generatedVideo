@@ -225,7 +225,7 @@ func summarizeRouteCoverage(task *model.VideoTask) routeCoverageSummary {
 type generateReq struct {
 	ProjectID         int64              `json:"project_id" binding:"required"`
 	EpisodeID         *int64             `json:"episode_id"`
-	ImageURLs         []string           `json:"image_urls" binding:"required,min=1"`
+	ImageURLs         []string           `json:"image_urls"`
 	SceneDescriptions []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
 	Dialogues         []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
 	MotionDescs       []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
@@ -247,6 +247,19 @@ type extractVideoContentReq struct {
 	OnlyAudio bool   `json:"only_audio"`
 }
 
+func supportsTextOnlyVideoRequest(modelName string, renderConfig model.RenderConfig) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.Contains(trimmed, "wan-t2v") || strings.Contains(trimmed, "t2v") {
+		return true
+	}
+	if trimmed == "vidu" || trimmed == "vidu-offpeak" {
+		raw := renderConfig["generate_mode"]
+		mode, _ := raw.(string)
+		return strings.EqualFold(strings.TrimSpace(mode), "text2video")
+	}
+	return false
+}
+
 // Generate —— 处理视频生成请求，创建任务并分发到 Kafka，返回 task_id
 // Generate godoc
 // POST /api/v1/videos/generate
@@ -254,6 +267,10 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	var req generateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+	if len(req.ImageURLs) == 0 && !supportsTextOnlyVideoRequest(req.ModelName, req.RenderConfig) {
+		response.BadRequest(c, "image_urls is required unless model supports text-to-video")
 		return
 	}
 	if err := validateSerialScenePayload(req.ImageURLs, req.SceneGroupKeys, req.SerialScene); err != nil {

@@ -275,6 +275,12 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			zap.Int64("task_id", taskID),
 			zap.Int("db_image_count", len(imageURLs)))
 	}
+	if len(imageURLs) == 0 && supportsTextToVideoModel(resolvedModelName, task.RenderConfig) {
+		imageURLs = []string{""}
+		s.logger.Info("text-to-video task using synthetic single clip placeholder",
+			zap.Int64("task_id", taskID),
+			zap.String("model_name", resolvedModelName))
+	}
 
 	// Mark task as processing
 	if err := s.repo.UpdateTaskStatus(ctx, taskID, model.StatusProcessing, "", "", 0); err != nil {
@@ -2008,6 +2014,18 @@ func supportsNativeAudioForGenerator(generatorKey string) bool {
 	default:
 		return false
 	}
+}
+
+func supportsTextToVideoModel(modelName string, renderConfig model.RenderConfig) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.Contains(trimmed, "wan-t2v") || strings.Contains(trimmed, "t2v") {
+		return true
+	}
+	if trimmed == "vidu" || trimmed == "vidu-offpeak" || strings.Contains(trimmed, "vidu") {
+		mode := strings.ToLower(strings.TrimSpace(renderConfigString(renderConfig, "generate_mode")))
+		return mode == "text2video"
+	}
+	return false
 }
 
 func explainVideoGeneratorRoute(modelName string) VideoRouteExplain {
