@@ -281,10 +281,19 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		return err
 	}
 
-	gen, err := s.resolveGenerator(ctx, resolvedModelName)
+	gen, routeExplain, err := s.resolveGenerator(ctx, resolvedModelName)
 	if err != nil {
 		s.markFailed(ctx, taskID, "no available video generator")
 		return fmt.Errorf("no generator available for model %q", resolvedModelName)
+	}
+
+	task.RequestedModel = resolvedModelName
+	task.RoutedGenerator = routeExplain.RoutedGenerator
+	task.RuntimeProvider = routeExplain.RuntimeProvider
+	task.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, resolvedModelName)
+	task.RouteReason = routeExplain.RouteReason
+	if err := s.repo.UpdateTask(ctx, task); err != nil {
+		s.logger.Warn("persist task route metadata failed", zap.Int64("task_id", taskID), zap.Error(err))
 	}
 
 	// Fetch character reference images for subject consistency, with name→URL map for
@@ -366,12 +375,16 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			sceneSeqCounter[sgKey]++
 		}
 		clip := &model.VideoClip{
-			VideoTaskID:    taskID,
-			ClipOrder:      i,
-			SourceImageURL: imgURL,
-			SceneGroupKey:  sgKey,
-			SceneSeq:       sceneSeq,
-			Status:         model.StatusPending,
+			VideoTaskID:     taskID,
+			ClipOrder:       i,
+			SourceImageURL:  imgURL,
+			SceneGroupKey:   sgKey,
+			SceneSeq:        sceneSeq,
+			Status:          model.StatusPending,
+			RequestedModel:  resolvedModelName,
+			RoutedGenerator: routeExplain.RoutedGenerator,
+			RuntimeProvider: routeExplain.RuntimeProvider,
+			EffectiveModel:  firstNonEmpty(routeExplain.ProviderModel, resolvedModelName),
 		}
 		if err := s.repo.CreateClip(ctx, clip); err != nil {
 			return fmt.Errorf("create clip record: %w", err)
@@ -959,7 +972,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	finalPath := mergedPath
 
 	// Resolve generator to check for native audio support.
-	composeGen, _ := s.resolveGenerator(ctx, task.ModelName)
+	composeGen, _, _ := s.resolveGenerator(ctx, task.ModelName)
 
 	// Attach dubbing audio — skip when the video model already embeds native audio.
 	audioURL := task.AudioURL
@@ -1084,7 +1097,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if resolvedModelName == "" {
 		resolvedModelName = task.ModelName
 	}
-	gen, err := s.resolveGenerator(ctx, resolvedModelName)
+	gen, routeExplain, err := s.resolveGenerator(ctx, resolvedModelName)
 	if err != nil {
 		return err
 	}
@@ -1097,6 +1110,11 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if modelName != "" {
 		task.ModelName = resolvedModelName
 	}
+	task.RequestedModel = resolvedModelName
+	task.RoutedGenerator = routeExplain.RoutedGenerator
+	task.RuntimeProvider = routeExplain.RuntimeProvider
+	task.EffectiveModel = firstNonEmpty(routeExplain.ProviderModel, resolvedModelName)
+	task.RouteReason = routeExplain.RouteReason
 	if err := s.repo.UpdateTask(ctx, task); err != nil {
 		return err
 	}
@@ -1510,23 +1528,32 @@ func (s *VideoService) ModelStatus(ctx context.Context) []ModelStatusItem {
 	return items
 }
 
-func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (generators.VideoGenerator, error) {
-	resolvedKey, providerModel := resolveVideoGeneratorRoute(modelName)
+func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (generators.VideoGenerator, VideoRouteExplain, error) {
+	explain := explainVideoGeneratorRoute(modelName)
+	resolvedKey, providerModel := explain.RoutedGenerator, explain.ProviderModel
 	if resolvedKey != "" {
 		if gen, ok := s.generators[resolvedKey]; ok && gen.IsAvailable(ctx) {
+			bound := gen
 			if providerModel != "" {
-				return bindRequestedVideoModel(gen, resolvedKey, providerModel), nil
+				bound = bindRequestedVideoModel(gen, resolvedKey, providerModel)
 			}
-			return gen, nil
+			explain.RoutedGenerator = bound.Name()
+			if explain.ProviderModel == "" {
+				explain.ProviderModel = providerModel
+			}
+			return bound, explain, nil
 		}
-		return nil, fmt.Errorf("video generator %q is unavailable", modelName)
+		return nil, explain, fmt.Errorf("video generator %q is unavailable", modelName)
 	}
 	for _, gen := range s.generators {
 		if gen.IsAvailable(ctx) {
-			return gen, nil
+			explain.RoutedGenerator = gen.Name()
+			explain.RuntimeProvider = runtimeProviderForGenerator(gen.Name())
+			explain.RouteReason = "fallback-first-available-generator"
+			return gen, explain, nil
 		}
 	}
-	return nil, fmt.Errorf("no available generator")
+	return nil, explain, fmt.Errorf("no available generator")
 }
 
 func (s *VideoService) SetFrameExtractorURL(url string) {
@@ -1887,14 +1914,14 @@ func callFrameExtractorFrames(ctx context.Context, videoURL string, projectID, u
 }
 
 type VideoRouteExplain struct {
-	RequestedModel     string
-	NormalizedModel    string
-	RoutedGenerator    string
-	RuntimeProvider    string
-	ProviderModel      string
-	RouteReason        string
+	RequestedModel      string
+	NormalizedModel     string
+	RoutedGenerator     string
+	RuntimeProvider     string
+	ProviderModel       string
+	RouteReason         string
 	SupportsNativeAudio bool
-	IsConfiguredAlias  bool
+	IsConfiguredAlias   bool
 }
 
 func runtimeProviderForGenerator(generatorKey string) string {
@@ -4145,4 +4172,13 @@ func isJobLimitError(err error) bool {
 		}
 	}
 	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
