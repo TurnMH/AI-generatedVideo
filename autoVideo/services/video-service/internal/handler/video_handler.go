@@ -63,6 +63,67 @@ func normalizeRenderConfig(rc model.RenderConfig) model.RenderConfig {
 	return rc
 }
 
+func renderConfigStringSlice(rc model.RenderConfig, key string, n int) []string {
+	result := make([]string, n)
+	if len(rc) == 0 {
+		return result
+	}
+	raw, ok := rc[key]
+	if !ok {
+		return result
+	}
+	switch v := raw.(type) {
+	case []string:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = v[i]
+		}
+	case []interface{}:
+		for i := 0; i < n && i < len(v); i++ {
+			if s, ok := v[i].(string); ok {
+				result[i] = s
+			}
+		}
+	}
+	return result
+}
+
+func buildClipDebugSummaries(task *model.VideoTask) []gin.H {
+	if task == nil || len(task.Clips) == 0 {
+		return nil
+	}
+	clipCount := len(task.Clips)
+	spatialAnchors := renderConfigStringSlice(task.RenderConfig, "spatial_anchors", clipCount)
+	subjectPositions := renderConfigStringSlice(task.RenderConfig, "subject_positions", clipCount)
+	transitionNotes := renderConfigStringSlice(task.RenderConfig, "transition_notes", clipCount)
+	items := make([]gin.H, 0, clipCount)
+	for i := range task.Clips {
+		clip := task.Clips[i]
+		item := gin.H{
+			"clip_order":        clip.ClipOrder,
+			"requested_model":   clip.RequestedModel,
+			"routed_generator":  clip.RoutedGenerator,
+			"runtime_provider":  clip.RuntimeProvider,
+			"effective_model":   clip.EffectiveModel,
+			"scene_group_key":   clip.SceneGroupKey,
+			"scene_seq":         clip.SceneSeq,
+			"spatial_anchor":    "",
+			"subject_positions": "",
+			"transition_note":   "",
+		}
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(spatialAnchors) {
+			item["spatial_anchor"] = strings.TrimSpace(spatialAnchors[clip.ClipOrder])
+		}
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(subjectPositions) {
+			item["subject_positions"] = strings.TrimSpace(subjectPositions[clip.ClipOrder])
+		}
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(transitionNotes) {
+			item["transition_note"] = strings.TrimSpace(transitionNotes[clip.ClipOrder])
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 func buildTaskDebugSummary(task *model.VideoTask) gin.H {
 	if task == nil {
 		return gin.H{}
@@ -76,14 +137,32 @@ func buildTaskDebugSummary(task *model.VideoTask) gin.H {
 	}
 	if len(task.Clips) > 0 {
 		clipMissingRoute := 0
+		clipWithSpatialHints := 0
+		clipWithPositionHints := 0
+		clipWithTransitionHints := 0
+		spatialAnchors := renderConfigStringSlice(task.RenderConfig, "spatial_anchors", len(task.Clips))
+		subjectPositions := renderConfigStringSlice(task.RenderConfig, "subject_positions", len(task.Clips))
+		transitionNotes := renderConfigStringSlice(task.RenderConfig, "transition_notes", len(task.Clips))
 		for i := range task.Clips {
 			clip := task.Clips[i]
 			if strings.TrimSpace(clip.RequestedModel) == "" || strings.TrimSpace(clip.RoutedGenerator) == "" || strings.TrimSpace(clip.RuntimeProvider) == "" {
 				clipMissingRoute++
 			}
+			if i < len(spatialAnchors) && strings.TrimSpace(spatialAnchors[i]) != "" {
+				clipWithSpatialHints++
+			}
+			if i < len(subjectPositions) && strings.TrimSpace(subjectPositions[i]) != "" {
+				clipWithPositionHints++
+			}
+			if i < len(transitionNotes) && strings.TrimSpace(transitionNotes[i]) != "" {
+				clipWithTransitionHints++
+			}
 		}
 		summary["clip_count"] = len(task.Clips)
 		summary["clip_missing_route"] = clipMissingRoute
+		summary["clip_with_spatial_hints"] = clipWithSpatialHints
+		summary["clip_with_position_hints"] = clipWithPositionHints
+		summary["clip_with_transition_hints"] = clipWithTransitionHints
 	}
 	return summary
 }
@@ -308,7 +387,11 @@ func (h *VideoHandler) GetTask(c *gin.Context) {
 		return
 	}
 	logTaskRouteState(h.logger, "video task detail fetched", task)
-	response.OK(c, task)
+	response.OK(c, gin.H{
+		"task":               task,
+		"task_debug_summary": buildTaskDebugSummary(task),
+		"clips_debug":        buildClipDebugSummaries(task),
+	})
 }
 
 // ListTasks —— 分页查询视频任务列表，支持按项目和集数过滤
@@ -511,6 +594,7 @@ func (h *VideoHandler) ListProjectVideos(c *gin.Context) {
 		items = append(items, gin.H{
 			"task":               tasks[i],
 			"task_debug_summary": buildTaskDebugSummary(&tasks[i]),
+			"clips_debug":        buildClipDebugSummaries(&tasks[i]),
 		})
 	}
 	response.OK(c, gin.H{
