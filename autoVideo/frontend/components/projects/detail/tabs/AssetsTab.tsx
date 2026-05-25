@@ -149,6 +149,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const [filter, setFilter] = useState<AssetType | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<AssetStatus | 'all'>('all')
   const [voiceSearchByAsset, setVoiceSearchByAsset] = useState<Record<number, string>>({})
+  const [voicePickerAsset, setVoicePickerAsset] = useState<Asset | null>(null)
 
   React.useEffect(() => {
     if (episodeId !== undefined) {
@@ -803,6 +804,11 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const [previewingVoiceAssetId, setPreviewingVoiceAssetId] = useState<number | null>(null)
   const [voicePreviewAudioUrl, setVoicePreviewAudioUrl] = useState<Record<number, string>>({})
   const selectedAssetPreviewUrl = selectedAsset ? getSelectedGeneratedImageUrl(selectedAsset) : ''
+  const activeVoicePickerOptions = ASSET_VOICE_OPTIONS.filter(v => {
+    const q = (voicePickerAsset ? (voiceSearchByAsset[voicePickerAsset.id] ?? '') : '').trim().toLowerCase()
+    if (!q) return true
+    return v.label.toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+  })
   const selectedAssetLinkedStoryboards = selectedAsset ? (assetStoryboardUsageMap.get(selectedAsset.id) ?? []) : []
   const selectedAssetScopedLinkedStoryboards = selectedAsset ? (scopedAssetStoryboardUsageMap.get(selectedAsset.id) ?? []) : []
   const formatStoryboardReference = React.useCallback((storyboard: Storyboard) => {
@@ -1181,12 +1187,18 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                   <div className="mt-2 space-y-1.5" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1.5">
                       <Mic className="h-3 w-3 flex-shrink-0 text-surface-400" />
-                      <Input
-                        value={voiceSearchByAsset[asset.id] ?? ''}
-                        onChange={(e) => setVoiceSearchByAsset((prev) => ({ ...prev, [asset.id]: e.target.value }))}
-                        placeholder="搜索音色名称 / 风格 / 分类"
-                        className="h-6 flex-1 text-[10px]"
-                      />
+                      <div className="min-w-0 flex-1 rounded border border-surface-200 bg-white px-2 py-1 text-[10px] text-surface-700">
+                        <div className="truncate">{ASSET_VOICE_OPTIONS.find(v => v.value === (asset.voice_model ?? ''))?.label || '未绑定音色'}</div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => setVoicePickerAsset(asset)}
+                      >
+                        选择音色
+                      </Button>
                       <Button
                         type="button"
                         size="sm"
@@ -1213,30 +1225,6 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                       >
                         {previewingVoiceAssetId === asset.id ? '试听中...' : '试听'}
                       </Button>
-                    </div>
-                    <div className="max-h-32 overflow-y-auto rounded border border-surface-200 bg-white">
-                      <select
-                        value={asset.voice_model ?? ''}
-                        onChange={async (e) => {
-                          await assetAPI.update(projectId, asset.id, { voice_model: e.target.value })
-                          mutateAssets()
-                        }}
-                        size={Math.min(6, Math.max(3, ASSET_VOICE_OPTIONS.filter(v => {
-                          const q = (voiceSearchByAsset[asset.id] ?? '').trim().toLowerCase()
-                          if (!q) return true
-                          return v.label.toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
-                        }).length || 3))}
-                        className="w-full border-0 bg-white px-1.5 py-1 text-[10px] text-surface-700 focus:outline-none"
-                        title="绑定配音音色（配音模式为「自动按人物分配」时生效）"
-                      >
-                        {ASSET_VOICE_OPTIONS.filter(v => {
-                          const q = (voiceSearchByAsset[asset.id] ?? '').trim().toLowerCase()
-                          if (!q) return true
-                          return v.label.toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
-                        }).map(v => (
-                          <option key={v.value} value={v.value}>{v.label}</option>
-                        ))}
-                      </select>
                     </div>
                     {voicePreviewAudioUrl[asset.id] && (
                       <audio controls className="h-7 w-full" src={voicePreviewAudioUrl[asset.id]} />
@@ -2022,6 +2010,76 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
       </Dialog>
 
       {/* Manual create asset dialog */}
+      <Dialog open={!!voicePickerAsset} onOpenChange={(open) => { if (!open) setVoicePickerAsset(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>选择角色音色{voicePickerAsset ? ` · ${voicePickerAsset.name}` : ''}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={voicePickerAsset ? (voiceSearchByAsset[voicePickerAsset.id] ?? '') : ''}
+              onChange={(e) => {
+                if (!voicePickerAsset) return
+                setVoiceSearchByAsset((prev) => ({ ...prev, [voicePickerAsset.id]: e.target.value }))
+              }}
+              placeholder="搜索音色名称 / key / 风格 / 分类"
+              className="h-9"
+            />
+            <div className="max-h-[55vh] overflow-y-auto rounded-md border border-surface-200">
+              <div className="divide-y divide-surface-100">
+                {activeVoicePickerOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-surface-50 ${voicePickerAsset?.voice_model === option.value ? 'bg-primary-50' : 'bg-white'}`}
+                    onClick={async () => {
+                      if (!voicePickerAsset) return
+                      await assetAPI.update(projectId, voicePickerAsset.id, { voice_model: option.value })
+                      mutateAssets()
+                      setVoicePickerAsset(null)
+                      toast({ title: `已为 ${voicePickerAsset.name} 绑定音色`, variant: 'success' })
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-surface-800">{option.label}</div>
+                      <div className="truncate text-[11px] text-surface-400">{option.value || '未绑定音色'}</div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!voicePickerAsset || !option.value) return
+                        try {
+                          setPreviewingVoiceAssetId(voicePickerAsset.id)
+                          const res = await dubbingAPI.previewVoice(projectId, { voice_model: option.value })
+                          const audioUrl = res.data?.audio_url
+                          if (!audioUrl) throw new Error('empty audio url')
+                          setVoicePreviewAudioUrl((prev) => ({ ...prev, [voicePickerAsset.id]: audioUrl }))
+                          const audio = new Audio(audioUrl)
+                          await audio.play()
+                        } catch {
+                          toast({ title: '音色试听失败', variant: 'destructive' })
+                        } finally {
+                          setPreviewingVoiceAssetId(null)
+                        }
+                      }}
+                    >
+                      试听
+                    </Button>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {voicePickerAsset && voicePreviewAudioUrl[voicePickerAsset.id] && (
+              <audio controls className="h-8 w-full" src={voicePreviewAudioUrl[voicePickerAsset.id]} />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
