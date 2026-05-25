@@ -49,6 +49,19 @@ type ManualFormState = {
   referenceImageFiles: File[]
 }
 
+type SubmitSummary = {
+  projectId: number
+  taskId: number
+  mode: ManualMenuKey
+  modelName: string
+  generateMode: string
+  sourceCount: number
+  referenceCount: number
+  hasStartImage: boolean
+  hasTailImage: boolean
+  routeNote: string
+}
+
 const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
   { key: 'text', label: '文生视频', description: '仅输入提示词生成视频，优先展示支持纯文本生成的模型。', icon: Film },
   { key: 'image', label: '图生视频', description: '上传单张首帧图片驱动视频生成。', icon: ImagePlus },
@@ -108,11 +121,15 @@ function getModelDisplayName(key: string) {
 function inferModelCategories(model: VideoModelStatus): ManualMenuKey[] {
   const categories = new Set<ManualMenuKey>()
   const key = model.key
-  if (TEXT_MODELS.has(key) || hasGenerateMode(model, 'text2video')) categories.add('text')
-  if (!TEXT_MODELS.has(key) || key === 'wan') categories.add('image')
-  if (REFERENCE_MODELS.has(key) || hasGenerateMode(model, 'reference2video')) categories.add('reference')
-  if (START_END_MODELS.has(key) || hasGenerateMode(model, 'startEnd2video')) categories.add('start-end')
-  if (FACE_SWAP_MODELS.has(key) || hasGenerateMode(model, 'reference2video')) categories.add('face-swap')
+  const supportsText = TEXT_MODELS.has(key) || hasGenerateMode(model, 'text2video')
+  const supportsReference = REFERENCE_MODELS.has(key) || hasGenerateMode(model, 'reference2video')
+  const supportsStartEnd = START_END_MODELS.has(key) || hasGenerateMode(model, 'startEnd2video')
+  const supportsImage = !supportsText || key === 'wan' || supportsReference || supportsStartEnd
+  if (supportsText) categories.add('text')
+  if (supportsImage) categories.add('image')
+  if (supportsReference) categories.add('reference')
+  if (supportsStartEnd) categories.add('start-end')
+  if (supportsReference && (FACE_SWAP_MODELS.has(key) || hasGenerateMode(model, 'reference2video'))) categories.add('face-swap')
   return Array.from(categories)
 }
 
@@ -122,6 +139,7 @@ function capabilityHints(model: VideoModelStatus, categories: ManualMenuKey[]) {
   if (categories.includes('image')) hints.push('支持图生视频')
   if (categories.includes('reference')) hints.push('支持参考图/融合生成')
   if (categories.includes('start-end')) hints.push('支持首尾帧过渡')
+  if (categories.includes('face-swap')) hints.push('可走人物一致性参考链')
   if (model.native_audio) hints.push('支持原生音频')
   if ((model.params || []).some((p) => p.key === 'aspect_ratio')) hints.push('可选画幅比例')
   if ((model.params || []).some((p) => p.key === 'resolution')) hints.push('可选分辨率')
@@ -131,9 +149,9 @@ function capabilityHints(model: VideoModelStatus, categories: ManualMenuKey[]) {
 function buildHelperText(tab: ManualMenuKey) {
   switch (tab) {
     case 'text':
-      return '当前项目级生成接口仍要求 image_urls；本页先把文生视频模型能力与表单需求收口出来，避免假装后端已完成无图直提交流程。'
+      return '文生视频会按真实模型能力走 text2video；不支持纯文本生成的模型不会出现在这里。'
     case 'image':
-      return '图生视频适合后续接“上传单图 → 创建临时项目 → 发起视频任务”链路。'
+      return '图生视频要求首帧图片；本页只展示具备图生视频基础能力的模型。'
     case 'reference':
       return '融合生视频底层依赖 reference2video / 角色参考图能力。'
     case 'start-end':
@@ -150,7 +168,7 @@ export default function VideoManualPage() {
   const [activeMenu, setActiveMenu] = useState<ManualMenuKey>('text')
   const [form, setForm] = useState<ManualFormState>(EMPTY_FORM)
   const [submitting, setSubmitting] = useState(false)
-  const [submitResult, setSubmitResult] = useState<{ projectId: number; taskId: number } | null>(null)
+  const [submitResult, setSubmitResult] = useState<SubmitSummary | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const { data, isLoading } = useSWR('video-model-status', () => videoAPI.modelStatus())
 
@@ -309,7 +327,28 @@ export default function VideoManualPage() {
       const taskId = Number(generateRes?.data?.task_id || 0)
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
 
-      setSubmitResult({ projectId, taskId })
+      const generateMode = String(renderConfig.generate_mode || (mode === 'image' ? 'img2video' : mode === 'text' ? 'text2video' : 'img2video'))
+      const routeNote = mode === 'face-swap'
+        ? '通过 reference2video / 人物一致性参考链提交，并非独立换脸后端。'
+        : mode === 'start-end'
+          ? '通过 startEnd2video 提交。'
+          : mode === 'reference'
+            ? '通过 reference2video 提交。'
+            : mode === 'text'
+              ? '通过 text2video 提交。'
+              : '通过 img2video 提交。'
+      setSubmitResult({
+        projectId,
+        taskId,
+        mode,
+        modelName: form.modelName,
+        generateMode,
+        sourceCount: imageUrls.filter(Boolean).length,
+        referenceCount: referenceImageUrls.filter(Boolean).length,
+        hasStartImage: Boolean(imageUrls[0]),
+        hasTailImage: Boolean(renderConfig.tail_image_url),
+        routeNote,
+      })
       toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
       const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : mode === 'start-end' ? '首尾针' : mode === 'face-swap' ? '人物一致性参考' : '文生'}视频创建失败`
@@ -447,8 +486,19 @@ export default function VideoManualPage() {
 
           {submitResult && (
             <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-100">
-              <div className="font-medium">图生视频任务已创建</div>
+              <div className="font-medium">任务已创建：{submitResult.mode === 'text' ? '文生视频' : submitResult.mode === 'image' ? '图生视频' : submitResult.mode === 'reference' ? '融合生视频' : submitResult.mode === 'start-end' ? '首尾针视频' : '人物一致性参考'}</div>
               <div className="mt-1">项目 ID：{submitResult.projectId}，任务 ID：{submitResult.taskId}</div>
+              <div className="mt-3 grid gap-2 text-xs text-emerald-50/90 md:grid-cols-2">
+                <div>模型：{getModelDisplayName(submitResult.modelName)}</div>
+                <div>实际模式：{submitResult.generateMode}</div>
+                <div>首帧输入：{submitResult.hasStartImage ? '有' : '无'}</div>
+                <div>尾帧输入：{submitResult.hasTailImage ? '有' : '无'}</div>
+                <div>首帧数量：{submitResult.sourceCount}</div>
+                <div>参考图数量：{submitResult.referenceCount}</div>
+              </div>
+              <div className="mt-3 rounded-lg border border-emerald-300/15 bg-black/10 px-3 py-2 text-xs text-emerald-50/85">
+                {submitResult.routeNote}
+              </div>
               <div className="mt-3 flex flex-wrap gap-3">
                 <Button variant="outline" asChild>
                   <Link href={`/projects/${submitResult.projectId}`}>打开项目</Link>
