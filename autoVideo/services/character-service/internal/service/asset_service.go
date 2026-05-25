@@ -42,22 +42,22 @@ type AssetService struct {
 	log            *zap.Logger
 	kafkaProducer  *KafkaProducer
 	skillRepo      repository.SkillRepository // optional; injected after construction
-	llmBaseURL      string
-	llmAPIKey       string
-	llmModel        string
-	llmVisionModel  string
-	llmTimeout      time.Duration
+	llmBaseURL     string
+	llmAPIKey      string
+	llmModel       string
+	llmVisionModel string
+	llmTimeout     time.Duration
 	// extra providers for multi-vendor routing in ChatFree
-	llmClaude       llmProvider // Anthropic Claude proxy (claude* models)
-	llmQwen         llmProvider // Alibaba DashScope (qwen* models)
-	llmZhipu        llmProvider // ZhipuAI BigModel (glm* models)
-	llmGemini       llmProvider // Gemini proxy (gemini* models)
+	llmClaude           llmProvider // Anthropic Claude proxy (claude* models)
+	llmQwen             llmProvider // Alibaba DashScope (qwen* models)
+	llmZhipu            llmProvider // ZhipuAI BigModel (glm* models)
+	llmGemini           llmProvider // Gemini proxy (gemini* models)
 	modelServiceBaseURL string
-	chatCatalogMu      sync.RWMutex
-	chatCatalog        []chatRuntimeModel
-	chatCatalogExpiry  time.Time
-	pausedProjects  sync.Map
-	panelRegen      PanelRegenFunc
+	chatCatalogMu       sync.RWMutex
+	chatCatalog         []chatRuntimeModel
+	chatCatalogExpiry   time.Time
+	pausedProjects      sync.Map
+	panelRegen          PanelRegenFunc
 }
 
 type assetGenerationSpec struct {
@@ -87,18 +87,18 @@ func NewAssetService(
 	}
 
 	return &AssetService{
-		repo:           repo,
-		storage:        storage,
-		log:            log,
-		llmBaseURL:     strings.TrimRight(llmBaseURL, "/"),
-		llmAPIKey:      llmAPIKey,
-		llmModel:       llmModel,
-		llmVisionModel: visionModel,
-		llmTimeout:     llmTimeout,
-		llmClaude:      llmProvider{baseURL: strings.TrimRight(claudeBaseURL, "/"), apiKey: claudeAPIKey},
-		llmQwen:        llmProvider{baseURL: strings.TrimRight(qwenBaseURL, "/"), apiKey: qwenAPIKey},
-		llmZhipu:       llmProvider{baseURL: strings.TrimRight(zhipuBaseURL, "/"), apiKey: zhipuAPIKey},
-		llmGemini:      llmProvider{baseURL: strings.TrimRight(geminiBaseURL, "/"), apiKey: geminiAPIKey},
+		repo:                repo,
+		storage:             storage,
+		log:                 log,
+		llmBaseURL:          strings.TrimRight(llmBaseURL, "/"),
+		llmAPIKey:           llmAPIKey,
+		llmModel:            llmModel,
+		llmVisionModel:      visionModel,
+		llmTimeout:          llmTimeout,
+		llmClaude:           llmProvider{baseURL: strings.TrimRight(claudeBaseURL, "/"), apiKey: claudeAPIKey},
+		llmQwen:             llmProvider{baseURL: strings.TrimRight(qwenBaseURL, "/"), apiKey: qwenAPIKey},
+		llmZhipu:            llmProvider{baseURL: strings.TrimRight(zhipuBaseURL, "/"), apiKey: zhipuAPIKey},
+		llmGemini:           llmProvider{baseURL: strings.TrimRight(geminiBaseURL, "/"), apiKey: geminiAPIKey},
 		modelServiceBaseURL: strings.TrimRight(modelServiceBaseURL, "/"),
 	}
 }
@@ -1621,12 +1621,18 @@ Hair: length, texture, color, style/arrangement.
 Build: height estimate, physique (slender / athletic / stocky), posture tendency.
 Costume: each garment layer — fabric type, cut, color, fastening details, surface decoration.
 Accessories: belt, headwear, footwear, jewellery, carried items.
+Spatial anchor & blocking: explicitly state the character's default screen position (left / center / right), facing direction (toward left / toward right / toward camera / back to camera), and at least one stable relation to a prop or environment anchor (for example "table behind the right shoulder", "door on frame-left background").
+Continuity lock: keep the same face, hairstyle, body shape, costume silhouette, signature accessories, and spatial anchor language across future shots unless the source explicitly says they change.
+Voice binding hint: if the description implies a stable speaking identity, quietly preserve clues that can support a later voice binding (age feel, temperament, narrator vs dialogue role), but do not turn the prompt into dialogue.
 **STRICT:** Clothing must match the character's gender exactly. Male → male-only garments. Female → female-only garments. Correct any cross-gender attire silently.
 **PERIOD + CULTURAL CONSTRAINTS (authoritative — integrate, do not drop):** Any content the input labels with "时代：" (era), "人物：" (ethnicity), "地域造型：" (region styling), or "项目视觉基调："/"视觉基调：" (project visual tone) carries period wardrobe, hairstyle, and cultural rules that MUST shape the character's garments, accessories, and grooming. Weave those constraints naturally into the head-to-toe description; drop only the label syntax ("时代："/"视觉基调：" etc.), never the content itself. If an individual personal description conflicts with the period constraints (e.g. a Tang-dynasty character wearing a modern suit), silently reconcile to the period. Ignore ONLY the "场景：" (setting) section for characters — scene architecture does not belong in a character portrait.`
 		} else {
 			systemPrompt += `
 
-**CHARACTER asset:** 描述顺序：面部特征、发型发色、肤色、身形体型、服装（从内到外每层）、配饰、鞋履。
+**CHARACTER asset:** 描述顺序：面部特征、发型发色、肤色、身形体型、服装（从内到外每层）、配饰、鞋履、标志性物件。
+必须补出**空间方位锚点**：角色默认处于画面左/中/右哪一侧、面朝左/右/镜头哪个方向、与至少一个环境/道具锚点的稳定关系（例如“桌案在右后方”“门在画面左后景”）。
+必须补出**连续性锁定语句**：后续分镜继续保持同一张脸、发型、体型、服装轮廓、标志配饰与空间朝向，除非原始描述明确要求变化。
+必须补出**音色绑定提示线索**：自然保留年龄感、气质、旁白/对白身份等可支持后续音色绑定的线索，但不要写成对白台词。
 服装必须严格符合角色性别，不得混用异性服装。
 **时代与文化约束（权威信息，必须整合而非丢弃）**：输入中凡以"时代："、"人物："、"地域造型："、"项目视觉基调："、"视觉基调："等标签出现的内容，均为该角色服饰、发型、妆容、配饰必须遵循的历史年代与文化规则。请将这些信息自然融入从头到脚的描述中，仅去除标签文字本身（"时代："等），不丢弃内容。若角色个人外貌与时代规则冲突（如唐代角色穿西装），静默调整至符合时代。仅忽略"场景："标签所含建筑环境信息。
 **输出格式：三视图角色设定参考图**：画面左侧三分之一为头肩肖像（头部颈部完整可见，蝴蝶光/柔光面部照明）；右侧三分之二为全身正面、侧面、背面三视图并排。九头身比例，修长身材。纯白背景。三视图中角色设计保持完全一致。`

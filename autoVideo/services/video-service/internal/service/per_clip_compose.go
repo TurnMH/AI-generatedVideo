@@ -44,6 +44,7 @@ func (s *VideoService) tryPerClipAudioCompose(
 	// Resolve voice config from the matching dubbing task (if any); fall back to
 	// RenderConfig overrides if the user specified them on the video task.
 	voiceModel, voiceRate, voicePitch, voiceVolume := s.repo.FindDubbingVoiceConfig(ctx, task.ProjectID, task.EpisodeID)
+	charVoiceBindings := s.dubbing.fetchCharacterVoiceBindings(ctx, task.ProjectID)
 	if v := renderConfigString(task.RenderConfig, "voice_model"); v != "" {
 		voiceModel = v
 	}
@@ -71,7 +72,8 @@ func (s *VideoService) tryPerClipAudioCompose(
 	s.logger.Info("per-clip audio compose: start",
 		zap.Int64("task_id", task.ID),
 		zap.Int("clips", len(clipURLs)),
-		zap.String("voice_model", voiceModel))
+		zap.String("voice_model", voiceModel),
+		zap.Int("character_voice_bindings", len(charVoiceBindings)))
 
 	audioPaths, err := s.dubbing.SynthesizeClipAudios(
 		ctx, task.ProjectID,
