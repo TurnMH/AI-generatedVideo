@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,6 +71,11 @@ type previewVoiceReq struct {
 	VoicePitch  string `json:"voice_pitch"`
 	VoiceVolume string `json:"voice_volume"`
 	Text        string `json:"text"`
+}
+
+type applyRecommendedVoicesReq struct {
+	Style  string `json:"style"`
+	DryRun bool   `json:"dry_run"`
 }
 
 func compactVoiceDebugSummary(raw map[string]any) map[string]any {
@@ -276,6 +282,44 @@ func (h *DubbingHandler) PreviewVoice(c *gin.Context) {
 		return
 	}
 	response.OK(c, result)
+}
+
+func (h *DubbingHandler) ApplyRecommendedVoices(c *gin.Context) {
+	pid, err := pathInt64(c, "pid")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	var req applyRecommendedVoicesReq
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	results, err := h.svc.ApplyRecommendedVoicesToUnboundCharacters(c.Request.Context(), pid, req.Style, req.DryRun)
+	if err != nil {
+		h.logger.Error("apply recommended voices", zap.Error(err))
+		response.InternalError(c, "failed to apply recommended voices: "+err.Error())
+		return
+	}
+	applied := 0
+	skipped := 0
+	for _, item := range results {
+		if item.Applied {
+			applied++
+		}
+		if item.Skipped || item.Reason == "dry_run" {
+			skipped++
+		}
+	}
+	response.OK(c, gin.H{
+		"items": results,
+		"summary": gin.H{
+			"total":   len(results),
+			"applied": applied,
+			"skipped": skipped,
+			"dry_run": req.DryRun,
+		},
+	})
 }
 
 // GenerateDubbing —— 处理配音生成请求，异步创建任务并返回 task_id

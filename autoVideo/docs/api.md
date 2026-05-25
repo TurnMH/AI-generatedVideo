@@ -180,6 +180,8 @@
 
 `POST /api/v1/projects/:pid/dubbing/voices/preview`
 
+`POST /api/v1/projects/:pid/dubbing/voices/apply-recommended`
+
 `POST /api/v1/projects/:pid/dubbing/generate-batch`
 
 `GET /api/v1/projects/:pid/dubbing/tasks`
@@ -213,6 +215,13 @@
 - 请求体支持：`voice_model` `voice_rate` `voice_pitch` `voice_volume` `text`
 - 返回：`audio_url` `duration_sec` `voice_key` `voice_name` `text`
 - 当前优先生成短试听音频并上传，适合角色页试听按钮直接接入
+
+一键应用推荐到未绑定角色：
+- `POST /api/v1/projects/:pid/dubbing/voices/apply-recommended`
+- 请求体支持：`style` `dry_run`
+- 处理方式：先从 `character-service` 拉角色列表，只处理 `voice_model` 为空的角色
+- 命中后取首个推荐音色写回 `character-service`
+- 返回 `items` 与 `summary.applied/skipped/dry_run`
 
 ### 视频内容提取（MVP）
 

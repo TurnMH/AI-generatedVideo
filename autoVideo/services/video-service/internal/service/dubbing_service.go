@@ -294,6 +294,15 @@ func RecommendVoiceCatalog(gender, ageGroup, category, style string) []VoiceCata
 	return out
 }
 
+type CharacterVoiceApplyResult struct {
+	CharacterID int64  `json:"character_id"`
+	Name        string `json:"name"`
+	Applied     bool   `json:"applied"`
+	Skipped     bool   `json:"skipped"`
+	VoiceModel  string `json:"voice_model,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+}
+
 type VoicePreviewResult struct {
 	AudioURL  string  `json:"audio_url"`
 	Duration  float64 `json:"duration_sec"`
@@ -1237,6 +1246,77 @@ func (s *DubbingService) generateWhisperSubtitle(taskID, projectID, episodeID in
 	s.logger.Info("whisper subtitle generated",
 		zap.Int64("task_id", taskID),
 		zap.String("subtitle_url", subtitleURL))
+}
+
+func (s *DubbingService) ApplyRecommendedVoicesToUnboundCharacters(ctx context.Context, projectID int64, style string, dryRun bool) ([]CharacterVoiceApplyResult, error) {
+	if strings.TrimSpace(s.characterBaseURL) == "" {
+		return nil, fmt.Errorf("character service base url is empty")
+	}
+	listURL := fmt.Sprintf("%s/api/v1/characters?project_id=%d", strings.TrimRight(s.characterBaseURL, "/"), projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list characters status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Data []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Gender     string `json:"gender"`
+			AgeGroup   string `json:"age_group"`
+			Category   string `json:"category"`
+			VoiceModel string `json:"voice_model"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	results := make([]CharacterVoiceApplyResult, 0, len(payload.Data))
+	for _, ch := range payload.Data {
+		if strings.TrimSpace(ch.VoiceModel) != "" {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Skipped: true, VoiceModel: ch.VoiceModel, Reason: "already_bound"})
+			continue
+		}
+		recommended := RecommendVoiceCatalog(ch.Gender, ch.AgeGroup, ch.Category, style)
+		if len(recommended) == 0 {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Skipped: true, Reason: "no_recommendation"})
+			continue
+		}
+		voiceModel := recommended[0].Key
+		if dryRun {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, VoiceModel: voiceModel, Reason: "dry_run"})
+			continue
+		}
+		updateBody, _ := json.Marshal(map[string]any{"voice_model": voiceModel})
+		updateURL := fmt.Sprintf("%s/api/v1/characters/%d", strings.TrimRight(s.characterBaseURL, "/"), ch.ID)
+		updateReq, err := http.NewRequestWithContext(ctx, http.MethodPut, updateURL, bytes.NewReader(updateBody))
+		if err != nil {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Skipped: true, VoiceModel: voiceModel, Reason: err.Error()})
+			continue
+		}
+		updateReq.Header.Set("Content-Type", "application/json")
+		updateResp, err := http.DefaultClient.Do(updateReq)
+		if err != nil {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Skipped: true, VoiceModel: voiceModel, Reason: err.Error()})
+			continue
+		}
+		body, _ := io.ReadAll(updateResp.Body)
+		updateResp.Body.Close()
+		if updateResp.StatusCode >= 300 {
+			results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Skipped: true, VoiceModel: voiceModel, Reason: fmt.Sprintf("update_status_%d:%s", updateResp.StatusCode, strings.TrimSpace(string(body)))})
+			continue
+		}
+		results = append(results, CharacterVoiceApplyResult{CharacterID: ch.ID, Name: ch.Name, Applied: true, VoiceModel: voiceModel})
+	}
+	return results, nil
 }
 
 func (s *DubbingService) GenerateVoicePreview(ctx context.Context, projectID int64, voiceModel, voiceRate, voicePitch, voiceVolume, sampleText string) (*VoicePreviewResult, error) {

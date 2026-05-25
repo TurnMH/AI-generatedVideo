@@ -424,6 +424,7 @@ func main() {
 			projects.POST("/:pid/dubbing/voices/recommend", dubbingHandler.RecommendVoice)
 			projects.POST("/:pid/dubbing/voices/recommend-batch", dubbingHandler.RecommendVoicesBatch)
 			projects.POST("/:pid/dubbing/voices/preview", dubbingHandler.PreviewVoice)
+			projects.POST("/:pid/dubbing/voices/apply-recommended", dubbingHandler.ApplyRecommendedVoices)
 			projects.POST("/:pid/dubbing/generate", dubbingHandler.GenerateDubbing)
 			projects.POST("/:pid/dubbing/generate-batch", dubbingHandler.GenerateDubbingBatch)
 			projects.GET("/:pid/dubbing/tasks", dubbingHandler.ListTasks)
