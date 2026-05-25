@@ -384,7 +384,6 @@ func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.D
 	return nil
 }
 
-
 // GetTask —— 根据 ID 查询单个配音任务，返回 *DubbingTask
 // GetTask returns a single task by ID.
 func (s *DubbingService) GetTask(ctx context.Context, taskID int64) (*model.DubbingTask, error) {
@@ -945,7 +944,9 @@ func (s *DubbingService) runSiliconFlowTTS(ctx context.Context, model, voice, te
 // runComfyUITTS calls a ComfyUI instance with a TTS workflow node (opt-p1).
 // voiceModel format: "comfyui:http://host:port/workflow_id"
 // The ComfyUI workflow must have nodes with names:
-//   __TTS_TEXT__ (text input), __TTS_SPEAKER__ (speaker/voice reference)
+//
+//	__TTS_TEXT__ (text input), __TTS_SPEAKER__ (speaker/voice reference)
+//
 // and output node producing an audio file.
 func (s *DubbingService) runComfyUITTS(ctx context.Context, endpointURL, text, audioPath string) error {
 	workflowTemplate := `{
@@ -1146,6 +1147,7 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 		return chunks
 	}
 
+	charVoiceMap = normalizeCharacterVoiceBindings(charVoiceMap)
 	segments := parseSpeakerSegments(text)
 	if len(segments) == 0 {
 		return nil
@@ -1154,10 +1156,7 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 	chunks := make([]dubbingChunk, 0, len(segments))
 	for _, segment := range segments {
 		// Check character-bound voice first (char-c8).
-		boundVoice := ""
-		if len(charVoiceMap) > 0 && segment.Speaker != "" {
-			boundVoice = charVoiceMap[strings.ToLower(strings.TrimSpace(segment.Speaker))]
-		}
+		boundVoice := resolveBoundVoiceForSpeaker(segment.Speaker, charVoiceMap)
 		for _, part := range splitTextChunks(segment.Text, maxChunkRunes) {
 			part = strings.TrimSpace(part)
 			if part == "" {
@@ -1243,10 +1242,78 @@ func (s *DubbingService) fetchCharacterVoiceBindings(ctx context.Context, projec
 		}
 	}
 
+	bindings = normalizeCharacterVoiceBindings(bindings)
 	if len(bindings) == 0 {
 		return nil
 	}
 	return bindings
+}
+
+func normalizeCharacterVoiceBindings(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(raw)*2)
+	for name, voice := range raw {
+		voice = strings.TrimSpace(voice)
+		if voice == "" {
+			continue
+		}
+		for _, alias := range speakerNameAliases(name) {
+			if alias != "" {
+				normalized[alias] = voice
+			}
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func speakerNameAliases(name string) []string {
+	base := normalizeSpeakerLabel(name)
+	if base == "" {
+		return nil
+	}
+	aliases := []string{strings.ToLower(base)}
+	trimmed := base
+	for _, prefix := range []string{"小", "老", "阿"} {
+		if strings.HasPrefix(trimmed, prefix) && len([]rune(trimmed)) > 1 {
+			aliases = append(aliases, strings.ToLower(strings.TrimPrefix(trimmed, prefix)))
+		}
+	}
+	for _, suffix := range []string{"老师", "先生", "女士", "小姐", "同学", "总", "哥", "姐", "叔", "姨"} {
+		if strings.HasSuffix(trimmed, suffix) && len([]rune(trimmed)) > len([]rune(suffix)) {
+			aliases = append(aliases, strings.ToLower(strings.TrimSuffix(trimmed, suffix)))
+		}
+	}
+	seen := make(map[string]struct{}, len(aliases))
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(strings.ToLower(alias))
+		if alias == "" {
+			continue
+		}
+		if _, ok := seen[alias]; ok {
+			continue
+		}
+		seen[alias] = struct{}{}
+		out = append(out, alias)
+	}
+	return out
+}
+
+func resolveBoundVoiceForSpeaker(speaker string, charVoiceMap map[string]string) string {
+	if len(charVoiceMap) == 0 || strings.TrimSpace(speaker) == "" {
+		return ""
+	}
+	for _, alias := range speakerNameAliases(speaker) {
+		if voice := strings.TrimSpace(charVoiceMap[alias]); voice != "" {
+			return voice
+		}
+	}
+	return ""
 }
 
 func parseSpeakerSegments(text string) []speakerSegment {
@@ -1291,7 +1358,11 @@ func normalizeSpeakerLabel(label string) string {
 	label = strings.TrimSpace(label)
 	label = strings.Trim(label, "[]()（）【】")
 	label = strings.TrimSpace(label)
-	return strings.ReplaceAll(label, " ", "")
+	label = strings.ReplaceAll(label, " ", "")
+	for _, wrapper := range []string{"角色", "人物", "配音", "旁白", "台词"} {
+		label = strings.TrimPrefix(label, wrapper)
+	}
+	return label
 }
 
 func isLikelySpeakerLabel(label string) bool {
