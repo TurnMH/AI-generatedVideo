@@ -157,6 +157,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const [subtitleTexts, setSubtitleTexts] = useState<Record<number, string>>({})
   const [loadingSubtitle, setLoadingSubtitle] = useState<number | null>(null)
   const [voiceSearch, setVoiceSearch] = useState('')
+  const [voicePickerEpisodeId, setVoicePickerEpisodeId] = useState<number | null>(null)
   const [previewingEpisodeId, setPreviewingEpisodeId] = useState<number | null>(null)
   const [previewAudioUrlByEpisode, setPreviewAudioUrlByEpisode] = useState<Record<number, string>>({})
   const [retryingTaskIds, setRetryingTaskIds] = useState<number[]>([])
@@ -199,6 +200,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     if (!q) return true
     return option.label.toLowerCase().includes(q) || option.value.toLowerCase().includes(q)
   })
+  const activeVoicePickerEpisode = voicePickerEpisodeId ? displayedEpisodes.find((ep) => ep.id === voicePickerEpisodeId) ?? null : null
   const VOICE_RATE_OPTIONS = [
     { value: '-30%', label: '慢 -30%' },
     { value: '-15%', label: '慢 -15%' },
@@ -818,55 +820,56 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
                 </div>
 
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <Input
-                    value={voiceSearch}
-                    onChange={(e) => setVoiceSearch(e.target.value)}
-                    placeholder="搜索音色名称 / 风格 / 分类"
-                    className="h-7 max-w-[260px] text-[10px]"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-[10px]"
-                    disabled={!episodeVoiceOptions.voice_model || episodeVoiceOptions.voice_model === 'auto' || previewingEpisodeId === ep.id}
-                    onClick={async () => {
-                      try {
-                        setPreviewingEpisodeId(ep.id)
-                        const res = await dubbingAPI.previewVoice(projectId, {
-                          voice_model: episodeVoiceOptions.voice_model,
-                          voice_rate: episodeVoiceOptions.voice_rate,
-                          voice_pitch: episodeVoiceOptions.voice_pitch,
-                          voice_volume: episodeVoiceOptions.voice_volume,
-                        })
-                        const audioUrl = res.data?.audio_url
-                        if (!audioUrl) throw new Error('empty audio url')
-                        setPreviewAudioUrlByEpisode((prev) => ({ ...prev, [ep.id]: audioUrl }))
-                        const audio = new Audio(audioUrl)
-                        await audio.play()
-                        toast({ title: `第 ${ep.episode_number} 集音色试听已开始`, variant: 'success' })
-                      } catch {
-                        toast({ title: '音色试听失败', variant: 'destructive' })
-                      } finally {
-                        setPreviewingEpisodeId(null)
-                      }
-                    }}
-                  >
-                    {previewingEpisodeId === ep.id ? '试听中...' : '试听当前音色'}
-                  </Button>
+                  <div className="text-[10px] text-surface-500">
+                    当前音色：{VOICE_OPTIONS.find((v) => v.value === episodeVoiceOptions.voice_model)?.label || '未选择'}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      onClick={() => {
+                        setVoicePickerEpisodeId(ep.id)
+                        setVoiceSearch('')
+                      }}
+                    >
+                      选择音色
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      disabled={!episodeVoiceOptions.voice_model || episodeVoiceOptions.voice_model === 'auto' || previewingEpisodeId === ep.id}
+                      onClick={async () => {
+                        try {
+                          setPreviewingEpisodeId(ep.id)
+                          const res = await dubbingAPI.previewVoice(projectId, {
+                            voice_model: episodeVoiceOptions.voice_model,
+                            voice_rate: episodeVoiceOptions.voice_rate,
+                            voice_pitch: episodeVoiceOptions.voice_pitch,
+                            voice_volume: episodeVoiceOptions.voice_volume,
+                          })
+                          const audioUrl = res.data?.audio_url
+                          if (!audioUrl) throw new Error('empty audio url')
+                          setPreviewAudioUrlByEpisode((prev) => ({ ...prev, [ep.id]: audioUrl }))
+                          const audio = new Audio(audioUrl)
+                          await audio.play()
+                          toast({ title: `第 ${ep.episode_number} 集音色试听已开始`, variant: 'success' })
+                        } catch {
+                          toast({ title: '音色试听失败', variant: 'destructive' })
+                        } finally {
+                          setPreviewingEpisodeId(null)
+                        }
+                      }}
+                    >
+                      {previewingEpisodeId === ep.id ? '试听中...' : '试听当前音色'}
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="mb-3 grid grid-cols-2 gap-2 rounded-md border border-dashed border-surface-200 bg-surface-50 p-3 md:grid-cols-4">
-                  <select
-                    value={episodeVoiceOptions.voice_model}
-                    onChange={(e) => updateEpisodeVoiceOverride(ep.id, 'voice_model', e.target.value)}
-                    className="h-8 rounded-md border border-surface-200 bg-white px-2 text-xs"
-                    title="本集音色"
-                  >
-                    {FILTERED_VOICE_OPTIONS.map(v => (
-                      <option key={v.value} value={v.value}>{v.label}</option>
-                    ))}
-                  </select>
+                <div className="mb-3 grid grid-cols-1 gap-2 rounded-md border border-dashed border-surface-200 bg-surface-50 p-3 md:grid-cols-3">
                   <select
                     value={episodeVoiceOptions.voice_rate}
                     onChange={(e) => updateEpisodeVoiceOverride(ep.id, 'voice_rate', e.target.value)}
@@ -1182,6 +1185,77 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
           })}
         </div>
       )}
+
+      <Dialog open={!!voicePickerEpisodeId} onOpenChange={(open) => { if (!open) setVoicePickerEpisodeId(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>选择本集音色{activeVoicePickerEpisode ? ` · 第 ${activeVoicePickerEpisode.episode_number} 集` : ''}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={voiceSearch}
+              onChange={(e) => setVoiceSearch(e.target.value)}
+              placeholder="搜索音色名称 / key / 风格 / 分类"
+              className="h-9"
+            />
+            <div className="max-h-[55vh] overflow-y-auto rounded-md border border-surface-200">
+              <div className="divide-y divide-surface-100">
+                {FILTERED_VOICE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-surface-50 ${activeVoicePickerEpisode && getEpisodeVoiceOptions(activeVoicePickerEpisode.id).voice_model === option.value ? 'bg-primary-50' : 'bg-white'}`}
+                    onClick={() => {
+                      if (!activeVoicePickerEpisode) return
+                      updateEpisodeVoiceOverride(activeVoicePickerEpisode.id, 'voice_model', option.value)
+                      setVoicePickerEpisodeId(null)
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-surface-800">{option.label}</div>
+                      <div className="truncate text-[11px] text-surface-400">{option.value}</div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!activeVoicePickerEpisode || !option.value || option.value === 'auto') return
+                        try {
+                          setPreviewingEpisodeId(activeVoicePickerEpisode.id)
+                          const current = getEpisodeVoiceOptions(activeVoicePickerEpisode.id)
+                          const res = await dubbingAPI.previewVoice(projectId, {
+                            voice_model: option.value,
+                            voice_rate: current.voice_rate,
+                            voice_pitch: current.voice_pitch,
+                            voice_volume: current.voice_volume,
+                          })
+                          const audioUrl = res.data?.audio_url
+                          if (!audioUrl) throw new Error('empty audio url')
+                          setPreviewAudioUrlByEpisode((prev) => ({ ...prev, [activeVoicePickerEpisode.id]: audioUrl }))
+                          const audio = new Audio(audioUrl)
+                          await audio.play()
+                        } catch {
+                          toast({ title: '音色试听失败', variant: 'destructive' })
+                        } finally {
+                          setPreviewingEpisodeId(null)
+                        }
+                      }}
+                    >
+                      试听
+                    </Button>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {activeVoicePickerEpisode && previewAudioUrlByEpisode[activeVoicePickerEpisode.id] && (
+              <audio controls className="h-8 w-full" src={previewAudioUrlByEpisode[activeVoicePickerEpisode.id]} />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
