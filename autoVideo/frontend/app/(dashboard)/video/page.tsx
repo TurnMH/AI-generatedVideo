@@ -88,13 +88,18 @@ const EMPTY_FORM: ManualFormState = {
   referenceImageFiles: [],
 }
 
-const TEXT_MODELS = new Set(['wan', 'wan-t2v', 'vidu', 'vidu-offpeak'])
-const START_END_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling'])
-const REFERENCE_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling', 'wan'])
-const FACE_SWAP_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling', 'wan', 'comfyui-video'])
+const TEXT_MODELS = new Set(['wan', 'wan-t2v', 'vidu', 'vidu-offpeak', 'cogvideo'])
+const START_END_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling', 'tencent-vclm', 'runninghub'])
+const REFERENCE_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling', 'tencent-vclm', 'wan', 'runninghub', 'comfyui-video'])
+const FACE_SWAP_MODELS = new Set(['doubao', 'doubao-seedance', 'suanneng', 'vidu', 'vidu-offpeak', 'kling', 'tencent-vclm', 'wan', 'comfyui-video', 'runninghub'])
+const IMAGE_ONLY_VIDEO_MODELS = new Set(['hubagi-voe3.1', 'hubagi-TC-GV', 'sora2', 'baidu-bce', 'gaga', 'aiping'])
 
 function hasGenerateMode(model: VideoModelStatus, mode: string) {
   return (model.params || []).some((param) => param.key === 'generate_mode' && (param.values || []).some((item) => item.value === mode))
+}
+
+function isModelKey(model: VideoModelStatus, ...prefixes: string[]) {
+  return prefixes.some((prefix) => model.key === prefix || model.key.startsWith(`${prefix}-`))
 }
 
 function getModelDisplayName(key: string) {
@@ -124,15 +129,25 @@ function getModelDisplayName(key: string) {
 function inferModelCategories(model: VideoModelStatus): ManualMenuKey[] {
   const categories = new Set<ManualMenuKey>()
   const key = model.key
-  const supportsText = TEXT_MODELS.has(key) || hasGenerateMode(model, 'text2video')
-  const supportsReference = REFERENCE_MODELS.has(key) || hasGenerateMode(model, 'reference2video')
-  const supportsStartEnd = START_END_MODELS.has(key) || hasGenerateMode(model, 'startEnd2video')
-  const supportsImage = !supportsText || key === 'wan' || supportsReference || supportsStartEnd
+  const supportsText = TEXT_MODELS.has(key) || hasGenerateMode(model, 'text2video') || isModelKey(model, 'wan-t2v', 'cogvideo')
+  const supportsReference = REFERENCE_MODELS.has(key) || hasGenerateMode(model, 'reference2video') || isModelKey(model, 'kling', 'tencent-vclm', 'runninghub', 'comfyui-video')
+  const supportsStartEnd = START_END_MODELS.has(key) || hasGenerateMode(model, 'startEnd2video') || isModelKey(model, 'doubao', 'vidu', 'suanneng', 'tencent-vclm', 'runninghub')
+  const supportsImage =
+    hasGenerateMode(model, 'image2video') ||
+    hasGenerateMode(model, 'img2video') ||
+    key === 'wan' ||
+    supportsReference ||
+    supportsStartEnd ||
+    IMAGE_ONLY_VIDEO_MODELS.has(key) ||
+    (!supportsText && model.available)
+
   if (supportsText) categories.add('text')
   if (supportsImage) categories.add('image')
   if (supportsReference) categories.add('reference')
   if (supportsStartEnd) categories.add('start-end')
-  if (supportsReference && (FACE_SWAP_MODELS.has(key) || hasGenerateMode(model, 'reference2video'))) categories.add('face-swap')
+  if (supportsReference && (FACE_SWAP_MODELS.has(key) || hasGenerateMode(model, 'reference2video') || isModelKey(model, 'comfyui-video', 'runninghub', 'tencent-vclm'))) {
+    categories.add('face-swap')
+  }
   return Array.from(categories)
 }
 
