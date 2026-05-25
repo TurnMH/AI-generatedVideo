@@ -8,24 +8,29 @@ import (
 	"github.com/autovideo/auth-service/pkg/middleware"
 	"github.com/autovideo/auth-service/pkg/response"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type APIKeyHandler struct {
 	apiKeySvc service.APIKeyService
+	logger    *zap.Logger
 }
 
 type runtimeAPIKeyResponse struct {
-	Provider   string `json:"provider"`
-	KeyAlias   string `json:"key_alias"`
-	PlainKey   string `json:"plain_key"`
-	BaseURL    string `json:"base_url"`
-	ModelScope string `json:"model_scope"`
-	Status     string `json:"status"`
+	Provider     string `json:"provider"`
+	KeyAlias     string `json:"key_alias"`
+	PlainKey     string `json:"plain_key"`
+	BaseURL      string `json:"base_url"`
+	ModelScope   string `json:"model_scope"`
+	Status       string `json:"status"`
+	OwnerService string `json:"owner_service"`
+	KeyKind      string `json:"key_kind"`
+	Purpose      string `json:"purpose"`
 }
 
 // NewAPIKeyHandler —— 创建 APIKeyHandler 实例，注入 API Key 服务依赖
 func NewAPIKeyHandler(apiKeySvc service.APIKeyService) *APIKeyHandler {
-	return &APIKeyHandler{apiKeySvc: apiKeySvc}
+	return &APIKeyHandler{apiKeySvc: apiKeySvc, logger: zap.NewNop()}
 }
 
 type addAPIKeyRequest struct {
@@ -122,16 +127,30 @@ func (h *APIKeyHandler) ListRuntimeAPIKeysHandler(c *gin.Context) {
 		response.InternalError(c, "list runtime api keys failed")
 		return
 	}
+	callerService := c.GetHeader("X-Internal-Service")
+	if callerService == "" {
+		callerService = c.Query("service")
+	}
 	out := make([]runtimeAPIKeyResponse, 0, len(keys))
 	for _, key := range keys {
+		if callerService != "" && key.OwnerService != "" && key.OwnerService != callerService {
+			continue
+		}
 		out = append(out, runtimeAPIKeyResponse{
-			Provider:   key.Provider,
-			KeyAlias:   key.KeyAlias,
-			PlainKey:   key.PlainKey,
-			BaseURL:    key.BaseURL,
-			ModelScope: key.ModelScope,
-			Status:     key.Status,
+			Provider:     key.Provider,
+			KeyAlias:     key.KeyAlias,
+			PlainKey:     key.PlainKey,
+			BaseURL:      key.BaseURL,
+			ModelScope:   key.ModelScope,
+			Status:       key.Status,
+			OwnerService: key.OwnerService,
+			KeyKind:      key.KeyKind,
+			Purpose:      key.Purpose,
 		})
 	}
+	h.logger.Info("runtime api keys fetched",
+		zap.String("caller_service", callerService),
+		zap.Int("returned_count", len(out)),
+	)
 	response.Success(c, out)
 }

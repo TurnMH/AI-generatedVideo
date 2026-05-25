@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +27,54 @@ func mergeOverrideConfig(v *viper.Viper) error {
 	return v.MergeConfig(file)
 }
 
+type runtimeKeySpecMeta struct {
+	OwnerService string
+	KeyKind      string
+	ScopeKind    string
+	SourcePath   string
+	Purpose      string
+}
+
+func runtimeKeyMeta(provider string) runtimeKeySpecMeta {
+	switch {
+	case strings.HasPrefix(provider, "runtime.video."):
+		purpose := "generate"
+		if provider == "runtime.video.llm" || provider == "runtime.video.music" {
+			purpose = "assist"
+		}
+		keyKind := "single"
+		if provider == "runtime.video.kling" {
+			keyKind = "pool"
+		}
+		if provider == "runtime.video.vclm" || provider == "runtime.video.wan" || provider == "runtime.video.baidu.bce" {
+			keyKind = "pair"
+		}
+		return runtimeKeySpecMeta{OwnerService: "video-service", KeyKind: keyKind, ScopeKind: "model_scope", SourcePath: strings.ReplaceAll(provider, "runtime.", ""), Purpose: purpose}
+	case strings.HasPrefix(provider, "runtime.image."):
+		keyKind := "single"
+		if provider == "runtime.image.openai" || provider == "runtime.image.tongyi" || provider == "runtime.image.zhipu" || provider == "runtime.image.gemini" {
+			keyKind = "pool"
+		}
+		return runtimeKeySpecMeta{OwnerService: "image-service", KeyKind: keyKind, ScopeKind: "model_scope", SourcePath: strings.ReplaceAll(provider, "runtime.", ""), Purpose: "generate"}
+	case strings.HasPrefix(provider, "runtime.script."):
+		keyKind := "single"
+		if provider == "runtime.script.openai.pool" {
+			keyKind = "pool"
+		}
+		return runtimeKeySpecMeta{OwnerService: "script-service", KeyKind: keyKind, ScopeKind: "model_scope", SourcePath: strings.ReplaceAll(provider, "runtime.", ""), Purpose: "assist"}
+	case strings.HasPrefix(provider, "runtime.character."):
+		keyKind := "single"
+		if provider == "runtime.character.gemini" {
+			keyKind = "pool"
+		}
+		return runtimeKeySpecMeta{OwnerService: "character-service", KeyKind: keyKind, ScopeKind: "model_scope", SourcePath: strings.ReplaceAll(provider, "runtime.", ""), Purpose: "assist"}
+	case strings.HasPrefix(provider, "runtime.project."):
+		return runtimeKeySpecMeta{OwnerService: "project-service", KeyKind: "single", ScopeKind: "model_scope", SourcePath: strings.ReplaceAll(provider, "runtime.", ""), Purpose: "assist"}
+	default:
+		return runtimeKeySpecMeta{}
+	}
+}
+
 func buildRuntimeSystemKeys(configFile string) ([]model.SystemAPIKey, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
@@ -45,218 +94,86 @@ func buildRuntimeSystemKeys(configFile string) ([]model.SystemAPIKey, error) {
 
 	var keys []model.SystemAPIKey
 	add := func(provider, alias, plainKey, baseURL string, scopes ...string) {
+		meta := runtimeKeyMeta(provider)
 		plainKey = strings.TrimSpace(plainKey)
 		baseURL = strings.TrimSpace(baseURL)
 		if plainKey == "" {
 			return
 		}
 		key := model.SystemAPIKey{
-			Provider:   provider,
-			KeyAlias:   alias,
-			PlainKey:   plainKey,
-			BaseURL:    baseURL,
-			ModelScope: joinScopes(scopes...),
-			IsActive:   true,
-			Status:     "active",
-			CreatedAt:  time.Now(),
+			Provider:     provider,
+			KeyAlias:     alias,
+			PlainKey:     plainKey,
+			BaseURL:      baseURL,
+			ModelScope:   joinScopes(scopes...),
+			IsActive:     true,
+			Status:       "active",
+			CreatedAt:    time.Now(),
+			OwnerService: meta.OwnerService,
+			KeyKind:      meta.KeyKind,
+			Purpose:      meta.Purpose,
+			Source:       "config-sync",
 		}
 		keys = append(keys, key)
 	}
 
-	// project-service
-	add("runtime.project.llm.primary", "project-service primary llm",
-		v.GetString("project-service.llm.api_key"),
-		v.GetString("project-service.llm.base_url"),
-		v.GetString("project-service.llm.model"),
-	)
-	add("runtime.project.llm.fallback", "project-service fallback llm",
-		v.GetString("project-service.llm.fallback_api_key"),
-		v.GetString("project-service.llm.fallback_base_url"),
-		v.GetString("project-service.llm.fallback_model"),
-	)
-
-	// script-service
-	add("runtime.script.openai.primary", "script-service primary openai",
-		v.GetString("script-service.llm.openai.api_key"),
-		v.GetString("script-service.llm.openai.base_url"),
-		v.GetString("script-service.llm.openai.model"),
-	)
-	addParallel(keysProviderSpec{
-		Provider: "runtime.script.openai.pool",
-		Alias:    "script-service openai pool",
-		Bases:    stringSliceSetting(v, "script-service.llm.openai.channel_bases"),
-		Keys:     stringSliceSetting(v, "script-service.llm.openai.channel_keys"),
-		Scope:    []string{v.GetString("script-service.llm.openai.channel_model")},
-	}, &keys)
-
-	// character-service
-	add("runtime.character.llm", "character-service primary llm",
-		v.GetString("character-service.llm.api_key"),
-		v.GetString("character-service.llm.base_url"),
-		v.GetString("character-service.llm.model"), v.GetString("character-service.llm.vision_model"),
-	)
-	add("runtime.character.claude", "character-service claude",
-		v.GetString("character-service.claude.api_key"),
-		v.GetString("character-service.claude.base_url"),
-	)
-	add("runtime.character.qwen", "character-service qwen",
-		v.GetString("character-service.qwen.api_key"),
-		v.GetString("character-service.qwen.base_url"),
-	)
-	add("runtime.character.zhipu", "character-service zhipu",
-		v.GetString("character-service.zhipu.api_key"),
-		v.GetString("character-service.zhipu.base_url"),
-	)
-	addParallel(keysProviderSpec{
-		Provider: "runtime.character.gemini",
-		Alias:    "character-service gemini",
-		Bases:    splitList(v.GetString("character-service.gemini.bases")),
-		Keys:     splitList(v.GetString("character-service.gemini.keys")),
-		Scope:    []string{v.GetString("character-service.gemini.model")},
-	}, &keys)
-
-	// image-service
-	addParallel(keysProviderSpec{
-		Provider: "runtime.image.openai",
-		Alias:    "image-service openai",
-		Bases:    []string{v.GetString("image-service.models.openai_base")},
-		Keys:     stringSliceSetting(v, "image-service.models.openai_keys"),
-		Scope:    stringSliceSetting(v, "image-service.models.openai_models"),
-	}, &keys)
-	addParallel(keysProviderSpec{
-		Provider: "runtime.image.tongyi",
-		Alias:    "image-service tongyi",
-		Bases:    []string{v.GetString("image-service.models.dashscope_base")},
-		Keys:     stringSliceSetting(v, "image-service.models.tongyi_keys"),
-		Scope:    stringSliceSetting(v, "image-service.models.tongyi_models"),
-	}, &keys)
-	addParallel(keysProviderSpec{
-		Provider: "runtime.image.zhipu",
-		Alias:    "image-service zhipu",
-		Bases:    []string{v.GetString("image-service.models.zhipu_base")},
-		Keys:     stringSliceSetting(v, "image-service.models.zhipu_keys"),
-		Scope:    stringSliceSetting(v, "image-service.models.zhipu_models"),
-	}, &keys)
-	addParallel(keysProviderSpec{
-		Provider: "runtime.image.gemini",
-		Alias:    "image-service gemini",
-		Bases:    stringSliceSetting(v, "image-service.models.gemini_bases"),
-		Keys:     stringSliceSetting(v, "image-service.models.gemini_keys"),
-		Scope: append([]string{v.GetString("image-service.models.gemini_flash_model")},
-			stringSliceSetting(v, "image-service.models.gemini_models")...),
-	}, &keys)
-	add("runtime.image.replicate", "image-service replicate",
-		v.GetString("image-service.models.replicate_key"),
-		"",
-	)
-	add("runtime.image.baidu", "image-service baidu image",
-		v.GetString("image-service.models.baidu_image_key"),
-		v.GetString("image-service.models.baidu_image_base"),
-		v.GetString("image-service.models.baidu_image_model"),
-	)
-	add("runtime.image.qianfan", "image-service qianfan image",
-		v.GetString("image-service.models.qianfan_image_key"),
-		v.GetString("image-service.models.qianfan_image_base"),
-		stringSliceSetting(v, "image-service.models.qianfan_image_models")..., 
-	)
-	add("runtime.image.doubao", "image-service doubao image",
-		v.GetString("image-service.models.doubao_image_key"),
-		v.GetString("image-service.models.doubao_image_base"),
-		v.GetString("image-service.models.doubao_image_model"),
-		v.GetString("image-service.models.doubao_image_model_v3"),
-	)
-
-	// video-service
-	addParallel(keysProviderSpec{
-		Provider: "runtime.video.kling",
-		Alias:    "video-service kling",
-		Bases:    []string{v.GetString("video-service.models.kling_base")},
-		Keys:     append(splitList(v.GetString("video-service.models.kling_key")), stringSliceSetting(v, "video-service.models.kling_keys")...),
-		Scope:    []string{v.GetString("video-service.models.kling_model"), v.GetString("video-service.models.kling_omni_model")},
-	}, &keys)
-	add("runtime.video.aiping", "video-service aiping",
-		v.GetString("video-service.models.aiping_key"),
-		v.GetString("video-service.models.aiping_base"),
-		v.GetString("video-service.models.kling_model"),
-	)
-	add("runtime.video.vclm", "video-service tencent vclm",
-		joinSecret(v.GetString("video-service.models.vclm_secret_id"), v.GetString("video-service.models.vclm_secret_key")),
-		v.GetString("video-service.models.vclm_region"),
-	)
-	add("runtime.video.wan", "video-service wan",
-		joinSecret(v.GetString("video-service.models.wan_key"), v.GetString("video-service.models.wan_secret")),
-		v.GetString("video-service.models.wan_base"),
-	)
-	add("runtime.video.runninghub", "video-service runninghub",
-		v.GetString("video-service.models.runninghub_key"),
-		v.GetString("video-service.models.runninghub_base"),
-		v.GetString("video-service.models.runninghub_workflow"), v.GetString("video-service.models.runninghub_node_id"),
-	)
-	add("runtime.video.replicate", "video-service replicate",
-		v.GetString("video-service.models.replicate_key"),
-		"",
-	)
-	add("runtime.video.sora2", "video-service sora2",
-		v.GetString("video-service.models.sora2_key"),
-		v.GetString("video-service.models.sora2_base"),
-	)
-	add("runtime.video.hubagi", "video-service hubagi",
-		v.GetString("video-service.models.hubagi_key"),
-		v.GetString("video-service.models.hubagi_base"),
-		v.GetString("video-service.models.hubagi_model"),
-	)
-	add("runtime.video.veo", "video-service veo",
-		v.GetString("video-service.models.veo_key"),
-		v.GetString("video-service.models.veo_base"),
-		v.GetString("video-service.models.veo_model"),
-	)
-	add("runtime.video.doubao", "video-service doubao",
-		v.GetString("video-service.models.doubao_key"),
-		v.GetString("video-service.models.doubao_base"),
-		v.GetString("video-service.models.doubao_model"),
-	)
-	add("runtime.video.doubao.seedance", "video-service doubao seedance",
-		v.GetString("video-service.models.doubao_seedance_key"),
-		v.GetString("video-service.models.doubao_seedance_base"),
-		v.GetString("video-service.models.doubao_seedance_model"),
-	)
-	add("runtime.video.vidu", "video-service vidu",
-		v.GetString("video-service.models.vidu_key"),
-		v.GetString("video-service.models.vidu_base"),
-		v.GetString("video-service.models.vidu_model"), v.GetString("video-service.models.vidu_mix_model"),
-	)
-	add("runtime.video.vidu.offpeak", "video-service vidu offpeak",
-		v.GetString("video-service.models.vidu_offpeak_key"),
-		v.GetString("video-service.models.vidu_base"),
-		v.GetString("video-service.models.vidu_model"), v.GetString("video-service.models.vidu_mix_model"),
-	)
-	add("runtime.video.suanneng", "video-service suanneng",
-		v.GetString("video-service.models.suanneng_key"),
-		v.GetString("video-service.models.suanneng_base"),
-		v.GetString("video-service.models.suanneng_model"),
-	)
-	add("runtime.video.gaga", "video-service gaga",
-		v.GetString("video-service.models.gaga_key"),
-		v.GetString("video-service.models.gaga_base"),
-		"gaga-1",
-	)
-	add("runtime.video.baidu.bce", "video-service baidu bce",
-		joinSecret(v.GetString("video-service.models.baidu_bce_key"), v.GetString("video-service.models.baidu_bce_secret")),
-		"",
-		v.GetString("video-service.models.baidu_bce_model"),
-	)
-	add("runtime.video.llm", "video-service motion llm",
-		v.GetString("video-service.models.llm_key"),
-		v.GetString("video-service.models.llm_base"),
-		v.GetString("video-service.models.llm_model"),
-	)
-	add("runtime.video.music", "video-service music",
-		v.GetString("video-service.models.music_key"),
-		v.GetString("video-service.models.music_base"),
-		v.GetString("video-service.models.music_model"),
-	)
-
+	buildProjectRuntimeKeys(v, add)
+	buildScriptRuntimeKeys(v, &keys, add)
+	buildCharacterRuntimeKeys(v, &keys, add)
+	buildImageRuntimeKeys(v, &keys, add)
+	buildVideoRuntimeKeys(v, &keys, add)
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Provider < keys[j].Provider })
 	return keys, nil
+}
+
+func buildProjectRuntimeKeys(v *viper.Viper, add func(provider, alias, plainKey, baseURL string, scopes ...string)) {
+	add("runtime.project.llm.primary", "project-service primary llm", v.GetString("project-service.llm.api_key"), v.GetString("project-service.llm.base_url"), v.GetString("project-service.llm.model"))
+	add("runtime.project.llm.fallback", "project-service fallback llm", v.GetString("project-service.llm.fallback_api_key"), v.GetString("project-service.llm.fallback_base_url"), v.GetString("project-service.llm.fallback_model"))
+}
+
+func buildScriptRuntimeKeys(v *viper.Viper, keys *[]model.SystemAPIKey, add func(provider, alias, plainKey, baseURL string, scopes ...string)) {
+	add("runtime.script.openai.primary", "script-service primary openai", v.GetString("script-service.llm.openai.api_key"), v.GetString("script-service.llm.openai.base_url"), v.GetString("script-service.llm.openai.model"))
+	addParallel(keysProviderSpec{Provider: "runtime.script.openai.pool", Alias: "script-service openai pool", Bases: stringSliceSetting(v, "script-service.llm.openai.channel_bases"), Keys: stringSliceSetting(v, "script-service.llm.openai.channel_keys"), Scope: []string{v.GetString("script-service.llm.openai.channel_model")}}, keys)
+}
+
+func buildCharacterRuntimeKeys(v *viper.Viper, keys *[]model.SystemAPIKey, add func(provider, alias, plainKey, baseURL string, scopes ...string)) {
+	add("runtime.character.llm", "character-service primary llm", v.GetString("character-service.llm.api_key"), v.GetString("character-service.llm.base_url"), v.GetString("character-service.llm.model"), v.GetString("character-service.llm.vision_model"))
+	add("runtime.character.claude", "character-service claude", v.GetString("character-service.claude.api_key"), v.GetString("character-service.claude.base_url"))
+	add("runtime.character.qwen", "character-service qwen", v.GetString("character-service.qwen.api_key"), v.GetString("character-service.qwen.base_url"))
+	add("runtime.character.zhipu", "character-service zhipu", v.GetString("character-service.zhipu.api_key"), v.GetString("character-service.zhipu.base_url"))
+	addParallel(keysProviderSpec{Provider: "runtime.character.gemini", Alias: "character-service gemini", Bases: splitList(v.GetString("character-service.gemini.bases")), Keys: splitList(v.GetString("character-service.gemini.keys")), Scope: []string{v.GetString("character-service.gemini.model")}}, keys)
+}
+
+func buildImageRuntimeKeys(v *viper.Viper, keys *[]model.SystemAPIKey, add func(provider, alias, plainKey, baseURL string, scopes ...string)) {
+	addParallel(keysProviderSpec{Provider: "runtime.image.openai", Alias: "image-service openai", Bases: []string{v.GetString("image-service.models.openai_base")}, Keys: stringSliceSetting(v, "image-service.models.openai_keys"), Scope: stringSliceSetting(v, "image-service.models.openai_models")}, keys)
+	addParallel(keysProviderSpec{Provider: "runtime.image.tongyi", Alias: "image-service tongyi", Bases: []string{v.GetString("image-service.models.dashscope_base")}, Keys: stringSliceSetting(v, "image-service.models.tongyi_keys"), Scope: stringSliceSetting(v, "image-service.models.tongyi_models")}, keys)
+	addParallel(keysProviderSpec{Provider: "runtime.image.zhipu", Alias: "image-service zhipu", Bases: []string{v.GetString("image-service.models.zhipu_base")}, Keys: stringSliceSetting(v, "image-service.models.zhipu_keys"), Scope: stringSliceSetting(v, "image-service.models.zhipu_models")}, keys)
+	addParallel(keysProviderSpec{Provider: "runtime.image.gemini", Alias: "image-service gemini", Bases: stringSliceSetting(v, "image-service.models.gemini_bases"), Keys: stringSliceSetting(v, "image-service.models.gemini_keys"), Scope: append([]string{v.GetString("image-service.models.gemini_flash_model")}, stringSliceSetting(v, "image-service.models.gemini_models")...)}, keys)
+	add("runtime.image.replicate", "image-service replicate", v.GetString("image-service.models.replicate_key"), "")
+	add("runtime.image.baidu", "image-service baidu image", v.GetString("image-service.models.baidu_image_key"), v.GetString("image-service.models.baidu_image_base"), v.GetString("image-service.models.baidu_image_model"))
+	add("runtime.image.qianfan", "image-service qianfan image", v.GetString("image-service.models.qianfan_image_key"), v.GetString("image-service.models.qianfan_image_base"), stringSliceSetting(v, "image-service.models.qianfan_image_models")...)
+	add("runtime.image.doubao", "image-service doubao image", v.GetString("image-service.models.doubao_image_key"), v.GetString("image-service.models.doubao_image_base"), v.GetString("image-service.models.doubao_image_model"), v.GetString("image-service.models.doubao_image_model_v3"))
+}
+
+func buildVideoRuntimeKeys(v *viper.Viper, keys *[]model.SystemAPIKey, add func(provider, alias, plainKey, baseURL string, scopes ...string)) {
+	addParallel(keysProviderSpec{Provider: "runtime.video.kling", Alias: "video-service kling", Bases: []string{v.GetString("video-service.models.kling_base")}, Keys: append(splitList(v.GetString("video-service.models.kling_key")), stringSliceSetting(v, "video-service.models.kling_keys")...), Scope: []string{v.GetString("video-service.models.kling_model"), v.GetString("video-service.models.kling_omni_model")}}, keys)
+	add("runtime.video.aiping", "video-service aiping", v.GetString("video-service.models.aiping_key"), v.GetString("video-service.models.aiping_base"), v.GetString("video-service.models.kling_model"))
+	add("runtime.video.vclm", "video-service tencent vclm", joinSecret(v.GetString("video-service.models.vclm_secret_id"), v.GetString("video-service.models.vclm_secret_key")), v.GetString("video-service.models.vclm_region"))
+	add("runtime.video.wan", "video-service wan", joinSecret(v.GetString("video-service.models.wan_key"), v.GetString("video-service.models.wan_secret")), v.GetString("video-service.models.wan_base"))
+	add("runtime.video.runninghub", "video-service runninghub", v.GetString("video-service.models.runninghub_key"), v.GetString("video-service.models.runninghub_base"), v.GetString("video-service.models.runninghub_workflow"), v.GetString("video-service.models.runninghub_node_id"))
+	add("runtime.video.replicate", "video-service replicate", v.GetString("video-service.models.replicate_key"), "")
+	add("runtime.video.sora2", "video-service sora2", v.GetString("video-service.models.sora2_key"), v.GetString("video-service.models.sora2_base"))
+	add("runtime.video.hubagi", "video-service hubagi", v.GetString("video-service.models.hubagi_key"), v.GetString("video-service.models.hubagi_base"), v.GetString("video-service.models.hubagi_model"))
+	add("runtime.video.veo", "video-service veo", v.GetString("video-service.models.veo_key"), v.GetString("video-service.models.veo_base"), v.GetString("video-service.models.veo_model"))
+	add("runtime.video.doubao", "video-service doubao", v.GetString("video-service.models.doubao_key"), v.GetString("video-service.models.doubao_base"), v.GetString("video-service.models.doubao_model"))
+	add("runtime.video.doubao.seedance", "video-service doubao seedance", v.GetString("video-service.models.doubao_seedance_key"), v.GetString("video-service.models.doubao_seedance_base"), v.GetString("video-service.models.doubao_seedance_model"))
+	add("runtime.video.vidu", "video-service vidu", v.GetString("video-service.models.vidu_key"), v.GetString("video-service.models.vidu_base"), v.GetString("video-service.models.vidu_model"), v.GetString("video-service.models.vidu_mix_model"))
+	add("runtime.video.vidu.offpeak", "video-service vidu offpeak", v.GetString("video-service.models.vidu_offpeak_key"), v.GetString("video-service.models.vidu_base"), v.GetString("video-service.models.vidu_model"), v.GetString("video-service.models.vidu_mix_model"))
+	add("runtime.video.suanneng", "video-service suanneng", v.GetString("video-service.models.suanneng_key"), v.GetString("video-service.models.suanneng_base"), v.GetString("video-service.models.suanneng_model"))
+	add("runtime.video.gaga", "video-service gaga", v.GetString("video-service.models.gaga_key"), v.GetString("video-service.models.gaga_base"), "gaga-1")
+	add("runtime.video.baidu.bce", "video-service baidu bce", joinSecret(v.GetString("video-service.models.baidu_bce_key"), v.GetString("video-service.models.baidu_bce_secret")), "", v.GetString("video-service.models.baidu_bce_model"))
+	add("runtime.video.llm", "video-service motion llm", v.GetString("video-service.models.llm_key"), v.GetString("video-service.models.llm_base"), v.GetString("video-service.models.llm_model"))
+	add("runtime.video.music", "video-service music", v.GetString("video-service.models.music_key"), v.GetString("video-service.models.music_base"), v.GetString("video-service.models.music_model"))
 }
 
 type keysProviderSpec struct {
@@ -286,14 +203,18 @@ func addParallel(spec keysProviderSpec, keys *[]model.SystemAPIKey) {
 			base = strings.TrimSpace(spec.Bases[i])
 		}
 		*keys = append(*keys, model.SystemAPIKey{
-			Provider:   spec.Provider,
-			KeyAlias:   fmt.Sprintf("%s #%d", spec.Alias, i+1),
-			PlainKey:   trimmedKey,
-			BaseURL:    base,
-			ModelScope: scope,
-			IsActive:   true,
-			Status:     "active",
-			CreatedAt:  time.Now(),
+			Provider:     spec.Provider,
+			KeyAlias:     fmt.Sprintf("%s #%d", spec.Alias, i+1),
+			PlainKey:     trimmedKey,
+			BaseURL:      base,
+			ModelScope:   scope,
+			IsActive:     true,
+			Status:       "active",
+			CreatedAt:    time.Now(),
+			OwnerService: runtimeKeyMeta(spec.Provider).OwnerService,
+			KeyKind:      runtimeKeyMeta(spec.Provider).KeyKind,
+			Purpose:      runtimeKeyMeta(spec.Provider).Purpose,
+			Source:       "config-sync",
 		})
 	}
 }

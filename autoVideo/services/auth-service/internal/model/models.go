@@ -16,17 +16,17 @@ import (
 //   - json tag：控制 JSON 序列化（API 输出时的字段名）
 //     json:"-" 表示该字段不会出现在 JSON 输出中（隐藏敏感数据）
 type User struct {
-	ID           uint64         `gorm:"primaryKey;autoIncrement" json:"id"`          // uint64 = 无符号 64 位整数
+	ID           uint64         `gorm:"primaryKey;autoIncrement" json:"id"`           // uint64 = 无符号 64 位整数
 	Username     string         `gorm:"uniqueIndex;size:64;not null" json:"username"` // uniqueIndex = 唯一索引
 	Email        string         `gorm:"uniqueIndex;size:128" json:"email"`
-	Phone        string         `gorm:"size:20;index" json:"phone"`                  // index = 普通索引，加速查询
-	PasswordHash string         `gorm:"size:256" json:"-"`                           // json:"-" → 密码哈希不暴露给前端
+	Phone        string         `gorm:"size:20;index" json:"phone"` // index = 普通索引，加速查询
+	PasswordHash string         `gorm:"size:256" json:"-"`          // json:"-" → 密码哈希不暴露给前端
 	AvatarURL    string         `gorm:"type:text" json:"avatar_url"`
-	Role         string         `gorm:"size:32;default:user;not null" json:"role"`   // default:user → 数据库默认值
+	Role         string         `gorm:"size:32;default:user;not null" json:"role"` // default:user → 数据库默认值
 	Status       string         `gorm:"size:16;default:active;not null" json:"status"`
-	CreatedAt    time.Time      `json:"created_at"`                                  // time.Time → Go 中表示日期时间的类型
+	CreatedAt    time.Time      `json:"created_at"` // time.Time → Go 中表示日期时间的类型
 	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`                              // gorm.DeletedAt → 软删除支持，删除只打标记不真删
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"` // gorm.DeletedAt → 软删除支持，删除只打标记不真删
 }
 
 // OAuthAccount —— 第三方登录账号表（如 Google、GitHub 登录）。
@@ -68,23 +68,31 @@ type UserAPIKey struct {
 }
 
 // SystemAPIKey —— 系统级 API 密钥，由管理员配置，所有用户共享。
+// 注意：PlainKey 目前仍是兼容期字段，供现有 runtime key 下发链直接消费。
+// 目标模型应逐步迁移到 EncryptedKey/Ciphertext + auth-service 内部解密下发，
+// 但在正式切换前保留 PlainKey 以避免影响现有 consumer。
 type SystemAPIKey struct {
-	ID         uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	Provider   string    `gorm:"size:64;not null" json:"provider"`
-	KeyAlias   string    `gorm:"size:128;not null" json:"key_alias"`
-	PlainKey   string    `gorm:"type:text;not null" json:"-"` // 系统密钥明文存储但不返回前端
-	BaseURL    string    `gorm:"type:text;default:''" json:"base_url"`
-	ModelScope string    `gorm:"type:text;default:''" json:"model_scope"`
-	IsActive   bool      `gorm:"default:true;not null" json:"is_active"`
-	Status     string    `gorm:"size:16;default:'active'" json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	Provider     string    `gorm:"size:64;not null" json:"provider"`
+	KeyAlias     string    `gorm:"size:128;not null" json:"key_alias"`
+	PlainKey     string    `gorm:"type:text;not null" json:"-"`   // 过渡字段：当前仍用于 runtime.* 明文下发
+	EncryptedKey string    `gorm:"type:text;default:''" json:"-"` // 预留：后续迁移为密文存储时使用
+	Source       string    `gorm:"size:32;default:'config-sync'" json:"source"`
+	OwnerService string    `gorm:"size:64;default:''" json:"owner_service"`
+	KeyKind      string    `gorm:"size:16;default:''" json:"key_kind"`
+	Purpose      string    `gorm:"size:32;default:''" json:"purpose"`
+	BaseURL      string    `gorm:"type:text;default:''" json:"base_url"`
+	ModelScope   string    `gorm:"type:text;default:''" json:"model_scope"`
+	IsActive     bool      `gorm:"default:true;not null" json:"is_active"`
+	Status       string    `gorm:"size:16;default:'active'" json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Permission —— 权限表，每条记录代表一个可授予的权限。
 type Permission struct {
 	ID   uint64 `gorm:"primaryKey;autoIncrement"`
-	Code string `gorm:"size:128;uniqueIndex;not null"`           // 权限标识码，如 "user:create"
-	Desc string `gorm:"column:description;type:text"`            // 权限描述
+	Code string `gorm:"size:128;uniqueIndex;not null"` // 权限标识码，如 "user:create"
+	Desc string `gorm:"column:description;type:text"`  // 权限描述
 }
 
 // RolePermission —— 角色-权限关联表（多对多关系）。
