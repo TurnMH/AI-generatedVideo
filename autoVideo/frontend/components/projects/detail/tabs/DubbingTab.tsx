@@ -189,11 +189,24 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     if (voice.locale) parts.push(translateVoiceMeta(voice.locale))
     return parts.filter(Boolean).join(' · ')
   }
+  const recommendedVoiceKeys = new Set(((voicesDataDub as { recommended?: Array<{ key?: string; value?: string }> } | null | undefined)?.recommended ?? []).map((v) => v.key ?? v.value ?? '').filter(Boolean))
   const VOICE_OPTIONS = [
-    { value: 'auto', label: '自动按人物分配' },
+    { value: 'auto', label: '自动按人物分配', category: 'auto', recommended: true },
     ...(voicesDataDub ?? FALLBACK_VOICE_OPTIONS).map((v) => {
-      const key = (v as { key?: string }).key ?? (v as { value?: string }).value ?? ''
-      return { value: key, label: formatVoiceOptionLabel(v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string }) }
+      const voice = v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string; provider?: string; auto_assignable?: boolean }
+      const key = voice.key ?? voice.value ?? ''
+      return {
+        value: key,
+        label: formatVoiceOptionLabel(voice),
+        provider: voice.provider,
+        voiceName: voice.voice_name,
+        locale: voice.locale,
+        gender: voice.gender,
+        style: voice.style,
+        autoAssignable: voice.auto_assignable,
+        category: voice.category,
+        recommended: recommendedVoiceKeys.has(key),
+      }
     }),
   ]
   const FILTERED_VOICE_OPTIONS = VOICE_OPTIONS.filter((option) => {
