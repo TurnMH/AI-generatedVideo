@@ -1640,6 +1640,27 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                         </div>
                       </div>
                     )}
+                    {selectedAsset.prompt_used ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <p className="text-xs font-medium text-amber-700">当前生效提示词（prompt_used）</p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-[11px] text-amber-700 hover:text-amber-900"
+                            onClick={() => {
+                              navigator.clipboard.writeText(selectedAsset.prompt_used || '')
+                              toast({ title: '提示词已复制', variant: 'success' })
+                            }}
+                          >
+                            复制
+                          </Button>
+                        </div>
+                        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white/80 p-2 text-[11px] leading-5 text-amber-950">{selectedAsset.prompt_used}</pre>
+                        <p className="mt-2 text-[10px] text-amber-700/80">这里显示的是资产真实落库并被本次图片生成使用的提示词，比只看成图更适合核对人物 / 物品 / 场景提示词是否真的更新。</p>
+                      </div>
+                    ) : null}
                     {selectedAsset.consistency_ref && Object.keys(selectedAsset.consistency_ref).length > 0 && (
                       <div className="rounded-xl bg-surface-50 p-3">
                         <p className="mb-1 text-xs font-medium text-surface-500">一致性参考</p>
