@@ -572,7 +572,13 @@ func (s *DubbingService) generateDubbingAsync(ctx context.Context, taskID int64,
 		charVoiceMap = s.fetchCharacterVoiceBindings(ctx, int64(projectID))
 	}
 	chunks := buildDubbingChunksWithCharVoices(text, voiceModel, charVoiceMap)
+	voiceDebug := encodeVoiceDebugSummary(chunks, charVoiceMap)
 	voiceCounts, sourceCounts := summarizeVoiceAssignments(chunks)
+	if voiceDebug != "" {
+		if err := s.db.WithContext(ctx).Model(&model.DubbingTask{}).Where("id = ?", taskID).Update("voice_debug", voiceDebug).Error; err != nil {
+			s.logger.Warn("persist dubbing voice debug failed", zap.Int64("task_id", taskID), zap.Error(err))
+		}
+	}
 	s.logger.Info("dubbing voice assignment resolved",
 		zap.Int64("project_id", int64(projectID)),
 		zap.Int64("episode_id", int64(episodeID)),
@@ -1458,6 +1464,20 @@ func probeMediaDuration(ctx context.Context, mediaPath string) (float64, error) 
 // splitTextChunks —— 将文本按最大 maxRunes 字符数拆分为多个块，优先在句段边界处分割
 // splitTextChunks splits text into chunks of at most maxRunes runes,
 // preferring to split at paragraph/sentence boundaries.
+
+func encodeVoiceDebugSummary(chunks []dubbingChunk, bindings map[string]string) string {
+	voiceCounts, sourceCounts := summarizeVoiceAssignments(chunks)
+	payload := map[string]any{
+		"voice_counts":             voiceCounts,
+		"voice_sources":            sourceCounts,
+		"character_voice_bindings": len(bindings),
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 func summarizeVoiceAssignments(chunks []dubbingChunk) (map[string]int, map[string]int) {
 	voiceCounts := make(map[string]int)

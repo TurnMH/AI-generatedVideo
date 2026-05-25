@@ -150,6 +150,7 @@ type DubbingTask struct {
 	SubtitleURL    string    `gorm:"type:text" json:"subtitle_url"`
 	DurationSec    float64   `json:"duration_sec"`
 	ErrorMsg       string    `gorm:"type:text" json:"error_msg"`
+	VoiceDebug     string    `gorm:"type:text;default:''" json:"voice_debug,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

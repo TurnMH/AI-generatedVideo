@@ -31,13 +31,13 @@ func NewDubbingHandler(svc *service.DubbingService, logger *zap.Logger) *Dubbing
 }
 
 type generateDubbingReq struct {
-	EpisodeID       uint64 `json:"episode_id"`
-	Text            string `json:"text"`
-	VoiceModel      string `json:"voice_model"`
-	VoiceRate       string `json:"voice_rate"`
-	VoicePitch      string `json:"voice_pitch"`
-	VoiceVolume     string `json:"voice_volume"`
-	CustomAudioURL  string `json:"custom_audio_url"` // feat-7: bypass TTS entirely
+	EpisodeID      uint64 `json:"episode_id"`
+	Text           string `json:"text"`
+	VoiceModel     string `json:"voice_model"`
+	VoiceRate      string `json:"voice_rate"`
+	VoicePitch     string `json:"voice_pitch"`
+	VoiceVolume    string `json:"voice_volume"`
+	CustomAudioURL string `json:"custom_audio_url"` // feat-7: bypass TTS entirely
 }
 
 type batchGenerateDubbingReq struct {
@@ -404,7 +404,10 @@ func (h *DubbingHandler) GetTask(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, task)
+	response.OK(c, gin.H{
+		"task":                  task,
+		"voice_debug_available": strings.TrimSpace(task.VoiceDebug) != "",
+	})
 }
 
 // RetryTask —— 重试长时间卡住或失败的配音/字幕任务
