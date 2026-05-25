@@ -173,9 +173,10 @@ type DubbingResult struct {
 }
 
 type dubbingChunk struct {
-	Speaker  string
-	Text     string
-	VoiceKey string
+	Speaker     string
+	Text        string
+	VoiceKey    string
+	VoiceSource string
 }
 
 type speakerSegment struct {
@@ -571,6 +572,15 @@ func (s *DubbingService) generateDubbingAsync(ctx context.Context, taskID int64,
 		charVoiceMap = s.fetchCharacterVoiceBindings(ctx, int64(projectID))
 	}
 	chunks := buildDubbingChunksWithCharVoices(text, voiceModel, charVoiceMap)
+	voiceCounts, sourceCounts := summarizeVoiceAssignments(chunks)
+	s.logger.Info("dubbing voice assignment resolved",
+		zap.Int64("project_id", int64(projectID)),
+		zap.Int64("episode_id", int64(episodeID)),
+		zap.String("voice_model", voiceModel),
+		zap.Any("voice_counts", voiceCounts),
+		zap.Any("voice_sources", sourceCounts),
+		zap.Int("character_voice_bindings", len(charVoiceMap)),
+	)
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("dubbing text is empty")
 	}
@@ -1142,7 +1152,7 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 			if part == "" {
 				continue
 			}
-			chunks = append(chunks, dubbingChunk{Text: part, VoiceKey: voiceModel})
+			chunks = append(chunks, dubbingChunk{Text: part, VoiceKey: voiceModel, VoiceSource: "task_voice_model"})
 		}
 		return chunks
 	}
@@ -1157,6 +1167,10 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 	for _, segment := range segments {
 		// Check character-bound voice first (char-c8).
 		boundVoice := resolveBoundVoiceForSpeaker(segment.Speaker, charVoiceMap)
+		voiceSource := "auto_assign"
+		if boundVoice != "" {
+			voiceSource = "character_binding"
+		}
 		for _, part := range splitTextChunks(segment.Text, maxChunkRunes) {
 			part = strings.TrimSpace(part)
 			if part == "" {
@@ -1167,14 +1181,15 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 				voiceKey = assigner.voiceForSpeaker(segment.Speaker)
 			}
 			chunks = append(chunks, dubbingChunk{
-				Speaker:  segment.Speaker,
-				Text:     part,
-				VoiceKey: voiceKey,
+				Speaker:     segment.Speaker,
+				Text:        part,
+				VoiceKey:    voiceKey,
+				VoiceSource: voiceSource,
 			})
 		}
 	}
 	if len(chunks) == 0 {
-		return []dubbingChunk{{Text: text, VoiceKey: "default"}}
+		return []dubbingChunk{{Text: text, VoiceKey: "default", VoiceSource: "auto_assign"}}
 	}
 	return chunks
 }
@@ -1443,6 +1458,25 @@ func probeMediaDuration(ctx context.Context, mediaPath string) (float64, error) 
 // splitTextChunks —— 将文本按最大 maxRunes 字符数拆分为多个块，优先在句段边界处分割
 // splitTextChunks splits text into chunks of at most maxRunes runes,
 // preferring to split at paragraph/sentence boundaries.
+
+func summarizeVoiceAssignments(chunks []dubbingChunk) (map[string]int, map[string]int) {
+	voiceCounts := make(map[string]int)
+	sourceCounts := make(map[string]int)
+	for _, chunk := range chunks {
+		voice := strings.TrimSpace(chunk.VoiceKey)
+		if voice == "" {
+			voice = "default"
+		}
+		source := strings.TrimSpace(chunk.VoiceSource)
+		if source == "" {
+			source = "unknown"
+		}
+		voiceCounts[voice]++
+		sourceCounts[source]++
+	}
+	return voiceCounts, sourceCounts
+}
+
 func splitTextChunks(text string, maxRunes int) []string {
 	runes := []rune(strings.TrimSpace(text))
 	if len(runes) <= maxRunes {
