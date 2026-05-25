@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,74 @@ import (
 )
 
 // 【小白注解】func main() —— Go 程序的入口函数，程序运行时自动调用，不需要手动调用。
+
+type runtimeSyncSummary struct {
+	ConfigFile      string
+	WatchedFiles    []string
+	TotalKeys       int
+	OwnerCounts     map[string]int
+	ProviderCounts  map[string]int
+	SharedKeys      int
+	OverrideEnabled bool
+}
+
+func collectRuntimeSyncSummary(keys []model.SystemAPIKey, configFile string) runtimeSyncSummary {
+	summary := runtimeSyncSummary{
+		ConfigFile:      strings.TrimSpace(configFile),
+		WatchedFiles:    watchedConfigPaths(configFile),
+		OwnerCounts:     map[string]int{},
+		ProviderCounts:  map[string]int{},
+		OverrideEnabled: strings.TrimSpace(os.Getenv("AUTOVIDEO_CONFIG_OVERRIDE_FILE")) != "",
+	}
+	for _, key := range keys {
+		summary.TotalKeys++
+		owner := strings.TrimSpace(key.OwnerService)
+		if owner == "" {
+			owner = "unassigned"
+		}
+		summary.OwnerCounts[owner]++
+		summary.ProviderCounts[key.Provider]++
+		if owner != "unassigned" && owner != "video-service" && (key.Provider == "runtime.video.llm" || key.Provider == "runtime.video.music") {
+			summary.SharedKeys++
+		}
+	}
+	return summary
+}
+
+func logRuntimeSyncSummary(logger *zap.Logger, summary runtimeSyncSummary) {
+	fields := []zap.Field{
+		zap.String("config_file", summary.ConfigFile),
+		zap.Strings("watched_files", summary.WatchedFiles),
+		zap.Int("runtime_key_count", summary.TotalKeys),
+		zap.Bool("override_enabled", summary.OverrideEnabled),
+		zap.Int("shared_key_count", summary.SharedKeys),
+	}
+	ownerNames := make([]string, 0, len(summary.OwnerCounts))
+	for owner := range summary.OwnerCounts {
+		ownerNames = append(ownerNames, owner)
+	}
+	sort.Strings(ownerNames)
+	for _, owner := range ownerNames {
+		fields = append(fields, zap.Int("owner_"+sanitizeLogKey(owner), summary.OwnerCounts[owner]))
+	}
+	providerNames := make([]string, 0, len(summary.ProviderCounts))
+	for provider := range summary.ProviderCounts {
+		providerNames = append(providerNames, provider)
+	}
+	sort.Strings(providerNames)
+	fields = append(fields, zap.Int("provider_count", len(providerNames)))
+	if len(providerNames) > 0 {
+		fields = append(fields, zap.Strings("providers", providerNames))
+	}
+	logger.Info("runtime api keys sync summary", fields...)
+}
+
+func sanitizeLogKey(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	replacer := strings.NewReplacer("-", "_", ".", "_", " ", "_")
+	return replacer.Replace(s)
+}
+
 func main() {
 	// 加载配置：优先读 config.local.yaml，其次环境变量，最后回落默认值（定义在 pkg/config）。
 	// 【小白注解】:= 是"短变量声明"，自动推断类型并赋值，只能在函数内部使用。
@@ -114,6 +183,11 @@ func main() {
 		zapLogger.Warn("sync runtime api keys failed", zap.String("config_file", configFile), zap.Error(err))
 	} else {
 		zapLogger.Info("runtime api keys synced from config", zap.String("config_file", configFile))
+		if runtimeKeys, listErr := apiKeySvc.ListRuntimeAPIKeys(); listErr != nil {
+			zapLogger.Warn("list runtime api keys after sync failed", zap.String("config_file", configFile), zap.Error(listErr))
+		} else {
+			logRuntimeSyncSummary(zapLogger, collectRuntimeSyncSummary(runtimeKeys, configFile))
+		}
 	}
 
 	// 初始化 handlers
@@ -272,6 +346,11 @@ func watchRuntimeKeySync(apiKeySvc service.APIKeyService, configFile string, log
 			continue
 		}
 		logger.Info("runtime api keys resynced from config change", zap.String("config_file", configFile))
+		if runtimeKeys, listErr := apiKeySvc.ListRuntimeAPIKeys(); listErr != nil {
+			logger.Warn("list runtime api keys after config change failed", zap.String("config_file", configFile), zap.Error(listErr))
+		} else {
+			logRuntimeSyncSummary(logger, collectRuntimeSyncSummary(runtimeKeys, configFile))
+		}
 	}
 }
 
