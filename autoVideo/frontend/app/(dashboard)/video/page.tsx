@@ -188,7 +188,9 @@ export default function VideoManualPage() {
 
   const activeModels = grouped[activeMenu] || []
   const activeMeta = MANUAL_MENU_ITEMS.find((item) => item.key === activeMenu) || MANUAL_MENU_ITEMS[0]
-  const selectedModel = activeModels.find((item) => item.key === form.modelName) || activeModels[0]
+  const fallbackModelKey = activeModels[0]?.key || ''
+  const effectiveModelKey = activeModels.some((item) => item.key === form.modelName) ? form.modelName : fallbackModelKey
+  const selectedModel = activeModels.find((item) => item.key === effectiveModelKey) || activeModels[0]
 
   useEffect(() => {
     const allowed = new Set<ManualMenuKey>(['text', 'image', 'reference', 'start-end', 'face-swap'])
@@ -203,7 +205,15 @@ export default function VideoManualPage() {
   }, [activeMenu, activeModels.length, grouped])
 
   useEffect(() => {
-    setForm((prev) => ({ ...prev, modelName: activeModels[0]?.key || '' }))
+    if (activeModels.length === 0) return
+    setForm((prev) => {
+      if (prev.modelName && activeModels.some((item) => item.key === prev.modelName)) {
+        return prev
+      }
+      const nextKey = activeModels[0]?.key || prev.modelName
+      if (nextKey === prev.modelName) return prev
+      return { ...prev, modelName: nextKey }
+    })
   }, [activeMenu, activeModels])
 
   const selectedAspectValues = (selectedModel?.params || []).find((p) => p.key === 'aspect_ratio')?.values || []
@@ -448,7 +458,7 @@ export default function VideoManualPage() {
 
             <div className="space-y-2">
               <Label>视频模型</Label>
-              <Select value={form.modelName || selectedModel?.key || ''} onValueChange={(value) => setForm((prev) => ({ ...prev, modelName: value }))}>
+              <Select value={effectiveModelKey || selectedModel?.key || ''} onValueChange={(value) => setForm((prev) => ({ ...prev, modelName: value }))}>
                 <SelectTrigger><SelectValue placeholder="选择模型" /></SelectTrigger>
                 <SelectContent>
                   {activeModels.map((model) => (
