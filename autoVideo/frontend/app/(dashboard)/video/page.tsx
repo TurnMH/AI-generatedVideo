@@ -188,7 +188,7 @@ export default function VideoManualPage() {
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
 
-  const createManualVideoTask = async (mode: 'image' | 'reference') => {
+  const createManualVideoTask = async (mode: 'image' | 'reference' | 'start-end') => {
     if (!form.prompt.trim()) {
       toast({ title: '请先填写提示词', variant: 'destructive' })
       return
@@ -203,7 +203,7 @@ export default function VideoManualPage() {
       .map((item) => item.trim())
       .filter(Boolean)
 
-    if (mode === 'image' && !form.sourceImageUrl.trim() && !form.sourceImageFile) {
+    if ((mode === 'image' || mode === 'start-end') && !form.sourceImageUrl.trim() && !form.sourceImageFile) {
       toast({ title: '请先填写首帧图片 URL 或上传本地图片', variant: 'destructive' })
       return
     }
@@ -211,20 +211,26 @@ export default function VideoManualPage() {
       toast({ title: '请至少提供首帧图或参考图', variant: 'destructive' })
       return
     }
+    if (mode === 'start-end' && !form.tailImageUrl.trim()) {
+      toast({ title: '请先填写尾帧图片 URL', variant: 'destructive' })
+      return
+    }
 
     setSubmitting(true)
     setUploadProgress(0)
     setSubmitResult(null)
     try {
+      const modeLabel = mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'
       const projectRes = await projectAPI.create({
-        title: `手动${mode === 'image' ? '图生' : '融合'}视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-        description: `手动创建视频-${mode === 'image' ? '图生视频' : '融合生视频'}临时项目`,
+        title: `手动${modeLabel}视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+        description: `手动创建视频-${modeLabel}视频临时项目`,
         project_type: 'video',
       } as never) as { data?: { id?: number } }
       const projectId = Number(projectRes?.data?.id || 0)
       if (!projectId) throw new Error('创建临时项目失败')
 
       let sourceImageUrl = form.sourceImageUrl.trim()
+      let tailImageUrl = form.tailImageUrl.trim()
       if (!sourceImageUrl && form.sourceImageFile) {
         const uploadRes = await storageAPI.upload(projectId, form.sourceImageFile, {
           bucket: 'images',
@@ -247,13 +253,21 @@ export default function VideoManualPage() {
         }
       }
 
+      if (mode === 'start-end' && !tailImageUrl) {
+        throw new Error('首尾针视频必须提供尾帧图片 URL')
+      }
       if (mode === 'image' && !sourceImageUrl) throw new Error('首帧图片上传成功，但未获取到可用链接')
       if (mode === 'reference' && !sourceImageUrl && referenceImageUrls.length === 0) throw new Error('融合生视频至少需要首帧图或参考图')
+      if (mode === 'start-end' && !sourceImageUrl) throw new Error('首尾针视频必须提供首帧图片 URL')
 
       const renderConfig: Record<string, unknown> = {}
       if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
       if (form.resolution) renderConfig.resolution = form.resolution
       if (mode === 'reference') renderConfig.generate_mode = 'reference2video'
+      if (mode === 'start-end') {
+        renderConfig.generate_mode = 'startEnd2video'
+        renderConfig.tail_image_url = tailImageUrl
+      }
       const duration = Number(form.duration)
 
       const imageUrls = sourceImageUrl ? [sourceImageUrl] : [referenceImageUrls[0]]
@@ -274,9 +288,9 @@ export default function VideoManualPage() {
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
 
       setSubmitResult({ projectId, taskId })
-      toast({ title: `${mode === 'image' ? '图生' : '融合'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
+      toast({ title: `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : '融合'}视频创建失败`
+      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : mode === 'reference' ? '融合' : '首尾针'}视频创建失败`
       toast({ title: message, variant: 'destructive' })
     } finally {
       setSubmitting(false)
@@ -293,9 +307,7 @@ export default function VideoManualPage() {
       ? '当前后端项目级生成接口仍强制要求 image_urls，文生视频暂不在这里直接提交。'
       : activeMenu === 'face-swap'
         ? '当前仓内未坐实独立 AI 换脸后端接口，这里先保留参数位与模型筛选。'
-        : activeMenu === 'start-end'
-          ? '首尾针视频表单已具备，但真实提交链下一步再接。'
-          : ''
+        : ''
 
     return (
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
@@ -450,6 +462,10 @@ export default function VideoManualPage() {
             ) : activeMenu === 'reference' ? (
               <Button onClick={() => createManualVideoTask('reference')} disabled={submitting}>
                 {submitting ? '正在创建融合生视频任务…' : '创建融合生视频任务'}
+              </Button>
+            ) : activeMenu === 'start-end' ? (
+              <Button onClick={() => createManualVideoTask('start-end')} disabled={submitting}>
+                {submitting ? '正在创建首尾针视频任务…' : '创建首尾针视频任务'}
               </Button>
             ) : (
               <Button disabled>{disabledReason ? '等待后端链路补齐' : '下一步接真实提交'}</Button>
