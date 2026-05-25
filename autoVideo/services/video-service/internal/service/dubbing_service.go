@@ -211,6 +211,89 @@ func BuiltInVoiceCatalog() []VoiceCatalogEntry {
 	return out
 }
 
+func FilterVoiceCatalog(category, gender, style string, autoAssignable *bool) []VoiceCatalogEntry {
+	category = strings.TrimSpace(strings.ToLower(category))
+	gender = strings.TrimSpace(strings.ToLower(gender))
+	style = strings.TrimSpace(strings.ToLower(style))
+	all := BuiltInVoiceCatalog()
+	filtered := make([]VoiceCatalogEntry, 0, len(all))
+	for _, item := range all {
+		if category != "" && strings.ToLower(item.Category) != category {
+			continue
+		}
+		if gender != "" && strings.ToLower(item.Gender) != gender {
+			continue
+		}
+		if style != "" && !strings.Contains(strings.ToLower(item.Style), style) {
+			continue
+		}
+		if autoAssignable != nil && item.AutoAssignable != *autoAssignable {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func RecommendVoiceCatalog(gender, ageGroup, category, style string) []VoiceCatalogEntry {
+	gender = strings.TrimSpace(strings.ToLower(gender))
+	ageGroup = strings.TrimSpace(strings.ToLower(ageGroup))
+	category = strings.TrimSpace(strings.ToLower(category))
+	style = strings.TrimSpace(strings.ToLower(style))
+
+	preferredKeys := make([]string, 0, 6)
+	switch {
+	case strings.Contains(category, "旁白") || strings.Contains(category, "narrat") || strings.Contains(style, "纪录") || strings.Contains(style, "解说"):
+		if gender == "female" {
+			preferredKeys = append(preferredKeys, "narrator-female", "warm-female")
+		} else {
+			preferredKeys = append(preferredKeys, "narrator-male", "calm-male")
+		}
+	case strings.Contains(ageGroup, "child") || strings.Contains(ageGroup, "儿童") || strings.Contains(ageGroup, "少女"):
+		if gender == "male" {
+			preferredKeys = append(preferredKeys, "male2", "taiwan-male1")
+		} else {
+			preferredKeys = append(preferredKeys, "child-female", "bright-female", "female2")
+		}
+	case strings.Contains(style, "港") || strings.Contains(style, "粤"):
+		if gender == "female" {
+			preferredKeys = append(preferredKeys, "cantonese-female1", "cantonese-female2")
+		} else {
+			preferredKeys = append(preferredKeys, "cantonese-male1")
+		}
+	case strings.Contains(style, "台"):
+		if gender == "female" {
+			preferredKeys = append(preferredKeys, "taiwan-female1", "taiwan-female2")
+		} else {
+			preferredKeys = append(preferredKeys, "taiwan-male1")
+		}
+	default:
+		if gender == "female" {
+			preferredKeys = append(preferredKeys, "female1", "warm-female", "bright-female")
+		} else {
+			preferredKeys = append(preferredKeys, "default", "male2", "calm-male")
+		}
+	}
+
+	catalog := BuiltInVoiceCatalog()
+	index := map[string]VoiceCatalogEntry{}
+	for _, item := range catalog {
+		index[item.Key] = item
+	}
+	out := make([]VoiceCatalogEntry, 0, len(preferredKeys))
+	seen := map[string]bool{}
+	for _, key := range preferredKeys {
+		if seen[key] {
+			continue
+		}
+		if item, ok := index[key]; ok {
+			out = append(out, item)
+			seen[key] = true
+		}
+	}
+	return out
+}
+
 type DubbingResult struct {
 	AudioURL    string  `json:"audio_url"`
 	SubtitleURL string  `json:"subtitle_url"`

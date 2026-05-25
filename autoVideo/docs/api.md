@@ -182,7 +182,10 @@
 
 音色目录接口说明：
 - 返回 `items`：当前内建音色目录
-- 返回 `summary.total`：音色总数
+- 返回 `recommended`：按角色条件推荐的音色列表
+- 支持查询参数：`gender` `category` `style` `auto_assignable`
+- 支持推荐参数：`recommend_gender` `recommend_age_group` `recommend_category` `recommend_style`
+- 返回 `summary.total`：筛选后的音色总数
 - 返回 `summary.categories`：按 `mainland-mandarin / regional / multilingual` 分类统计
 - 返回 `summary.providers`：按 provider 统计（当前主要为 `edge-tts`）
 

@@ -109,6 +109,23 @@ func parseVoiceDebugSummary(raw string) map[string]any {
 	return payload
 }
 
+func queryBoolPtr(c *gin.Context, key string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "y":
+		v := true
+		return &v, nil
+	case "0", "false", "no", "n":
+		v := false
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("invalid boolean for %s", key)
+	}
+}
+
 func normalizeVoiceOptions(voiceModel, voiceRate, voicePitch, voiceVolume string) (string, string, string, string) {
 	if voiceModel == "" {
 		voiceModel = "default"
@@ -126,15 +143,36 @@ func normalizeVoiceOptions(voiceModel, voiceRate, voicePitch, voiceVolume string
 }
 
 func (h *DubbingHandler) VoiceCatalog(c *gin.Context) {
-	voices := service.BuiltInVoiceCatalog()
+	autoAssignable, err := queryBoolPtr(c, "auto_assignable")
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	gender := strings.TrimSpace(c.Query("gender"))
+	category := strings.TrimSpace(c.Query("category"))
+	style := strings.TrimSpace(c.Query("style"))
+	voices := service.FilterVoiceCatalog(category, gender, style, autoAssignable)
 	categories := map[string]int{}
 	providers := map[string]int{}
 	for _, item := range voices {
 		categories[item.Category]++
 		providers[item.Provider]++
 	}
+	recommended := service.RecommendVoiceCatalog(
+		strings.TrimSpace(c.Query("recommend_gender")),
+		strings.TrimSpace(c.Query("recommend_age_group")),
+		strings.TrimSpace(c.Query("recommend_category")),
+		strings.TrimSpace(c.Query("recommend_style")),
+	)
 	response.OK(c, gin.H{
-		"items": voices,
+		"items":       voices,
+		"recommended": recommended,
+		"filters": gin.H{
+			"gender":          gender,
+			"category":        category,
+			"style":           style,
+			"auto_assignable": autoAssignable,
+		},
 		"summary": gin.H{
 			"total":      len(voices),
 			"categories": categories,
