@@ -69,6 +69,9 @@ func (s *MotionPromptService) RefineBatch(
 	sceneGroupKeys []string,
 	cameraHints []string,
 	moodHints []string,
+	spatialAnchors []string,
+	subjectPositions []string,
+	transitionNotes []string,
 ) []string {
 	if len(perClipDescs) == 0 {
 		return nil
@@ -78,7 +81,7 @@ func (s *MotionPromptService) RefineBatch(
 		modelFamily == "doubao" || modelFamily == "vidu" || modelFamily == "suanneng"
 
 	systemPrompt := s.buildSystemPrompt(useChinese, motionMode, stylePreset)
-	userPrompt := s.buildUserPrompt(perClipDescs, charDescriptions, sceneGroupKeys, cameraHints, moodHints, useChinese)
+	userPrompt := s.buildUserPrompt(perClipDescs, charDescriptions, sceneGroupKeys, cameraHints, moodHints, spatialAnchors, subjectPositions, transitionNotes, useChinese)
 
 	reqBody := map[string]any{
 		"model": s.llmModel,
@@ -191,13 +194,14 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 ━━━━━━━━━━━━━━━━━━━━━━━━
 【场景分组元数据 — 必须利用】
 ━━━━━━━━━━━━━━━━━━━━━━━━
-用户输入的每条片段还会携带 scene_group / camera / mood 元数据：
+用户输入的每条片段还会携带 scene_group / camera / mood / spatial_anchor / subject_positions / transition 元数据：
 1. same_scene_as_prev=true 时，优先延续动作、朝向、视线、左右站位与运动能量；
 2. scene_group 发生变化时，先建立新场景或新空间关系，再自然承接人物；
 3. camera / mood 非空时，把它们视为强约束，不可忽略或随意改写；
 4. 若上一镜与下一镜属于同 scene_group，过渡提示优先写成动作连续、视线引导或匹配切；
 5. 同一 scene_group 的第一条镜头描述，优先补足空间锚点：人物相对位置、门窗或关键道具所在方位、前后景层次；
-6. 如果片段描述本身已经给出人物在左/中/右、靠窗/靠门、前景/后景等信息，必须继承，不得改写成新的空间关系。
+6. 如果片段描述本身已经给出人物在左/中/右、靠窗/靠门、前景/后景等信息，必须继承，不得改写成新的空间关系；
+7. spatial_anchor / subject_positions / transition 若非空，视为高优先级调度约束：必须显式体现在镜头运动描述中。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 【禁止清单】
@@ -255,11 +259,12 @@ Visual style: %s
 ━━━━━━━━━━━━━━━━━━━━━━━━
 SCENE-GROUP METADATA — MUST BE USED:
 ━━━━━━━━━━━━━━━━━━━━━━━━
-Each clip may also carry scene_group / camera / mood metadata:
+Each clip may also carry scene_group / camera / mood / spatial_anchor / subject_positions / transition metadata:
 1. When same_scene_as_prev=true, preserve action, facing direction, eyeline, and energy continuity first.
 2. When scene_group changes, begin with a brief spatial re-establishing beat before pushing action forward.
 3. Non-empty camera or mood values are hard constraints, not optional flavor text.
 4. Within the same scene_group, prefer action continuity, eyeline bridges, or match cuts in the handoff cue.
+5. Non-empty spatial_anchor, subject_positions, or transition values are high-priority blocking constraints and must be reflected explicitly in the motion description.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 FORBIDDEN:
@@ -276,7 +281,7 @@ Output ONLY a valid JSON array of strings, one entry per clip, no additional tex
 ["motion for clip 0", "motion for clip 1", ...]`, mode, motionMode, stylePreset)
 }
 
-func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions string, sceneGroupKeys, cameraHints, moodHints []string, useChinese bool) string {
+func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions string, sceneGroupKeys, cameraHints, moodHints, spatialAnchors, subjectPositions, transitionNotes []string, useChinese bool) string {
 	var sb strings.Builder
 	if strings.TrimSpace(charDescriptions) != "" {
 		if useChinese {
@@ -290,12 +295,12 @@ func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions s
 		}
 	}
 	if useChinese {
-		sb.WriteString(fmt.Sprintf("总片段数：%d\n元数据约束：same_scene_as_prev=true 表示必须与上一镜延续动作、轴线、左右站位、空间锚点和能量。请特别关注人物在画面左/中/右的位置、朝向、视线对象，以及与门窗桌椅等关键物件的相对关系。\n\n场景序列：\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("总片段数：%d\n元数据约束：same_scene_as_prev=true 表示必须与上一镜延续动作、轴线、左右站位、空间锚点和能量。请特别关注人物在画面左/中/右的位置、朝向、视线对象，以及与门窗桌椅等关键物件的相对关系。若存在 spatial_anchor / subject_positions / transition 元数据，必须把这些信息显式写进镜头调度与运动描述。\n\n场景序列：\n", len(descs)))
 	} else {
-		sb.WriteString(fmt.Sprintf("Total clips: %d\nMetadata rule: same_scene_as_prev=true means the clip must continue the prior clip's action line, facing direction, left/right blocking, spatial anchors, and energy. Pay special attention to frame position, eyeline target, and relation to key objects such as doors, windows, tables, or stairs.\n\nScene sequence:\n", len(descs)))
+		sb.WriteString(fmt.Sprintf("Total clips: %d\nMetadata rule: same_scene_as_prev=true means the clip must continue the prior clip's action line, facing direction, left/right blocking, spatial anchors, and energy. Pay special attention to frame position, eyeline target, and relation to key objects such as doors, windows, tables, or stairs. If spatial_anchor / subject_positions / transition metadata is present, you must express it explicitly in the blocking and motion wording.\n\nScene sequence:\n", len(descs)))
 	}
 	for i, d := range descs {
-		meta := formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints, i)
+		meta := formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints, spatialAnchors, subjectPositions, transitionNotes, i)
 		if useChinese {
 			sb.WriteString(fmt.Sprintf("[片段%d]%s %s\n", i, meta, d))
 		} else {
@@ -305,7 +310,7 @@ func (s *MotionPromptService) buildUserPrompt(descs []string, charDescriptions s
 	return sb.String()
 }
 
-func formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints []string, idx int) string {
+func formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints, spatialAnchors, subjectPositions, transitionNotes []string, idx int) string {
 	parts := []string{
 		fmt.Sprintf("[scene_group=%s]", motionPromptSliceValue(sceneGroupKeys, idx, "-")),
 		fmt.Sprintf("[same_scene_as_prev=%t]", sameSceneAsPrevious(sceneGroupKeys, idx)),
@@ -315,6 +320,15 @@ func formatMotionClipMetadata(sceneGroupKeys, cameraHints, moodHints []string, i
 	}
 	if mood := strings.TrimSpace(motionPromptSliceValue(moodHints, idx, "")); mood != "" {
 		parts = append(parts, fmt.Sprintf("[mood=%s]", mood))
+	}
+	if anchor := strings.TrimSpace(motionPromptSliceValue(spatialAnchors, idx, "")); anchor != "" {
+		parts = append(parts, fmt.Sprintf("[spatial_anchor=%s]", anchor))
+	}
+	if position := strings.TrimSpace(motionPromptSliceValue(subjectPositions, idx, "")); position != "" {
+		parts = append(parts, fmt.Sprintf("[subject_positions=%s]", position))
+	}
+	if transition := strings.TrimSpace(motionPromptSliceValue(transitionNotes, idx, "")); transition != "" {
+		parts = append(parts, fmt.Sprintf("[transition=%s]", transition))
 	}
 	return strings.Join(parts, "")
 }

@@ -127,6 +127,9 @@ func TestMotionPromptUserPromptIncludesSceneMetadata(t *testing.T) {
 		[]string{"scene-a", "scene-a"},
 		[]string{"向左跟拍", "特写推进"},
 		[]string{"tense", "tense"},
+		[]string{"门在右后侧", "门仍在右后侧"},
+		[]string{"人物居左朝右", "人物仍居左朝右"},
+		[]string{"冲向门口", "继续前冲"},
 		false,
 	)
 
@@ -135,6 +138,9 @@ func TestMotionPromptUserPromptIncludesSceneMetadata(t *testing.T) {
 		"[same_scene_as_prev=true]",
 		"[camera=特写推进]",
 		"[mood=tense]",
+		"[spatial_anchor=门在右后侧]",
+		"[subject_positions=人物仍居左朝右]",
+		"[transition=继续前冲]",
 		"Metadata rule: same_scene_as_prev=true",
 	} {
 		if !strings.Contains(prompt, want) {

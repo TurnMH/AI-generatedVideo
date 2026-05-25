@@ -307,6 +307,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	perClipDurations := extractDurations(task.RenderConfig, len(imageURLs))
 	perClipCameras := extractStringSlice(task.RenderConfig, "camera_movements", len(imageURLs))
 	perClipMoods := extractStringSlice(task.RenderConfig, "moods", len(imageURLs))
+	perClipSpatialAnchors := extractStringSlice(task.RenderConfig, "spatial_anchors", len(imageURLs))
+	perClipSubjectPositions := extractStringSlice(task.RenderConfig, "subject_positions", len(imageURLs))
+	perClipTransitionNotes := extractStringSlice(task.RenderConfig, "transition_notes", len(imageURLs))
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, len(imageURLs))
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", len(imageURLs))
 	sceneGroupKeys := []string(task.SceneGroupKeys)
@@ -337,6 +340,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			sceneGroupKeys,
 			perClipCameras,
 			perClipMoods,
+			perClipSpatialAnchors,
+			perClipSubjectPositions,
+			perClipTransitionNotes,
 		); len(refined) > 0 {
 			perClipDescs = refined
 		}
@@ -1145,6 +1151,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	perClipDurations := extractDurations(task.RenderConfig, totalClips)
 	perClipCameras := extractStringSlice(task.RenderConfig, "camera_movements", totalClips)
 	perClipMoods := extractStringSlice(task.RenderConfig, "moods", totalClips)
+	perClipSpatialAnchors := extractStringSlice(task.RenderConfig, "spatial_anchors", totalClips)
+	perClipSubjectPositions := extractStringSlice(task.RenderConfig, "subject_positions", totalClips)
+	perClipTransitionNotes := extractStringSlice(task.RenderConfig, "transition_notes", totalClips)
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, totalClips)
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", totalClips)
 	sceneGroupKeys := []string(task.SceneGroupKeys)
@@ -1164,6 +1173,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 			sceneGroupKeys,
 			perClipCameras,
 			perClipMoods,
+			perClipSpatialAnchors,
+			perClipSubjectPositions,
+			perClipTransitionNotes,
 		); len(refined) > 0 {
 			perClipDescs = refined
 		}
