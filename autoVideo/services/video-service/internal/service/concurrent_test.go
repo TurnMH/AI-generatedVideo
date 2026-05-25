@@ -27,11 +27,11 @@ import (
 // fakeRepo is an in-memory implementation of repository.VideoTaskRepo.
 // It records UpdateTaskStatus calls so tests can inspect side-effects.
 type fakeRepo struct {
-	mu       sync.Mutex
-	tasks    map[int64]*model.VideoTask
-	clips    map[int64][]*model.VideoClip
+	mu        sync.Mutex
+	tasks     map[int64]*model.VideoTask
+	clips     map[int64][]*model.VideoClip
 	statusLog []statusEntry // ordered log of all UpdateTaskStatus calls
-	nextID   int64
+	nextID    int64
 }
 
 type statusEntry struct {
@@ -82,6 +82,31 @@ func (r *fakeRepo) UpdateTask(_ context.Context, task *model.VideoTask) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tasks[task.ID] = task
+	return nil
+}
+
+func (r *fakeRepo) UpdateTaskRouteState(_ context.Context, taskID int64, fields map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	task, ok := r.tasks[taskID]
+	if !ok || len(fields) == 0 {
+		return nil
+	}
+	if v, ok := fields["requested_model"].(string); ok {
+		task.RequestedModel = v
+	}
+	if v, ok := fields["routed_generator"].(string); ok {
+		task.RoutedGenerator = v
+	}
+	if v, ok := fields["runtime_provider"].(string); ok {
+		task.RuntimeProvider = v
+	}
+	if v, ok := fields["effective_model"].(string); ok {
+		task.EffectiveModel = v
+	}
+	if v, ok := fields["route_reason"].(string); ok {
+		task.RouteReason = v
+	}
 	return nil
 }
 
@@ -145,10 +170,10 @@ func (r *fakeRepo) FindStaleProcessing(_ context.Context, olderThan time.Duratio
 	return out, nil
 }
 
-func (r *fakeRepo) DeleteProjectData(_ context.Context, _ int64) error                { return nil }
-func (r *fakeRepo) DeleteEpisodeData(_ context.Context, _, _ int64) error             { return nil }
-func (r *fakeRepo) CreateClip(_ context.Context, clip *model.VideoClip) error         { return nil }
-func (r *fakeRepo) UpdateClip(_ context.Context, clip *model.VideoClip) error         { return nil }
+func (r *fakeRepo) DeleteProjectData(_ context.Context, _ int64) error        { return nil }
+func (r *fakeRepo) DeleteEpisodeData(_ context.Context, _, _ int64) error     { return nil }
+func (r *fakeRepo) CreateClip(_ context.Context, clip *model.VideoClip) error { return nil }
+func (r *fakeRepo) UpdateClip(_ context.Context, clip *model.VideoClip) error { return nil }
 func (r *fakeRepo) GetClipsByTaskID(_ context.Context, taskID int64) ([]model.VideoClip, error) {
 	return nil, nil
 }
@@ -172,11 +197,11 @@ var _ repository.VideoTaskRepo = (*fakeRepo)(nil)
 func newTestService(repo repository.VideoTaskRepo) *VideoService {
 	logger, _ := zap.NewDevelopment()
 	return &VideoService{
-		repo:      repo,
-		logger:    logger,
-		maxClips:  3,
+		repo:          repo,
+		logger:        logger,
+		maxClips:      3,
 		localMaxClips: 1,
-		generators: map[string]generators.VideoGenerator{},
+		generators:    map[string]generators.VideoGenerator{},
 	}
 }
 
@@ -435,9 +460,9 @@ type slowGenerator struct {
 	peakFlight int
 }
 
-func (g *slowGenerator) Name() string  { return "slow-mock" }
-func (g *slowGenerator) IsAvailable(_ context.Context) bool { return true }
-func (g *slowGenerator) SupportsNativeAudio() bool          { return false }
+func (g *slowGenerator) Name() string                                { return "slow-mock" }
+func (g *slowGenerator) IsAvailable(_ context.Context) bool          { return true }
+func (g *slowGenerator) SupportsNativeAudio() bool                   { return false }
 func (g *slowGenerator) ParamOptions() []generators.ModelParamOption { return nil }
 
 func (g *slowGenerator) Generate(ctx context.Context, req generators.VideoGenerateReq) (*generators.VideoClip, error) {
@@ -636,14 +661,14 @@ func TestCapacityUpperBound(t *testing.T) {
 	t.Parallel()
 
 	const (
-		maxTasks = 5
-		maxClips = 3
-		numTasks = 20  // far more than the slots to exercise steady-state saturation
+		maxTasks     = 5
+		maxClips     = 3
+		numTasks     = 20 // far more than the slots to exercise steady-state saturation
 		clipsPerTask = 6
 	)
 
 	var (
-		globalPeak  int64
+		globalPeak   int64
 		globalFlight int64
 	)
 
@@ -710,7 +735,7 @@ func (b *boundedGenerator) Generate(_ context.Context, _ generators.VideoGenerat
 	time.Sleep(b.delay)
 	return &generators.VideoClip{ClipURL: "ok"}, nil
 }
-func (b *boundedGenerator) Name() string               { return "bounded" }
-func (b *boundedGenerator) IsAvailable(_ context.Context) bool { return true }
-func (b *boundedGenerator) SupportsNativeAudio() bool  { return false }
+func (b *boundedGenerator) Name() string                                { return "bounded" }
+func (b *boundedGenerator) IsAvailable(_ context.Context) bool          { return true }
+func (b *boundedGenerator) SupportsNativeAudio() bool                   { return false }
 func (b *boundedGenerator) ParamOptions() []generators.ModelParamOption { return nil }

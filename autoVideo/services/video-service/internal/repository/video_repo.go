@@ -16,6 +16,7 @@ type VideoTaskRepo interface {
 	GetTask(ctx context.Context, id int64) (*model.VideoTask, error)
 	ListTasks(ctx context.Context, projectID, episodeID int64, page, pageSize int) ([]model.VideoTask, int64, error)
 	UpdateTask(ctx context.Context, task *model.VideoTask) error
+	UpdateTaskRouteState(ctx context.Context, taskID int64, fields map[string]any) error
 	UpdateTaskStatus(ctx context.Context, id int64, status, resultURL, errMsg string, durationSec float64) error
 	SoftDeleteTask(ctx context.Context, taskID int64) error
 	SetVariantGroupID(ctx context.Context, taskIDs []int64, groupID int64) error
@@ -137,6 +138,14 @@ func (r *VideoRepo) UpdateClip(ctx context.Context, clip *model.VideoClip) error
 // UpdateTask saves all fields of a task.
 func (r *VideoRepo) UpdateTask(ctx context.Context, task *model.VideoTask) error {
 	return r.db.WithContext(ctx).Save(task).Error
+}
+
+// UpdateTaskRouteState —— 仅更新任务的路由诊断字段，避免全量保存误覆盖其它状态。
+func (r *VideoRepo) UpdateTaskRouteState(ctx context.Context, taskID int64, fields map[string]any) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&model.VideoTask{}).Where("id = ?", taskID).Updates(fields).Error
 }
 
 // DeleteClipsByTaskID —— 删除指定任务的所有片段记录（用于重试前清理）
