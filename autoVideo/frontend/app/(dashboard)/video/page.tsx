@@ -46,6 +46,7 @@ type ManualFormState = {
   resolution: string
   duration: string
   sourceImageFile: File | null
+  referenceImageFiles: File[]
 }
 
 const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
@@ -68,6 +69,7 @@ const EMPTY_FORM: ManualFormState = {
   resolution: '',
   duration: '',
   sourceImageFile: null,
+  referenceImageFiles: [],
 }
 
 const TEXT_MODELS = new Set(['wan', 'wan-t2v', 'vidu', 'vidu-offpeak'])
@@ -186,17 +188,27 @@ export default function VideoManualPage() {
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
 
-  const handleImageGenerate = async () => {
+  const createManualVideoTask = async (mode: 'image' | 'reference') => {
     if (!form.prompt.trim()) {
       toast({ title: '请先填写提示词', variant: 'destructive' })
       return
     }
-    if (!form.sourceImageUrl.trim() && !form.sourceImageFile) {
+    if (!form.modelName) {
+      toast({ title: '请先选择视频模型', variant: 'destructive' })
+      return
+    }
+
+    const referenceUrlLines = form.referenceImages
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+    if (mode === 'image' && !form.sourceImageUrl.trim() && !form.sourceImageFile) {
       toast({ title: '请先填写首帧图片 URL 或上传本地图片', variant: 'destructive' })
       return
     }
-    if (!form.modelName) {
-      toast({ title: '请先选择视频模型', variant: 'destructive' })
+    if (mode === 'reference' && !form.sourceImageUrl.trim() && !form.sourceImageFile && referenceUrlLines.length === 0 && form.referenceImageFiles.length === 0) {
+      toast({ title: '请至少提供首帧图或参考图', variant: 'destructive' })
       return
     }
 
@@ -205,8 +217,8 @@ export default function VideoManualPage() {
     setSubmitResult(null)
     try {
       const projectRes = await projectAPI.create({
-        title: `手动图生视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-        description: '手动创建视频-图生视频临时项目',
+        title: `手动${mode === 'image' ? '图生' : '融合'}视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+        description: `手动创建视频-${mode === 'image' ? '图生视频' : '融合生视频'}临时项目`,
         project_type: 'video',
       } as never) as { data?: { id?: number } }
       const projectId = Number(projectRes?.data?.id || 0)
@@ -221,15 +233,36 @@ export default function VideoManualPage() {
         }) as { data?: { cdn_url?: string } }
         sourceImageUrl = String(uploadRes?.data?.cdn_url || '').trim()
       }
-      if (!sourceImageUrl) throw new Error('首帧图片上传成功，但未获取到可用链接')
+
+      const referenceImageUrls = [...referenceUrlLines]
+      if (form.referenceImageFiles.length > 0) {
+        for (const file of form.referenceImageFiles) {
+          const uploadRes = await storageAPI.upload(projectId, file, {
+            bucket: 'images',
+            category: 'manual-video-reference',
+            onProgress: (percent) => setUploadProgress(percent),
+          }) as { data?: { cdn_url?: string } }
+          const uploaded = String(uploadRes?.data?.cdn_url || '').trim()
+          if (uploaded) referenceImageUrls.push(uploaded)
+        }
+      }
+
+      if (mode === 'image' && !sourceImageUrl) throw new Error('首帧图片上传成功，但未获取到可用链接')
+      if (mode === 'reference' && !sourceImageUrl && referenceImageUrls.length === 0) throw new Error('融合生视频至少需要首帧图或参考图')
 
       const renderConfig: Record<string, unknown> = {}
       if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
       if (form.resolution) renderConfig.resolution = form.resolution
+      if (mode === 'reference') renderConfig.generate_mode = 'reference2video'
       const duration = Number(form.duration)
 
+      const imageUrls = sourceImageUrl ? [sourceImageUrl] : [referenceImageUrls[0]]
+      if (mode === 'reference' && referenceImageUrls.length > 0) {
+        renderConfig.character_image_urls = referenceImageUrls
+      }
+
       const generateRes = await videoAPI.generate(projectId, {
-        image_urls: [sourceImageUrl],
+        image_urls: imageUrls,
         scene_descriptions: [form.prompt.trim()],
         scene_description: form.prompt.trim(),
         model_name: form.modelName,
@@ -241,9 +274,9 @@ export default function VideoManualPage() {
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
 
       setSubmitResult({ projectId, taskId })
-      toast({ title: '图生视频任务已创建', description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
+      toast({ title: `${mode === 'image' ? '图生' : '融合'}视频任务已创建`, description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : '图生视频创建失败'
+      const message = error instanceof Error ? error.message : `${mode === 'image' ? '图生' : '融合'}视频创建失败`
       toast({ title: message, variant: 'destructive' })
     } finally {
       setSubmitting(false)
@@ -251,12 +284,18 @@ export default function VideoManualPage() {
     }
   }
 
+  const handleImageGenerate = async () => {
+    await createManualVideoTask('image')
+  }
+
   const renderForm = () => {
     const disabledReason = activeMenu === 'text'
       ? '当前后端项目级生成接口仍强制要求 image_urls，文生视频暂不在这里直接提交。'
       : activeMenu === 'face-swap'
         ? '当前仓内未坐实独立 AI 换脸后端接口，这里先保留参数位与模型筛选。'
-        : ''
+        : activeMenu === 'start-end'
+          ? '首尾针视频表单已具备，但真实提交链下一步再接。'
+          : ''
 
     return (
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
@@ -297,6 +336,13 @@ export default function VideoManualPage() {
               <div className="space-y-2 md:col-span-2">
                 <Label>{activeMenu === 'face-swap' ? '参考脸 / 原脸 URL（每行一张）' : '参考图 URL（每行一张）'}</Label>
                 <Textarea value={form.referenceImages} onChange={(e) => setForm((prev) => ({ ...prev, referenceImages: e.target.value }))} placeholder={'https://ref-1\nhttps://ref-2'} className="min-h-[100px]" />
+                {activeMenu === 'reference' && (
+                  <>
+                    <div className="text-xs text-slate-500">也可上传多张本地参考图</div>
+                    <Input type="file" accept="image/*" multiple onChange={(e) => setForm((prev) => ({ ...prev, referenceImageFiles: Array.from(e.target.files || []) }))} />
+                    {form.referenceImageFiles.length > 0 && <div className="text-xs text-slate-400">已选择 {form.referenceImageFiles.length} 张参考图</div>}
+                  </>
+                )}
               </div>
             )}
 
@@ -400,6 +446,10 @@ export default function VideoManualPage() {
             {activeMenu === 'image' ? (
               <Button onClick={handleImageGenerate} disabled={submitting}>
                 {submitting ? '正在创建图生视频任务…' : '创建图生视频任务'}
+              </Button>
+            ) : activeMenu === 'reference' ? (
+              <Button onClick={() => createManualVideoTask('reference')} disabled={submitting}>
+                {submitting ? '正在创建融合生视频任务…' : '创建融合生视频任务'}
               </Button>
             ) : (
               <Button disabled>{disabledReason ? '等待后端链路补齐' : '下一步接真实提交'}</Button>
