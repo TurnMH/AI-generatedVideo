@@ -420,6 +420,8 @@ func main() {
 			pVideos.POST("/:vid/watermark", videoHandler.ApplyWatermark)
 			pVideos.POST("/:vid/publish", publishHandler.PublishVideo) // feat-11
 
+			projects.GET("/:pid/dubbing/voices", dubbingHandler.VoiceCatalog)
+			projects.POST("/:pid/dubbing/voices/recommend", dubbingHandler.RecommendVoice)
 			projects.POST("/:pid/dubbing/generate", dubbingHandler.GenerateDubbing)
 			projects.POST("/:pid/dubbing/generate-batch", dubbingHandler.GenerateDubbingBatch)
 			projects.GET("/:pid/dubbing/tasks", dubbingHandler.ListTasks)

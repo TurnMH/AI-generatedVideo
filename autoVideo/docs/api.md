@@ -174,6 +174,8 @@
 
 `GET /api/v1/projects/:pid/dubbing/voices`
 
+`POST /api/v1/projects/:pid/dubbing/voices/recommend`
+
 `POST /api/v1/projects/:pid/dubbing/generate-batch`
 
 `GET /api/v1/projects/:pid/dubbing/tasks`
@@ -188,6 +190,12 @@
 - 返回 `summary.total`：筛选后的音色总数
 - 返回 `summary.categories`：按 `mainland-mandarin / regional / multilingual` 分类统计
 - 返回 `summary.providers`：按 provider 统计（当前主要为 `edge-tts`）
+
+角色推荐接口说明：
+- `POST /api/v1/projects/:pid/dubbing/voices/recommend`
+- 请求体支持：`name` `gender` `age_group` `category` `style`
+- 返回 `recommended`：按角色条件挑出的推荐音色
+- 当前适合角色页、角色批量绑定页直接接入
 
 ### 视频内容提取（MVP）
 

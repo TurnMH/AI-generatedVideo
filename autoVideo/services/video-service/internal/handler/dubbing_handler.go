@@ -52,6 +52,14 @@ type batchTaskResult struct {
 	Message   string `json:"message,omitempty"`
 }
 
+type recommendVoiceReq struct {
+	Name     string `json:"name"`
+	Gender   string `json:"gender"`
+	AgeGroup string `json:"age_group"`
+	Category string `json:"category"`
+	Style    string `json:"style"`
+}
+
 func compactVoiceDebugSummary(raw map[string]any) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -177,6 +185,28 @@ func (h *DubbingHandler) VoiceCatalog(c *gin.Context) {
 			"total":      len(voices),
 			"categories": categories,
 			"providers":  providers,
+		},
+	})
+}
+
+func (h *DubbingHandler) RecommendVoice(c *gin.Context) {
+	var req recommendVoiceReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	recommended := service.RecommendVoiceCatalog(req.Gender, req.AgeGroup, req.Category, req.Style)
+	response.OK(c, gin.H{
+		"character": gin.H{
+			"name":      req.Name,
+			"gender":    req.Gender,
+			"age_group": req.AgeGroup,
+			"category":  req.Category,
+			"style":     req.Style,
+		},
+		"recommended": recommended,
+		"summary": gin.H{
+			"count": len(recommended),
 		},
 	})
 }
