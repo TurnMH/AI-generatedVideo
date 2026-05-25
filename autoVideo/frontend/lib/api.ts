@@ -670,6 +670,26 @@ export interface VoicePreviewResponse {
   }
 }
 
+export interface ApplyRecommendedVoicesResponse {
+  code: number
+  data: {
+    items?: {
+      character_id: number
+      name: string
+      applied?: boolean
+      skipped?: boolean
+      voice_model?: string
+      reason?: string
+    }[]
+    summary?: {
+      total?: number
+      applied?: number
+      skipped?: number
+      dry_run?: boolean
+    }
+  }
+}
+
 export const dubbingAPI = {
   generate: (
     projectId: number,
@@ -745,6 +765,11 @@ export const dubbingAPI = {
     data: { voice_model?: string; voice_rate?: string; voice_pitch?: string; voice_volume?: string; text?: string }
   ) =>
     api.post<VoicePreviewResponse>(`/api/v1/projects/${projectId}/dubbing/voices/preview`, data),
+  applyRecommendedVoices: (
+    projectId: number,
+    data?: { style?: string; dry_run?: boolean }
+  ) =>
+    api.post<ApplyRecommendedVoicesResponse>(`/api/v1/projects/${projectId}/dubbing/voices/apply-recommended`, data ?? {}),
   generateForStoryboard: (
     projectId: number,
     storyboardId: number,

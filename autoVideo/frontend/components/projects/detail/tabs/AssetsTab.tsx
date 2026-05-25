@@ -567,6 +567,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   }
 
   const [autoMatchingVoices, setAutoMatchingVoices] = useState(false)
+  const [applyingRecommendedVoices, setApplyingRecommendedVoices] = useState(false)
   const handleAutoMatchVoices = async () => {
     setAutoMatchingVoices(true)
     try {
@@ -584,7 +585,24 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     }
   }
 
-
+  const handleApplyRecommendedVoices = async () => {
+    setApplyingRecommendedVoices(true)
+    try {
+      const res = await dubbingAPI.applyRecommendedVoices(projectId)
+      const summary = res.data?.summary
+      const applied = summary?.applied ?? 0
+      const skipped = summary?.skipped ?? 0
+      toast({
+        title: applied > 0 ? `推荐音色应用完成，已更新 ${applied} 个未绑定角色` : skipped > 0 ? '未找到可应用的未绑定角色或推荐结果' : '没有可应用的角色音色变更',
+        variant: applied > 0 ? 'success' : 'default',
+      })
+      mutateAssets()
+    } catch {
+      toast({ title: '推荐音色应用失败', variant: 'destructive' })
+    } finally {
+      setApplyingRecommendedVoices(false)
+    }
+  }
 
   const handleDelete = async (id: number) => {
     try {
@@ -893,6 +911,10 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
             <Button size="sm" variant="outline" onClick={handleAutoMatchVoices} disabled={autoMatchingVoices} title="根据人物姓名自动为未绑定音色的人物资源分配音色">
               {autoMatchingVoices ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Mic className="mr-1.5 h-3.5 w-3.5" />}
               自动匹配音色
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleApplyRecommendedVoices} disabled={applyingRecommendedVoices} title="按当前推荐规则，为未绑定角色应用推荐音色">
+              {applyingRecommendedVoices ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+              推荐并应用音色
             </Button>
             {failedCount > 0 && (
               <Button size="sm" variant="outline" onClick={handleRetryAllFailed} title="统一进入模型确认弹窗后重试当前范围内所有失败资源">
