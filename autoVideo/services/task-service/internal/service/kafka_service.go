@@ -10,14 +10,12 @@ import (
 
 // Topic constants for kafka-go consumers/producers.
 const (
-	TopicScriptAnalyzeReq       = "script.analyze.request"
-	TopicScriptQuickGenerateReq = "script.quick_generate.request"
-	TopicImageGenerateReq       = "image.generate.request"
+	TopicScriptAnalyzeReq = "script.analyze.request"
+	TopicImageGenerateReq = "image.generate.request"
 	TopicVideoGenerateReq       = "video.generate.request"
 	TopicMusicGenerateReq       = "music.generate.request"
-	TopicScriptAnalyzeRes       = "script.analyze.result"
-	TopicScriptQuickGenerateRes = "script.quick_generate.result"
-	TopicImageGenerateRes       = "image.generate.result"
+	TopicScriptAnalyzeRes = "script.analyze.result"
+	TopicImageGenerateRes = "image.generate.result"
 	TopicVideoGenerateRes       = "video.generate.result"
 	TopicMusicGenerateRes       = "music.generate.result"
 	TopicTaskCompleted          = "task.completed"

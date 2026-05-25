@@ -233,8 +233,12 @@ func (h *DubbingHandler) GenerateSubtitle(c *gin.Context) {
 		return
 	}
 
-	if req.Text == "" && req.AudioURL == "" {
+	if strings.TrimSpace(req.Text) == "" && strings.TrimSpace(req.AudioURL) == "" {
 		response.BadRequest(c, "text or audio_url required")
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" && strings.TrimSpace(req.AudioURL) != "" {
+		response.BadRequest(c, "subtitle generation from audio_url is not implemented yet; please provide text")
 		return
 	}
 	if len([]rune(req.Text)) > maxDubbingTextRunes {
@@ -243,9 +247,6 @@ func (h *DubbingHandler) GenerateSubtitle(c *gin.Context) {
 	}
 
 	text := req.Text
-	if text == "" {
-		text = "(从音频生成字幕暂未实现)"
-	}
 	req.VoiceModel, req.VoiceRate, req.VoicePitch, req.VoiceVolume = normalizeVoiceOptions(req.VoiceModel, req.VoiceRate, req.VoicePitch, req.VoiceVolume)
 
 	userID, _ := strconv.ParseInt(c.GetHeader("X-User-ID"), 10, 64)
@@ -299,7 +300,7 @@ func (h *DubbingHandler) GenerateSubtitleBatch(c *gin.Context) {
 	failed := 0
 
 	for _, item := range req.Items {
-		if item.Text == "" && item.AudioURL == "" {
+		if strings.TrimSpace(item.Text) == "" && strings.TrimSpace(item.AudioURL) == "" {
 			failed++
 			results = append(results, batchTaskResult{
 				EpisodeID: item.EpisodeID,
@@ -308,11 +309,17 @@ func (h *DubbingHandler) GenerateSubtitleBatch(c *gin.Context) {
 			})
 			continue
 		}
+		if strings.TrimSpace(item.Text) == "" && strings.TrimSpace(item.AudioURL) != "" {
+			failed++
+			results = append(results, batchTaskResult{
+				EpisodeID: item.EpisodeID,
+				Status:    "failed",
+				Message:   "subtitle generation from audio_url is not implemented yet; please provide text",
+			})
+			continue
+		}
 
 		text := item.Text
-		if text == "" {
-			text = "(从音频生成字幕暂未实现)"
-		}
 		voiceModel, voiceRate, voicePitch, voiceVolume := normalizeVoiceOptions(item.VoiceModel, item.VoiceRate, item.VoicePitch, item.VoiceVolume)
 		task := &model.DubbingTask{
 			ProjectID:   pid,
@@ -557,9 +564,16 @@ func (h *DubbingHandler) DeleteProjectData(c *gin.Context) {
 	response.OK(c, gin.H{"deleted": true})
 }
 
-// GenerateStoryboardDubbing —— 为单个分镜生成语音，异步创建任务
-// POST /api/v1/projects/:pid/storyboards/:sid/dubbing
-func (h *DubbingHandler) GenerateStoryboardDubbing(c *gin.Context) {
+type generateStoryboardTaskReq struct {
+	EpisodeID   uint64 `json:"episode_id" binding:"required"`
+	Text        string `json:"text"`
+	VoiceModel  string `json:"voice_model"`
+	VoiceRate   string `json:"voice_rate"`
+	VoicePitch  string `json:"voice_pitch"`
+	VoiceVolume string `json:"voice_volume"`
+}
+
+func (h *DubbingHandler) createStoryboardTask(c *gin.Context, taskType string) {
 	pid, err := pathInt64(c, "pid")
 	if err != nil {
 		response.BadRequest(c, "invalid project id")
@@ -571,14 +585,7 @@ func (h *DubbingHandler) GenerateStoryboardDubbing(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		EpisodeID  uint64 `json:"episode_id" binding:"required"`
-		Text       string `json:"text"`
-		VoiceModel string `json:"voice_model"`
-		VoiceRate  string `json:"voice_rate"`
-		VoicePitch string `json:"voice_pitch"`
-		VoiceVolume string `json:"voice_volume"`
-	}
+	var req generateStoryboardTaskReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
@@ -600,7 +607,7 @@ func (h *DubbingHandler) GenerateStoryboardDubbing(c *gin.Context) {
 		EpisodeID:    int64(req.EpisodeID),
 		StoryboardID: &sid,
 		UserID:       userID,
-		TaskType:     "dubbing",
+		TaskType:     taskType,
 		VoiceModel:   req.VoiceModel,
 		VoiceRate:    req.VoiceRate,
 		VoicePitch:   req.VoicePitch,
@@ -609,18 +616,30 @@ func (h *DubbingHandler) GenerateStoryboardDubbing(c *gin.Context) {
 
 	if err := h.svc.CreateStoryboardTask(c.Request.Context(), task, req.Text); err != nil {
 		if errors.Is(err, service.ErrActiveTaskExists) {
-			response.Fail(c, http.StatusConflict, http.StatusConflict, "an active dubbing task already exists for this storyboard")
+			response.Fail(c, http.StatusConflict, http.StatusConflict, fmt.Sprintf("an active %s task already exists for this storyboard", taskType))
 			return
 		}
-		h.logger.Error("create storyboard dubbing task", zap.Error(err))
+		h.logger.Error("create storyboard task", zap.String("task_type", taskType), zap.Error(err))
 		response.InternalError(c, "failed to create task: "+err.Error())
 		return
 	}
 
 	response.OK(c, gin.H{
-		"message": "storyboard dubbing task created",
+		"message": fmt.Sprintf("storyboard %s task created", taskType),
 		"task_id": task.ID,
 	})
+}
+
+// GenerateStoryboardDubbing —— 为单个分镜生成语音，异步创建任务
+// POST /api/v1/projects/:pid/storyboards/:sid/dubbing
+func (h *DubbingHandler) GenerateStoryboardDubbing(c *gin.Context) {
+	h.createStoryboardTask(c, "dubbing")
+}
+
+// GenerateStoryboardSubtitle —— 为单个分镜生成字幕，异步创建任务
+// POST /api/v1/projects/:pid/storyboards/:sid/subtitle
+func (h *DubbingHandler) GenerateStoryboardSubtitle(c *gin.Context) {
+	h.createStoryboardTask(c, "subtitle")
 }
 
 // ListStoryboardTasks —— 返回项目下所有分镜配音任务（每个分镜最新一条）

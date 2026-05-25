@@ -238,13 +238,18 @@ func (s *DubbingService) SetWhisperURL(url string) {
 // CreateTask persists a dubbing/subtitle task and starts processing in background.
 // When task.CustomAudioURL is non-empty, TTS is skipped and the audio is used directly.
 func (s *DubbingService) CreateTask(ctx context.Context, task *model.DubbingTask, text string) error {
+	cleanedText := strings.TrimSpace(cleanScriptForSpeech(text))
+	if cleanedText == "" {
+		cleanedText = strings.TrimSpace(text)
+	}
+
 	// If custom audio is provided, mark complete immediately — no TTS needed.
 	if strings.TrimSpace(task.CustomAudioURL) != "" {
 		task.Status = model.StatusSucceeded
 		task.AudioURL = strings.TrimSpace(task.CustomAudioURL)
 		task.ChunksTotal = 1
 		task.ChunksDone = 1
-		task.SourceText = text
+		task.SourceText = cleanedText
 		if err := s.db.WithContext(ctx).Create(task).Error; err != nil {
 			return fmt.Errorf("create custom audio task: %w", err)
 		}
@@ -258,13 +263,16 @@ func (s *DubbingService) CreateTask(ctx context.Context, task *model.DubbingTask
 		}
 		return nil
 	}
+	if cleanedText == "" {
+		return fmt.Errorf("spoken text is empty after cleanup")
+	}
 
 	// Estimate chunks
-	runes := []rune(strings.TrimSpace(text))
-	chunks := splitTextChunks(text, maxChunkRunes)
+	runes := []rune(cleanedText)
+	chunks := splitTextChunks(cleanedText, maxChunkRunes)
 	task.ChunksTotal = len(chunks)
 	task.Status = model.StatusPending
-	task.SourceText = text
+	task.SourceText = cleanedText
 
 	var existing model.DubbingTask
 	err := s.db.WithContext(ctx).
@@ -290,7 +298,7 @@ func (s *DubbingService) CreateTask(ctx context.Context, task *model.DubbingTask
 	)
 
 	// Process in background
-	go s.processTask(task.ID, task.ProjectID, task.EpisodeID, task.UserID, text, task.VoiceModel, task.VoiceRate, task.VoicePitch, task.VoiceVolume, task.TaskType)
+	go s.processTask(task.ID, task.ProjectID, task.EpisodeID, task.UserID, cleanedText, task.VoiceModel, task.VoiceRate, task.VoicePitch, task.VoiceVolume, task.TaskType)
 	return nil
 }
 
@@ -333,11 +341,19 @@ func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.D
 		return fmt.Errorf("storyboard_id is required")
 	}
 
-	runes := []rune(strings.TrimSpace(text))
-	chunks := splitTextChunks(text, maxChunkRunes)
+	cleanedText := strings.TrimSpace(cleanScriptForSpeech(text))
+	if cleanedText == "" {
+		cleanedText = strings.TrimSpace(text)
+	}
+	if cleanedText == "" {
+		return fmt.Errorf("spoken text is empty after cleanup")
+	}
+
+	runes := []rune(cleanedText)
+	chunks := splitTextChunks(cleanedText, maxChunkRunes)
 	task.ChunksTotal = len(chunks)
 	task.Status = model.StatusPending
-	task.SourceText = text
+	task.SourceText = cleanedText
 
 	// Check for an active task for this storyboard
 	var existing model.DubbingTask
@@ -364,7 +380,7 @@ func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.D
 		zap.Int("chunks", len(chunks)),
 	)
 
-	go s.processTask(task.ID, task.ProjectID, task.EpisodeID, task.UserID, text, task.VoiceModel, task.VoiceRate, task.VoicePitch, task.VoiceVolume, task.TaskType)
+	go s.processTask(task.ID, task.ProjectID, task.EpisodeID, task.UserID, cleanedText, task.VoiceModel, task.VoiceRate, task.VoicePitch, task.VoiceVolume, task.TaskType)
 	return nil
 }
 
@@ -389,6 +405,10 @@ func (s *DubbingService) RetryTask(ctx context.Context, taskID int64, fallbackTe
 	if sourceText == "" {
 		sourceText = strings.TrimSpace(fallbackText)
 	}
+	sourceText = strings.TrimSpace(cleanScriptForSpeech(sourceText))
+	if sourceText == "" {
+		sourceText = strings.TrimSpace(cleanScriptForSpeech(fallbackText))
+	}
 	if sourceText == "" {
 		return nil, ErrTaskRetryNotAllowed
 	}
@@ -407,18 +427,25 @@ func (s *DubbingService) RetryTask(ctx context.Context, taskID int64, fallbackTe
 	}
 
 	newTask := &model.DubbingTask{
-		ProjectID:   task.ProjectID,
-		EpisodeID:   task.EpisodeID,
-		UserID:      task.UserID,
-		TaskType:    task.TaskType,
-		SourceText:  sourceText,
-		VoiceModel:  task.VoiceModel,
-		VoiceRate:   task.VoiceRate,
-		VoicePitch:  task.VoicePitch,
-		VoiceVolume: task.VoiceVolume,
+		ProjectID:    task.ProjectID,
+		EpisodeID:    task.EpisodeID,
+		StoryboardID: task.StoryboardID,
+		UserID:       task.UserID,
+		TaskType:     task.TaskType,
+		SourceText:   sourceText,
+		VoiceModel:   task.VoiceModel,
+		VoiceRate:    task.VoiceRate,
+		VoicePitch:   task.VoicePitch,
+		VoiceVolume:  task.VoiceVolume,
 	}
-	if err := s.CreateTask(ctx, newTask, sourceText); err != nil {
-		return nil, err
+	if task.StoryboardID != nil {
+		if err := s.CreateStoryboardTask(ctx, newTask, sourceText); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.CreateTask(ctx, newTask, sourceText); err != nil {
+			return nil, err
+		}
 	}
 	return newTask, nil
 }

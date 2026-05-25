@@ -722,6 +722,21 @@ export const dubbingAPI = {
       voice_pitch: options?.voice_pitch || '+0Hz',
       voice_volume: options?.voice_volume || '+0%',
     }),
+  generateSubtitleForStoryboard: (
+    projectId: number,
+    storyboardId: number,
+    episodeId: number,
+    text: string,
+    options?: { voice_model?: string; voice_rate?: string; voice_pitch?: string; voice_volume?: string }
+  ) =>
+    api.post(`/api/v1/projects/${projectId}/storyboards/${storyboardId}/subtitle`, {
+      episode_id: episodeId,
+      text,
+      voice_model: options?.voice_model || 'default',
+      voice_rate: options?.voice_rate || '+0%',
+      voice_pitch: options?.voice_pitch || '+0Hz',
+      voice_volume: options?.voice_volume || '+0%',
+    }),
   listStoryboardTasks: (projectId: number) =>
     api.get<{ code: number; data: DubbingTask[] }>(`/api/v1/projects/${projectId}/dubbing/storyboard-tasks`),
 }

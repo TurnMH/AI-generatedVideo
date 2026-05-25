@@ -39,12 +39,6 @@ const navItems = [
     icon: Film,
   },
   {
-    label: '快速生成',
-    href: '/quick',
-    icon: Wand2,
-    badge: 'NEW',
-  },
-  {
     label: '剧本库',
     href: '/scripts',
     icon: BookOpen,
@@ -190,11 +184,6 @@ export function Sidebar() {
                     isActive ? 'text-cyan-300' : 'text-surface-500 group-hover:text-surface-300'
                   )} />
                   {item.label}
-                  {'badge' in item && item.badge && !isActive && (
-                    <span className="ml-1 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
-                      {item.badge}
-                    </span>
-                  )}
                   {isActive && (
                     <div className="ml-auto flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />

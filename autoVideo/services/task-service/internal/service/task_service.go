@@ -375,8 +375,6 @@ func taskTypeTopic(taskType string) string {
 	switch taskType {
 	case "script_analyze":
 		return TopicScriptAnalyzeReq
-	case "script_quick_generate":
-		return TopicScriptQuickGenerateReq
 	case "image_generate":
 		return TopicImageGenerateReq
 	case "video_generate":

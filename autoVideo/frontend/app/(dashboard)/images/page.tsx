@@ -629,10 +629,10 @@ export default function ImagesPage() {
           <div className="flex flex-col gap-2">
             <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
               <SelectTrigger className="w-44">
-                <SelectValue placeholder="不选项目（快速生成）" />
+                <SelectValue placeholder="不选项目" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="0">不选项目（快速生成）</SelectItem>
+                <SelectItem value="0">不选项目</SelectItem>
                 {projects.map(p => (
                   <SelectItem key={p.id} value={String(p.id)}>{p.title}</SelectItem>
                 ))}

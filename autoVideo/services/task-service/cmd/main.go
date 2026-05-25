@@ -75,7 +75,6 @@ func main() {
 	// ── kafka consumers ───────────────────────────────────────────────────────
 	resultTopics := []string{
 		service.TopicScriptAnalyzeRes,
-		service.TopicScriptQuickGenerateRes,
 		service.TopicImageGenerateRes,
 		service.TopicVideoGenerateRes,
 		service.TopicMusicGenerateRes,
@@ -227,15 +226,6 @@ func handleKafkaMessage(ctx context.Context, topic string, data []byte, svc *ser
 	switch topic {
 	case service.TopicTaskProgress:
 		return svc.UpdateProgress(msg.TaskID, msg.Progress, msg.Message)
-	case service.TopicScriptQuickGenerateRes:
-		if msg.ErrorMsg != "" {
-			return svc.UpdateStatus(msg.TaskID, model.TaskFailed, msg.ErrorMsg)
-		}
-		if len(msg.Result) > 0 {
-			return svc.UpdateResult(msg.TaskID, msg.Result)
-		}
-		// 空 result 也算完成（罕见，但不应当标失败）
-		return svc.UpdateStatus(msg.TaskID, model.TaskSucceeded, "")
 	case service.TopicTaskCompleted, service.TopicScriptAnalyzeRes, service.TopicImageGenerateRes, service.TopicVideoGenerateRes, service.TopicMusicGenerateRes:
 		return svc.UpdateStatus(msg.TaskID, model.TaskSucceeded, "")
 	case service.TopicTaskFailed:

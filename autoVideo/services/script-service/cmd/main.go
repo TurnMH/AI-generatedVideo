@@ -113,7 +113,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	kafkaSvc.StartConsumer(ctx, scriptSvc)
-	kafkaSvc.StartQuickGenerateConsumer(ctx, llmClient)
 
 	// Handlers
 	scriptHandler := handler.NewScriptHandler(scriptSvc)

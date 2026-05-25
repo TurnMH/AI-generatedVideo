@@ -344,8 +344,9 @@ func main() {
 			projects.POST("/:pid/dubbing/tasks/retry-batch", dubbingHandler.RetryTasksBatch)
 			projects.POST("/:pid/subtitle/generate", dubbingHandler.GenerateSubtitle)
 			projects.POST("/:pid/subtitle/generate-batch", dubbingHandler.GenerateSubtitleBatch)
-			// Storyboard-scoped TTS
+			// Storyboard-scoped TTS / subtitles
 			projects.POST("/:pid/storyboards/:sid/dubbing", dubbingHandler.GenerateStoryboardDubbing)
+			projects.POST("/:pid/storyboards/:sid/subtitle", dubbingHandler.GenerateStoryboardSubtitle)
 			// Episode-level cleanup: cascade delete VideoTask+DubbingTask for one episode
 			projects.DELETE("/:pid/episodes/:eid/videos/runtime-data", videoHandler.DeleteEpisodeData)
 			// 自动审片: 查询 shots_metadata 或触发 clip-service 流水线
