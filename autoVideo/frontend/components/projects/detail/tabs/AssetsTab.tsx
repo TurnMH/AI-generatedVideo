@@ -127,6 +127,7 @@ import { buildWorkflowSteps, getDisplayedEpisodeCount, toPercent, getIssueStepIn
 import { StatusBadge, VideoTaskStatusBadge } from '@/components/projects/detail/StatusBadge'
 import { TabSkeleton } from '@/components/projects/detail/TabSkeleton'
 import { EpisodeStoryboardList } from '@/components/projects/detail/EpisodeStoryboardList'
+import { VoicePickerDialog } from '@/components/projects/detail/VoicePickerDialog'
 
 type TabKey = WorkflowStepKey
 
@@ -2010,75 +2011,42 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
       </Dialog>
 
       {/* Manual create asset dialog */}
-      <Dialog open={!!voicePickerAsset} onOpenChange={(open) => { if (!open) setVoicePickerAsset(null) }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>选择角色音色{voicePickerAsset ? ` · ${voicePickerAsset.name}` : ''}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <Input
-              value={voicePickerAsset ? (voiceSearchByAsset[voicePickerAsset.id] ?? '') : ''}
-              onChange={(e) => {
-                if (!voicePickerAsset) return
-                setVoiceSearchByAsset((prev) => ({ ...prev, [voicePickerAsset.id]: e.target.value }))
-              }}
-              placeholder="搜索音色名称 / key / 风格 / 分类"
-              className="h-9"
-            />
-            <div className="max-h-[55vh] overflow-y-auto rounded-md border border-surface-200">
-              <div className="divide-y divide-surface-100">
-                {activeVoicePickerOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-surface-50 ${voicePickerAsset?.voice_model === option.value ? 'bg-primary-50' : 'bg-white'}`}
-                    onClick={async () => {
-                      if (!voicePickerAsset) return
-                      await assetAPI.update(projectId, voicePickerAsset.id, { voice_model: option.value })
-                      mutateAssets()
-                      setVoicePickerAsset(null)
-                      toast({ title: `已为 ${voicePickerAsset.name} 绑定音色`, variant: 'success' })
-                    }}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-surface-800">{option.label}</div>
-                      <div className="truncate text-[11px] text-surface-400">{option.value || '未绑定音色'}</div>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-[10px]"
-                      onClick={async (e) => {
-                        e.stopPropagation()
-                        if (!voicePickerAsset || !option.value) return
-                        try {
-                          setPreviewingVoiceAssetId(voicePickerAsset.id)
-                          const res = await dubbingAPI.previewVoice(projectId, { voice_model: option.value })
-                          const audioUrl = res.data?.audio_url
-                          if (!audioUrl) throw new Error('empty audio url')
-                          setVoicePreviewAudioUrl((prev) => ({ ...prev, [voicePickerAsset.id]: audioUrl }))
-                          const audio = new Audio(audioUrl)
-                          await audio.play()
-                        } catch {
-                          toast({ title: '音色试听失败', variant: 'destructive' })
-                        } finally {
-                          setPreviewingVoiceAssetId(null)
-                        }
-                      }}
-                    >
-                      试听
-                    </Button>
-                  </button>
-                ))}
-              </div>
-            </div>
-            {voicePickerAsset && voicePreviewAudioUrl[voicePickerAsset.id] && (
-              <audio controls className="h-8 w-full" src={voicePreviewAudioUrl[voicePickerAsset.id]} />
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <VoicePickerDialog
+        open={!!voicePickerAsset}
+        onOpenChange={(open) => { if (!open) setVoicePickerAsset(null) }}
+        title={`选择角色音色${voicePickerAsset ? ` · ${voicePickerAsset.name}` : ''}`}
+        search={voicePickerAsset ? (voiceSearchByAsset[voicePickerAsset.id] ?? '') : ''}
+        onSearchChange={(value) => {
+          if (!voicePickerAsset) return
+          setVoiceSearchByAsset((prev) => ({ ...prev, [voicePickerAsset.id]: value }))
+        }}
+        options={activeVoicePickerOptions}
+        selectedValue={voicePickerAsset?.voice_model ?? ''}
+        previewAudioUrl={voicePickerAsset ? voicePreviewAudioUrl[voicePickerAsset.id] : undefined}
+        onSelect={async (value) => {
+          if (!voicePickerAsset) return
+          await assetAPI.update(projectId, voicePickerAsset.id, { voice_model: value })
+          mutateAssets()
+          setVoicePickerAsset(null)
+          toast({ title: `已为 ${voicePickerAsset.name} 绑定音色`, variant: 'success' })
+        }}
+        onPreview={async (value) => {
+          if (!voicePickerAsset || !value) return
+          try {
+            setPreviewingVoiceAssetId(voicePickerAsset.id)
+            const res = await dubbingAPI.previewVoice(projectId, { voice_model: value })
+            const audioUrl = res.data?.audio_url
+            if (!audioUrl) throw new Error('empty audio url')
+            setVoicePreviewAudioUrl((prev) => ({ ...prev, [voicePickerAsset.id]: audioUrl }))
+            const audio = new Audio(audioUrl)
+            await audio.play()
+          } catch {
+            toast({ title: '音色试听失败', variant: 'destructive' })
+          } finally {
+            setPreviewingVoiceAssetId(null)
+          }
+        }}
+      />
 
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent className="max-w-md">
