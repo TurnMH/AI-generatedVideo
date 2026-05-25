@@ -2926,11 +2926,14 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 		CharacterAppearance string `json:"character_appearance,omitempty"` // injected from kwLib (prefer English)
 		CharacterEmotions   string `json:"character_emotions,omitempty"`   // emotion states per character
 		Action              string `json:"action"`
-		Items               string `json:"items,omitempty"`         // visible props/objects in scene
-		PropVisual          string `json:"prop_visual,omitempty"`   // visual descriptions of key props from kwLib
-		LightingNote        string `json:"lighting_note,omitempty"` // from [灯光:] annotations
-		ArtNote             string `json:"art_note,omitempty"`      // from [美术:] annotations
-		PropNote            string `json:"prop_note,omitempty"`     // from [道具:] annotations
+		Items               string `json:"items,omitempty"`           // visible props/objects in scene
+		PropVisual          string `json:"prop_visual,omitempty"`     // visual descriptions of key props from kwLib
+		LightingNote        string `json:"lighting_note,omitempty"`   // from [灯光:] annotations
+		ArtNote             string `json:"art_note,omitempty"`        // from [美术:] annotations
+		PropNote            string `json:"prop_note,omitempty"`       // from [道具:] annotations
+		SpatialAnchor       string `json:"spatial_anchor,omitempty"`  // extracted spatial anchor hints from scene description
+		SubjectPositions    string `json:"subject_positions,omitempty"` // extracted left/center/right or facing hints
+		TransitionNote      string `json:"transition_note,omitempty"` // extracted visible transition / movement hints
 	}
 
 	var inputs []sceneInput
@@ -2960,6 +2963,9 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 		lightingNotes := extractAnnotationsFromText(sc.Description, "灯光")
 		artNotes := extractAnnotationsFromText(sc.Description, "美术")
 		propNotes := extractAnnotationsFromText(sc.Description, "道具")
+		spatialAnchor := extractSpatialAnchorHint(sc.Description)
+		subjectPositions := extractSubjectPositionHint(sc.Description)
+		transitionNote := extractTransitionHint(sc.Description)
 		// Merge items from llmScene.Items + [道具:] annotations into a single props string.
 		allItems := append([]string{}, sc.Items...)
 		allItems = append(allItems, propNotes...)
@@ -2998,6 +3004,9 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 			LightingNote:        strings.Join(lightingNotes, "; "),
 			ArtNote:             strings.Join(artNotes, "; "),
 			PropNote:            strings.Join(propNotes, "; "),
+			SpatialAnchor:       spatialAnchor,
+			SubjectPositions:    subjectPositions,
+			TransitionNote:      transitionNote,
 		})
 	}
 
@@ -3066,7 +3075,8 @@ Rules:
 4. When a scene has "character_emotions" data, translate to specific micro-expression descriptors: muscles, gaze direction, lip shape, brow tension — NOT emotion adjectives alone.
 5. When a scene has "location_description" data, use that EXACT environment description as the scene background — NEVER invent different architectural details, color temperature, or set dressing.
 6. When a scene has "items" or "prop_visual" data, place those specific props/objects at a specific depth plane (foreground/midground) with their exact described appearance.
-7. VISUAL CONTINUITY RULES (critical for video generation):
+7. When a scene has "spatial_anchor", "subject_positions", or "transition_note" data, treat them as high-priority blocking instructions: they override generic composition habits.
+8. VISUAL CONTINUITY RULES (critical for video generation):
    - Adjacent scenes sharing the same "location" MUST describe identical background architecture, furniture placement, and ambient lighting color temperature.
    - Characters appearing across multiple scenes MUST wear exactly the same clothing and hairstyle unless explicitly changed.
    - If the VISUAL BRIDGE prompt is provided, your FIRST scene must visually extend from it: same color grading, same character frame position, matching depth planes.
@@ -3074,20 +3084,20 @@ Rules:
    - Spatial anchor consistency: doors, windows, tables, sofas, beds, stairs, counters, vehicles, or other key anchor objects must stay in consistent relative positions unless the prompt explicitly describes a re-blocking or camera relocation.
    - Eyeline continuity: if two characters were facing each other in the prior frame, do not silently reverse their facing direction or swap screen direction.
    - Depth continuity: preserve who is foreground, midground, and background across adjacent shots unless a visible transition justifies the change.
-8. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
-9. Incorporate provided art style and skill guidelines naturally into every prompt.
-10. The "shot_type" field dictates framing: close-up → face fills 60%+ of frame; medium → waist-up, environment visible; wide → full figure + environment; establishing → location dominant, figure small.
-11. If "lighting_note" is present, incorporate the EXACT color temperature, direction, and quality (hard/soft, spot/fill ratio).
-12. If "art_note" is present, use it to describe scene environment and set dressing accurately.
-13. Preserve explicit era / period / costume cues. Dynasty/scifi/modern/retro setting details must be kept and strengthened.
-14. VIDEO-FRIENDLY COMPOSITION: avoid cluttered mid-ground; keep subject-background separation clean for AI video motion to work well.
-15. ACTION CONTINUITY: if adjacent scenes share the same location or belong to one uninterrupted action, keep pose progression physically connected; do not jump from setup pose to resolved pose without an intermediate action beat.
-16. SPATIAL CONSISTENCY: preserve left/right frame placement, eyeline direction, hand-held props, environment geography, and key light direction unless the scene input explicitly signals a change.
-17. FIRST SHOT OF A NEW LOCATION: prefer a readable establishing or environment-anchored composition before pushing into close coverage, unless the scene input explicitly demands an immediate crash-in close-up.
-18. ONE DECISIVE VISUAL IDEA PER FRAME: do not describe two unrelated focal actions or multiple competing hero subjects in the same prompt.
-19. COSTUME AND PROP LOCK: wardrobe layers, accessories, injuries, dirt, blood, wetness, and damage state must remain stable across adjacent prompts until the input explicitly changes them.
-20. TRANSITION EXPLICITNESS: when a character changes screen position, depth plane, or relation to a key prop, describe the visible in-between action (steps closer, circles around the table, stops by the window, turns from the door) instead of teleporting to the new pose.
-21. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
+9. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
+10. Incorporate provided art style and skill guidelines naturally into every prompt.
+11. The "shot_type" field dictates framing: close-up → face fills 60%+ of frame; medium → waist-up, environment visible; wide → full figure + environment; establishing → location dominant, figure small.
+12. If "lighting_note" is present, incorporate the EXACT color temperature, direction, and quality (hard/soft, spot/fill ratio).
+13. If "art_note" is present, use it to describe scene environment and set dressing accurately.
+14. Preserve explicit era / period / costume cues. Dynasty/scifi/modern/retro setting details must be kept and strengthened.
+15. VIDEO-FRIENDLY COMPOSITION: avoid cluttered mid-ground; keep subject-background separation clean for AI video motion to work well.
+16. ACTION CONTINUITY: if adjacent scenes share the same location or belong to one uninterrupted action, keep pose progression physically connected; do not jump from setup pose to resolved pose without an intermediate action beat.
+17. SPATIAL CONSISTENCY: preserve left/right frame placement, eyeline direction, hand-held props, environment geography, and key light direction unless the scene input explicitly signals a change.
+18. FIRST SHOT OF A NEW LOCATION: prefer a readable establishing or environment-anchored composition before pushing into close coverage, unless the scene input explicitly demands an immediate crash-in close-up.
+19. ONE DECISIVE VISUAL IDEA PER FRAME: do not describe two unrelated focal actions or multiple competing hero subjects in the same prompt.
+20. COSTUME AND PROP LOCK: wardrobe layers, accessories, injuries, dirt, blood, wetness, and damage state must remain stable across adjacent prompts until the input explicitly changes them.
+21. TRANSITION EXPLICITNESS: when a character changes screen position, depth plane, or relation to a key prop, describe the visible in-between action (steps closer, circles around the table, stops by the window, turns from the door) instead of teleporting to the new pose.
+22. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
 	if skillHints != "" {
@@ -3988,6 +3998,50 @@ func extractAnnotationsFromText(text, tag string) []string {
 		}
 	}
 	return results
+}
+
+func extractSpatialAnchorHint(text string) string {
+	keywords := []string{"门", "窗", "桌", "椅", "沙发", "床", "楼梯", "柜台", "车", "路口", "走廊", "墙边", "窗边", "门口", "前景", "后景", "远景", "背景"}
+	return collectSceneHintByKeywords(text, keywords)
+}
+
+func extractSubjectPositionHint(text string) string {
+	keywords := []string{"左侧", "右侧", "居中", "中央", "左前方", "右前方", "左后方", "右后方", "面朝", "背对", "对视", "侧身", "站在", "靠近"}
+	return collectSceneHintByKeywords(text, keywords)
+}
+
+func extractTransitionHint(text string) string {
+	keywords := []string{"走近", "后退", "转身", "绕过", "停下", "起身", "坐下", "推门", "回头", "移步", "迈步", "靠近", "离开", "穿过"}
+	return collectSceneHintByKeywords(text, keywords)
+}
+
+func collectSceneHintByKeywords(text string, keywords []string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	segments := regexp.MustCompile(`[，。；！？」\n]`).Split(trimmed, -1)
+	seen := map[string]struct{}{}
+	var picks []string
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		for _, kw := range keywords {
+			if strings.Contains(seg, kw) {
+				if _, ok := seen[seg]; !ok {
+					seen[seg] = struct{}{}
+					picks = append(picks, seg)
+				}
+				break
+			}
+		}
+		if len(picks) >= 3 {
+			break
+		}
+	}
+	return strings.Join(picks, " | ")
 }
 
 // lookupByFuzzyName looks up a value from a name→value map using fuzzy matching.
