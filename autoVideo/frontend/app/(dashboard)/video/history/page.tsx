@@ -36,6 +36,7 @@ type BackendTask = {
   runtime_provider?: string
   effective_model?: string
   result_url?: string
+  error_msg?: string
   render_config?: Record<string, unknown>
 }
 
@@ -107,6 +108,8 @@ export default function ManualVideoHistoryPage() {
         String(task.project_id),
         task.status || '',
         task.effective_model || task.model_name || local?.modelName || '',
+        task.routed_generator || '',
+        task.runtime_provider || '',
         mode,
       ].join(' ').toLowerCase()
       return statusOk && (!q || haystack.includes(q))
@@ -142,11 +145,11 @@ export default function ManualVideoHistoryPage() {
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
           <CardTitle>后端任务历史</CardTitle>
-          <CardDescription className="text-slate-400">支持 task_id / project_id / model / mode 搜索，以及状态筛选；pending/processing 自动刷新</CardDescription>
+          <CardDescription className="text-slate-400">支持 task_id / project_id / model / mode / generator / provider 搜索，以及状态筛选；pending/processing 自动刷新</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),220px]">
-            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜 task_id / project_id / model / mode" />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜 task_id / project_id / model / mode / generator / provider" />
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-10 rounded-md border border-white/10 bg-slate-950 px-3 text-sm text-slate-100">
               <option value="all">全部状态</option>
               <option value="pending">pending</option>
@@ -164,14 +167,32 @@ export default function ManualVideoHistoryPage() {
             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">没有匹配的任务。</div>
           ) : filteredItems.map((task) => {
             const local = localMap.get(task.id)
+            const mode = local ? inferModeFromSummary(local) : inferModeFromTask(task)
+            const effectiveModel = task.effective_model || task.model_name || local?.modelName || '-'
+            const routeBadge = task.routed_generator || '未写入 generator'
+            const providerBadge = task.runtime_provider || '未写入 provider'
+            const hasResult = Boolean(task.result_url)
+            const hasError = Boolean(task.error_msg)
             return (
               <div key={task.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="font-medium text-white">{local ? inferModeFromSummary(local) : inferModeFromTask(task)} · task #{task.id}</div>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-white">{mode} · task #{task.id}</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      {task.created_at || local?.createdAt || '-'} · status={task.status || '-'} · project={task.project_id} · model={task.effective_model || task.model_name || local?.modelName || '-'}
+                      {task.created_at || local?.createdAt || '-'} · status={task.status || '-'} · project={task.project_id}
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                      <span className="rounded-full bg-slate-800 px-2.5 py-1 text-slate-200">model: {effectiveModel}</span>
+                      <span className="rounded-full bg-slate-800 px-2.5 py-1 text-slate-200">generator: {routeBadge}</span>
+                      <span className="rounded-full bg-slate-800 px-2.5 py-1 text-slate-200">provider: {providerBadge}</span>
+                      <span className={`rounded-full px-2.5 py-1 ${hasResult ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{hasResult ? '结果已就绪' : '结果未就绪'}</span>
+                      <span className={`rounded-full px-2.5 py-1 ${hasError ? 'bg-rose-500/15 text-rose-300' : 'bg-slate-800 text-slate-300'}`}>{hasError ? '存在错误' : '无错误'}</span>
+                    </div>
+                    {task.error_msg && (
+                      <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs text-rose-200">
+                        {task.error_msg}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" asChild>
