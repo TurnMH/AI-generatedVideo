@@ -18,7 +18,7 @@ import {
   Volume2,
   AlertTriangle,
 } from 'lucide-react'
-import { videoAPI } from '@/lib/api'
+import { projectAPI, storageAPI, videoAPI } from '@/lib/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { useToast } from '@/components/ui/toast'
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
@@ -44,6 +45,7 @@ type ManualFormState = {
   aspectRatio: string
   resolution: string
   duration: string
+  sourceImageFile: File | null
 }
 
 const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
@@ -65,6 +67,7 @@ const EMPTY_FORM: ManualFormState = {
   aspectRatio: '',
   resolution: '',
   duration: '',
+  sourceImageFile: null,
 }
 
 const TEXT_MODELS = new Set(['wan', 'wan-t2v', 'vidu', 'vidu-offpeak'])
@@ -139,10 +142,14 @@ function buildHelperText(tab: ManualMenuKey) {
 }
 
 export default function VideoManualPage() {
+  const { toast } = useToast()
   const searchParams = useSearchParams()
   const tabParam = searchParams.get('tab')
   const [activeMenu, setActiveMenu] = useState<ManualMenuKey>('text')
   const [form, setForm] = useState<ManualFormState>(EMPTY_FORM)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitResult, setSubmitResult] = useState<{ projectId: number; taskId: number } | null>(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const { data, isLoading } = useSWR('video-model-status', () => videoAPI.modelStatus())
 
   const models: VideoModelStatus[] = useMemo(() => ((data as { models?: VideoModelStatus[] } | undefined)?.models || []), [data])
@@ -179,6 +186,71 @@ export default function VideoManualPage() {
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
 
+  const handleImageGenerate = async () => {
+    if (!form.prompt.trim()) {
+      toast({ title: '请先填写提示词', variant: 'destructive' })
+      return
+    }
+    if (!form.sourceImageUrl.trim() && !form.sourceImageFile) {
+      toast({ title: '请先填写首帧图片 URL 或上传本地图片', variant: 'destructive' })
+      return
+    }
+    if (!form.modelName) {
+      toast({ title: '请先选择视频模型', variant: 'destructive' })
+      return
+    }
+
+    setSubmitting(true)
+    setUploadProgress(0)
+    setSubmitResult(null)
+    try {
+      const projectRes = await projectAPI.create({
+        title: `手动图生视频-${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+        description: '手动创建视频-图生视频临时项目',
+        project_type: 'video',
+      } as never) as { data?: { id?: number } }
+      const projectId = Number(projectRes?.data?.id || 0)
+      if (!projectId) throw new Error('创建临时项目失败')
+
+      let sourceImageUrl = form.sourceImageUrl.trim()
+      if (!sourceImageUrl && form.sourceImageFile) {
+        const uploadRes = await storageAPI.upload(projectId, form.sourceImageFile, {
+          bucket: 'images',
+          category: 'manual-video-source',
+          onProgress: (percent) => setUploadProgress(percent),
+        }) as { data?: { cdn_url?: string } }
+        sourceImageUrl = String(uploadRes?.data?.cdn_url || '').trim()
+      }
+      if (!sourceImageUrl) throw new Error('首帧图片上传成功，但未获取到可用链接')
+
+      const renderConfig: Record<string, unknown> = {}
+      if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
+      if (form.resolution) renderConfig.resolution = form.resolution
+      const duration = Number(form.duration)
+
+      const generateRes = await videoAPI.generate(projectId, {
+        image_urls: [sourceImageUrl],
+        scene_descriptions: [form.prompt.trim()],
+        scene_description: form.prompt.trim(),
+        model_name: form.modelName,
+        render_config: renderConfig,
+        clip_duration_sec: Number.isFinite(duration) && duration > 0 ? duration : undefined,
+      }) as { data?: { task_id?: number } }
+
+      const taskId = Number(generateRes?.data?.task_id || 0)
+      if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
+
+      setSubmitResult({ projectId, taskId })
+      toast({ title: '图生视频任务已创建', description: `项目 ${projectId} / 任务 ${taskId}`, variant: 'success' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '图生视频创建失败'
+      toast({ title: message, variant: 'destructive' })
+    } finally {
+      setSubmitting(false)
+      setUploadProgress(0)
+    }
+  }
+
   const renderForm = () => {
     const disabledReason = activeMenu === 'text'
       ? '当前后端项目级生成接口仍强制要求 image_urls，文生视频暂不在这里直接提交。'
@@ -203,6 +275,14 @@ export default function VideoManualPage() {
               <div className="space-y-2">
                 <Label>首帧图片 URL</Label>
                 <Input value={form.sourceImageUrl} onChange={(e) => setForm((prev) => ({ ...prev, sourceImageUrl: e.target.value }))} placeholder="https://..." />
+                {activeMenu === 'image' && (
+                  <>
+                    <div className="text-xs text-slate-500">或上传本地图片（会自动上传到 storage-service）</div>
+                    <Input type="file" accept="image/*" onChange={(e) => setForm((prev) => ({ ...prev, sourceImageFile: e.target.files?.[0] || null }))} />
+                    {form.sourceImageFile && <div className="text-xs text-slate-400">已选择：{form.sourceImageFile.name}</div>}
+                    {submitting && uploadProgress > 0 && uploadProgress < 100 && <div className="text-xs text-cyan-300">上传进度：{uploadProgress}%</div>}
+                  </>
+                )}
               </div>
             )}
 
@@ -285,6 +365,21 @@ export default function VideoManualPage() {
             </div>
           </div>
 
+          {submitResult && (
+            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4 text-sm text-emerald-100">
+              <div className="font-medium">图生视频任务已创建</div>
+              <div className="mt-1">项目 ID：{submitResult.projectId}，任务 ID：{submitResult.taskId}</div>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <Button variant="outline" asChild>
+                  <Link href={`/projects/${submitResult.projectId}`}>打开项目</Link>
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link href={`/projects/${submitResult.projectId}?tab=video`}>查看视频页</Link>
+                </Button>
+              </div>
+            </div>
+          )}
+
           {disabledReason ? (
             <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
               <div className="flex items-start gap-2">
@@ -302,7 +397,13 @@ export default function VideoManualPage() {
           )}
 
           <div className="flex flex-wrap gap-3">
-            <Button disabled>{disabledReason ? '等待后端链路补齐' : '下一步接真实提交'}</Button>
+            {activeMenu === 'image' ? (
+              <Button onClick={handleImageGenerate} disabled={submitting}>
+                {submitting ? '正在创建图生视频任务…' : '创建图生视频任务'}
+              </Button>
+            ) : (
+              <Button disabled>{disabledReason ? '等待后端链路补齐' : '下一步接真实提交'}</Button>
+            )}
             <Button variant="outline" asChild>
               <Link href="/projects">去现有项目视频链</Link>
             </Button>
