@@ -294,6 +294,14 @@ func RecommendVoiceCatalog(gender, ageGroup, category, style string) []VoiceCata
 	return out
 }
 
+type VoicePreviewResult struct {
+	AudioURL  string  `json:"audio_url"`
+	Duration  float64 `json:"duration_sec"`
+	VoiceKey  string  `json:"voice_key"`
+	VoiceName string  `json:"voice_name"`
+	Text      string  `json:"text"`
+}
+
 type DubbingResult struct {
 	AudioURL    string  `json:"audio_url"`
 	SubtitleURL string  `json:"subtitle_url"`
@@ -1229,6 +1237,82 @@ func (s *DubbingService) generateWhisperSubtitle(taskID, projectID, episodeID in
 	s.logger.Info("whisper subtitle generated",
 		zap.Int64("task_id", taskID),
 		zap.String("subtitle_url", subtitleURL))
+}
+
+func (s *DubbingService) GenerateVoicePreview(ctx context.Context, projectID int64, voiceModel, voiceRate, voicePitch, voiceVolume, sampleText string) (*VoicePreviewResult, error) {
+	sampleText = strings.TrimSpace(cleanScriptForSpeech(sampleText))
+	if sampleText == "" {
+		sampleText = "你好，我是当前音色的试听样例。"
+	}
+	voiceModel = strings.TrimSpace(voiceModel)
+	if voiceModel == "" {
+		voiceModel = "default"
+	}
+	voiceRate = normalizeVoiceRate(voiceRate)
+	voicePitch = normalizeVoicePitch(voicePitch)
+	voiceVolume = normalizeVoiceVolume(voiceVolume)
+
+	ts := time.Now().UnixMilli()
+	textPath := filepath.Join(s.tempDir, fmt.Sprintf("preview_%d_%d.txt", projectID, ts))
+	audioPath := filepath.Join(s.tempDir, fmt.Sprintf("preview_%d_%d.mp3", projectID, ts))
+	subtitlePath := filepath.Join(s.tempDir, fmt.Sprintf("preview_%d_%d.vtt", projectID, ts))
+	defer os.Remove(textPath)
+	defer os.Remove(audioPath)
+	defer os.Remove(subtitlePath)
+
+	if err := os.WriteFile(textPath, []byte(sampleText), 0644); err != nil {
+		return nil, fmt.Errorf("write preview text: %w", err)
+	}
+
+	switch {
+	case strings.HasPrefix(voiceModel, "azure:"):
+		if err := s.runAzureTTS(ctx, strings.TrimPrefix(voiceModel, "azure:"), sampleText, audioPath); err != nil {
+			return nil, err
+		}
+	case strings.HasPrefix(voiceModel, "siliconflow:"):
+		sfStr := strings.TrimPrefix(voiceModel, "siliconflow:")
+		parts := strings.SplitN(sfStr, ":", 2)
+		sfModel := strings.TrimSpace(parts[0])
+		sfVoice := ""
+		if len(parts) > 1 {
+			sfVoice = strings.TrimSpace(parts[1])
+		}
+		if err := s.runSiliconFlowTTS(ctx, sfModel, sfVoice, sampleText, audioPath); err != nil {
+			return nil, err
+		}
+	case strings.HasPrefix(voiceModel, "comfyui:"):
+		if err := s.runComfyUITTS(ctx, strings.TrimPrefix(voiceModel, "comfyui:"), sampleText, audioPath); err != nil {
+			return nil, err
+		}
+	default:
+		if err := s.runEdgeTTS(ctx, resolveEdgeVoice(voiceModel), voiceRate, voicePitch, voiceVolume, textPath, audioPath, subtitlePath); err != nil {
+			return nil, err
+		}
+	}
+
+	info, err := os.Stat(audioPath)
+	if err != nil || info.Size() == 0 {
+		return nil, fmt.Errorf("preview audio is empty")
+	}
+	durationSec := float64(info.Size()) / 16000.0
+	if probedDuration, probeErr := probeMediaDuration(ctx, audioPath); probeErr == nil && probedDuration > 0 {
+		durationSec = probedDuration
+	}
+	audioURL, err := s.uploadFile(ctx, audioPath, "audio/mpeg", fmt.Sprintf("dubbing/project_%d/preview/%d_%s.mp3", projectID, ts, strings.ReplaceAll(voiceModel, ":", "_")), projectID, "dubbing-preview")
+	if err != nil {
+		return nil, fmt.Errorf("upload preview audio: %w", err)
+	}
+	voiceName := voiceModel
+	if mapped, ok := EdgeVoices[voiceModel]; ok {
+		voiceName = mapped
+	}
+	return &VoicePreviewResult{
+		AudioURL:  audioURL,
+		Duration:  durationSec,
+		VoiceKey:  voiceModel,
+		VoiceName: voiceName,
+		Text:      sampleText,
+	}, nil
 }
 
 func normalizeVoiceRate(value string) string {

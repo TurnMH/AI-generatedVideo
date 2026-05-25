@@ -64,6 +64,14 @@ type batchRecommendVoiceReq struct {
 	Items []recommendVoiceReq `json:"items" binding:"required,min=1"`
 }
 
+type previewVoiceReq struct {
+	VoiceModel  string `json:"voice_model"`
+	VoiceRate   string `json:"voice_rate"`
+	VoicePitch  string `json:"voice_pitch"`
+	VoiceVolume string `json:"voice_volume"`
+	Text        string `json:"text"`
+}
+
 func compactVoiceDebugSummary(raw map[string]any) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -247,6 +255,27 @@ func (h *DubbingHandler) RecommendVoicesBatch(c *gin.Context) {
 			"recommended_total": totalRecommended,
 		},
 	})
+}
+
+func (h *DubbingHandler) PreviewVoice(c *gin.Context) {
+	pid, err := pathInt64(c, "pid")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	var req previewVoiceReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	req.VoiceModel, req.VoiceRate, req.VoicePitch, req.VoiceVolume = normalizeVoiceOptions(req.VoiceModel, req.VoiceRate, req.VoicePitch, req.VoiceVolume)
+	result, err := h.svc.GenerateVoicePreview(c.Request.Context(), pid, req.VoiceModel, req.VoiceRate, req.VoicePitch, req.VoiceVolume, req.Text)
+	if err != nil {
+		h.logger.Error("generate voice preview", zap.Error(err))
+		response.InternalError(c, "failed to generate voice preview: "+err.Error())
+		return
+	}
+	response.OK(c, result)
 }
 
 // GenerateDubbing —— 处理配音生成请求，异步创建任务并返回 task_id

@@ -178,6 +178,8 @@
 
 `POST /api/v1/projects/:pid/dubbing/voices/recommend-batch`
 
+`POST /api/v1/projects/:pid/dubbing/voices/preview`
+
 `POST /api/v1/projects/:pid/dubbing/generate-batch`
 
 `GET /api/v1/projects/:pid/dubbing/tasks`
@@ -205,6 +207,12 @@
 - 每个 item 支持：`name` `gender` `age_group` `category` `style`
 - 返回 `items`：逐角色推荐结果
 - 返回 `summary.characters` 与 `summary.recommended_total`
+
+音色试听/预览接口说明：
+- `POST /api/v1/projects/:pid/dubbing/voices/preview`
+- 请求体支持：`voice_model` `voice_rate` `voice_pitch` `voice_volume` `text`
+- 返回：`audio_url` `duration_sec` `voice_key` `voice_name` `text`
+- 当前优先生成短试听音频并上传，适合角色页试听按钮直接接入
 
 ### 视频内容提取（MVP）
 
