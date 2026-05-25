@@ -542,6 +542,8 @@ export const videoAPI = {
     api.get(`/api/v1/projects/${projectId}/videos/${videoId}/export`),
   listTasks: (projectId: number, params?: { episode_id?: number; page?: number; page_size?: number }) =>
     api.get(`/api/v1/projects/${projectId}/videos`, { params }),
+  listAllTasks: (params?: { project_id?: number; episode_id?: number; page?: number; page_size?: number }) =>
+    api.get('/api/v1/videos/tasks', { params }),
   getTask: <TTask = unknown>(taskId: number) =>
     api.get<VideoTaskDetailResponse<TTask>>(`/api/v1/videos/tasks/${taskId}`),
   deleteTask: (taskId: number) =>
