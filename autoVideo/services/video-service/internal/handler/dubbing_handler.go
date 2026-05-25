@@ -125,6 +125,24 @@ func normalizeVoiceOptions(voiceModel, voiceRate, voicePitch, voiceVolume string
 	return voiceModel, voiceRate, voicePitch, voiceVolume
 }
 
+func (h *DubbingHandler) VoiceCatalog(c *gin.Context) {
+	voices := service.BuiltInVoiceCatalog()
+	categories := map[string]int{}
+	providers := map[string]int{}
+	for _, item := range voices {
+		categories[item.Category]++
+		providers[item.Provider]++
+	}
+	response.OK(c, gin.H{
+		"items": voices,
+		"summary": gin.H{
+			"total":      len(voices),
+			"categories": categories,
+			"providers":  providers,
+		},
+	})
+}
+
 // GenerateDubbing —— 处理配音生成请求，异步创建任务并返回 task_id
 // GenerateDubbing handles POST /api/v1/projects/:pid/dubbing/generate
 // Now async: creates a task and returns task_id immediately.

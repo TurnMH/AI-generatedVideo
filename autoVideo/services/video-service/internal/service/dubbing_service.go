@@ -166,6 +166,51 @@ var EdgeVoices = map[string]string{
 	"taiwan-male1":      "zh-TW-YunJheNeural",           // Taiwanese Mandarin male
 }
 
+type VoiceCatalogEntry struct {
+	Key             string   `json:"key"`
+	Provider        string   `json:"provider"`
+	VoiceName       string   `json:"voice_name"`
+	Locale          string   `json:"locale"`
+	Gender          string   `json:"gender"`
+	Style           string   `json:"style"`
+	SuggestedScenes []string `json:"suggested_scenes,omitempty"`
+	AutoAssignable  bool     `json:"auto_assignable"`
+	Category        string   `json:"category"`
+}
+
+var builtInVoiceCatalog = []VoiceCatalogEntry{
+	{Key: "default", Provider: "edge-tts", VoiceName: "zh-CN-YunjianNeural", Locale: "zh-CN", Gender: "male", Style: "storytelling", SuggestedScenes: []string{"旁白", "男主", "热血短剧"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "male1", Provider: "edge-tts", VoiceName: "zh-CN-YunjianNeural", Locale: "zh-CN", Gender: "male", Style: "passionate", SuggestedScenes: []string{"男主", "剧情推进"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "male2", Provider: "edge-tts", VoiceName: "zh-CN-YunxiNeural", Locale: "zh-CN", Gender: "male", Style: "lively", SuggestedScenes: []string{"少年", "轻快对白"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "male3", Provider: "edge-tts", VoiceName: "zh-CN-YunyangNeural", Locale: "zh-CN", Gender: "male", Style: "professional", SuggestedScenes: []string{"成熟男性", "正式说明"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "calm-male", Provider: "edge-tts", VoiceName: "zh-CN-YunhaoNeural", Locale: "zh-CN", Gender: "male", Style: "calm", SuggestedScenes: []string{"纪录片", "沉稳旁白"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "deep-male", Provider: "edge-tts", VoiceName: "zh-CN-YunfengNeural", Locale: "zh-CN", Gender: "male", Style: "deep", SuggestedScenes: []string{"反派", "中年男性"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "narrator-male", Provider: "edge-tts", VoiceName: "zh-CN-YunzeNeural", Locale: "zh-CN", Gender: "male", Style: "narration", SuggestedScenes: []string{"解说", "纪录片", "画外音"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "female1", Provider: "edge-tts", VoiceName: "zh-CN-XiaoxiaoNeural", Locale: "zh-CN", Gender: "female", Style: "warm", SuggestedScenes: []string{"女主", "温柔对白"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "female2", Provider: "edge-tts", VoiceName: "zh-CN-XiaoyiNeural", Locale: "zh-CN", Gender: "female", Style: "lively", SuggestedScenes: []string{"少女", "轻快对白"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "warm-female", Provider: "edge-tts", VoiceName: "zh-CN-XiaomoNeural", Locale: "zh-CN", Gender: "female", Style: "gentle", SuggestedScenes: []string{"治愈", "情感戏"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "bright-female", Provider: "edge-tts", VoiceName: "zh-CN-XiaoxuanNeural", Locale: "zh-CN", Gender: "female", Style: "bright", SuggestedScenes: []string{"少女", "青春题材"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "narrator-female", Provider: "edge-tts", VoiceName: "zh-CN-XiaoyuNeural", Locale: "zh-CN", Gender: "female", Style: "narration", SuggestedScenes: []string{"旁白", "画外音"}, AutoAssignable: true, Category: "mainland-mandarin"},
+	{Key: "child-female", Provider: "edge-tts", VoiceName: "zh-CN-XiaoruiNeural", Locale: "zh-CN", Gender: "female", Style: "young", SuggestedScenes: []string{"儿童", "少女"}, AutoAssignable: false, Category: "mainland-mandarin"},
+	{Key: "dialect", Provider: "edge-tts", VoiceName: "zh-CN-liaoning-XiaobeiNeural", Locale: "zh-CN-LN", Gender: "female", Style: "dialect", SuggestedScenes: []string{"东北口音", "喜剧"}, AutoAssignable: false, Category: "regional"},
+	{Key: "dialect-northeast", Provider: "edge-tts", VoiceName: "zh-CN-liaoning-XiaobeiNeural", Locale: "zh-CN-LN", Gender: "female", Style: "dialect", SuggestedScenes: []string{"东北口音", "地域角色"}, AutoAssignable: false, Category: "regional"},
+	{Key: "dialect-shaanxi", Provider: "edge-tts", VoiceName: "zh-CN-shaanxi-XiaoniNeural", Locale: "zh-CN-SN", Gender: "female", Style: "dialect", SuggestedScenes: []string{"陕西口音", "方言角色"}, AutoAssignable: false, Category: "regional"},
+	{Key: "cantonese-female1", Provider: "edge-tts", VoiceName: "zh-HK-HiuGaaiNeural", Locale: "zh-HK", Gender: "female", Style: "cantonese", SuggestedScenes: []string{"粤语女声", "港风"}, AutoAssignable: true, Category: "regional"},
+	{Key: "cantonese-female2", Provider: "edge-tts", VoiceName: "zh-HK-HiuMaanNeural", Locale: "zh-HK", Gender: "female", Style: "cantonese", SuggestedScenes: []string{"粤语女声", "都市港风"}, AutoAssignable: false, Category: "regional"},
+	{Key: "cantonese-male1", Provider: "edge-tts", VoiceName: "zh-HK-WanLungNeural", Locale: "zh-HK", Gender: "male", Style: "cantonese", SuggestedScenes: []string{"粤语男声", "港风男主"}, AutoAssignable: true, Category: "regional"},
+	{Key: "taiwan-female1", Provider: "edge-tts", VoiceName: "zh-TW-HsiaoChenNeural", Locale: "zh-TW", Gender: "female", Style: "taiwanese-mandarin", SuggestedScenes: []string{"台湾腔", "轻柔旁白"}, AutoAssignable: true, Category: "regional"},
+	{Key: "taiwan-female2", Provider: "edge-tts", VoiceName: "zh-TW-HsiaoYuNeural", Locale: "zh-TW", Gender: "female", Style: "taiwanese-mandarin", SuggestedScenes: []string{"台湾腔", "少女"}, AutoAssignable: true, Category: "regional"},
+	{Key: "taiwan-male1", Provider: "edge-tts", VoiceName: "zh-TW-YunJheNeural", Locale: "zh-TW", Gender: "male", Style: "taiwanese-mandarin", SuggestedScenes: []string{"台湾腔", "青年男性"}, AutoAssignable: true, Category: "regional"},
+	{Key: "multilingual-female", Provider: "edge-tts", VoiceName: "en-US-AvaMultilingualNeural", Locale: "multi", Gender: "female", Style: "multilingual", SuggestedScenes: []string{"中英混读", "国际化内容"}, AutoAssignable: false, Category: "multilingual"},
+	{Key: "multilingual-male", Provider: "edge-tts", VoiceName: "en-US-AndrewMultilingualNeural", Locale: "multi", Gender: "male", Style: "multilingual", SuggestedScenes: []string{"中英混读", "解说"}, AutoAssignable: false, Category: "multilingual"},
+}
+
+func BuiltInVoiceCatalog() []VoiceCatalogEntry {
+	out := make([]VoiceCatalogEntry, len(builtInVoiceCatalog))
+	copy(out, builtInVoiceCatalog)
+	return out
+}
+
 type DubbingResult struct {
 	AudioURL    string  `json:"audio_url"`
 	SubtitleURL string  `json:"subtitle_url"`

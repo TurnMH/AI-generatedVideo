@@ -172,11 +172,19 @@
 
 常用接口：
 
+`GET /api/v1/projects/:pid/dubbing/voices`
+
 `POST /api/v1/projects/:pid/dubbing/generate-batch`
 
 `GET /api/v1/projects/:pid/dubbing/tasks`
 
 `POST /api/v1/projects/:pid/subtitle/generate`
+
+音色目录接口说明：
+- 返回 `items`：当前内建音色目录
+- 返回 `summary.total`：音色总数
+- 返回 `summary.categories`：按 `mainland-mandarin / regional / multilingual` 分类统计
+- 返回 `summary.providers`：按 provider 统计（当前主要为 `edge-tts`）
 
 ### 视频内容提取（MVP）
 
