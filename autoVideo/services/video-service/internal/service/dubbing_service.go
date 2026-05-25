@@ -143,9 +143,9 @@ var autoVoiceMaleHints = []string{
 	"男", "爸爸", "父亲", "丈夫", "男孩", "男生", "先生", "叔叔", "爷爷", "哥哥", "弟弟", "皇帝", "王子",
 }
 
-var autoVoiceNeutralCycle = []string{"female1", "male2", "female2", "male3", "default"}
-var autoVoiceFemaleCycle = []string{"female1", "female2"}
-var autoVoiceMaleCycle = []string{"default", "male2", "male3"}
+var autoVoiceNeutralCycle = []string{"female1", "male2", "female2", "male3", "narrator-female", "narrator-male", "warm-female", "calm-male", "default"}
+var autoVoiceFemaleCycle = []string{"female1", "female2", "warm-female", "bright-female", "taiwan-female1", "taiwan-female2", "cantonese-female1"}
+var autoVoiceMaleCycle = []string{"default", "male2", "male3", "calm-male", "deep-male", "taiwan-male1", "cantonese-male1"}
 
 // Supported Edge TTS voices for Chinese content
 var EdgeVoices = map[string]string{
