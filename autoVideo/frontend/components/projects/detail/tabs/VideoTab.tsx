@@ -827,6 +827,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     const durations = sortedSbs.map((sb) => sb.duration || 0)
     const cameraMovements = sortedSbs.map((sb) => sb.camera_movement || '')
     const moods = sortedSbs.map((sb) => sb.mood || '')
+    const spatialAnchors = sortedSbs.map((sb) => sb.spatial_anchor || '')
+    const subjectPositions = sortedSbs.map((sb) => sb.subject_positions || '')
+    const transitionNotes = sortedSbs.map((sb) => sb.transition_note || '')
     const sceneCharacters = sortedSbs.map((sb) => sb.characters || [])
     const sceneAssetIds = sortedSbs.map((sb) => sb.asset_ids || [])
     const sceneDescription = sceneDescriptions.filter(Boolean).join(' ')
@@ -849,6 +852,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         durations: durations.some(Boolean) ? durations : undefined,
         camera_movements: cameraMovements.some(Boolean) ? cameraMovements : undefined,
         moods: moods.some(Boolean) ? moods : undefined,
+        spatial_anchors: spatialAnchors.some(Boolean) ? spatialAnchors : undefined,
+        subject_positions: subjectPositions.some(Boolean) ? subjectPositions : undefined,
+        transition_notes: transitionNotes.some(Boolean) ? transitionNotes : undefined,
         scene_characters: sceneCharacters.some((arr) => arr.length > 0) ? sceneCharacters : undefined,
         scene_asset_ids: sceneAssetIds.some((arr) => arr.length > 0) ? sceneAssetIds : undefined,
         model_name: selectedVideoModel,
@@ -1081,6 +1087,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     const byEpisodeDuration = new Map<number, number[]>()
     const byEpisodeCamera = new Map<number, string[]>()
     const byEpisodeMood = new Map<number, string[]>()
+    const byEpisodeSpatialAnchor = new Map<number, string[]>()
+    const byEpisodeSubjectPosition = new Map<number, string[]>()
+    const byEpisodeTransitionNote = new Map<number, string[]>()
     const byEpisodeChars = new Map<number, string[][]>()
     const byEpisodeAssetIds = new Map<number, number[][]>()
     const byEpisodeSceneGroupKeys = new Map<number, string[]>()
@@ -1089,6 +1098,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       if (!byEpisode.has(epId)) {
         byEpisode.set(epId, []); byEpisodeDesc.set(epId, []); byEpisodeDialogue.set(epId, [])
         byEpisodeDuration.set(epId, []); byEpisodeCamera.set(epId, []); byEpisodeMood.set(epId, [])
+        byEpisodeSpatialAnchor.set(epId, []); byEpisodeSubjectPosition.set(epId, []); byEpisodeTransitionNote.set(epId, [])
         byEpisodeChars.set(epId, [])
         byEpisodeAssetIds.set(epId, [])
         byEpisodeSceneGroupKeys.set(epId, [])
@@ -1100,6 +1110,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       byEpisodeDuration.get(epId)!.push(sb.duration || 0)
       byEpisodeCamera.get(epId)!.push(sb.camera_movement || '')
       byEpisodeMood.get(epId)!.push(sb.mood || '')
+      byEpisodeSpatialAnchor.get(epId)!.push(sb.spatial_anchor || '')
+      byEpisodeSubjectPosition.get(epId)!.push(sb.subject_positions || '')
+      byEpisodeTransitionNote.get(epId)!.push(sb.transition_note || '')
       byEpisodeChars.get(epId)!.push(sb.characters || [])
       byEpisodeAssetIds.get(epId)!.push(sb.asset_ids || [])
       byEpisodeSceneGroupKeys.get(epId)!.push(sb.scene_group_key || '')
@@ -1116,6 +1129,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               const durs = byEpisodeDuration.get(epId) ?? []
               const cams = byEpisodeCamera.get(epId) ?? []
               const moods = byEpisodeMood.get(epId) ?? []
+              const spatialAnchors = byEpisodeSpatialAnchor.get(epId) ?? []
+              const subjectPositions = byEpisodeSubjectPosition.get(epId) ?? []
+              const transitionNotes = byEpisodeTransitionNote.get(epId) ?? []
               const chars = byEpisodeChars.get(epId) ?? []
               const assetIds = byEpisodeAssetIds.get(epId) ?? []
               const sgKeys = byEpisodeSceneGroupKeys.get(epId) ?? []
@@ -1127,6 +1143,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                 durations: durs.some(Boolean) ? durs : undefined,
                 camera_movements: cams.some(Boolean) ? cams : undefined,
                 moods: moods.some(Boolean) ? moods : undefined,
+                spatial_anchors: spatialAnchors.some(Boolean) ? spatialAnchors : undefined,
+                subject_positions: subjectPositions.some(Boolean) ? subjectPositions : undefined,
+                transition_notes: transitionNotes.some(Boolean) ? transitionNotes : undefined,
                 scene_characters: chars.some((arr) => arr.length > 0) ? chars : undefined,
                 scene_asset_ids: assetIds.some((arr) => arr.length > 0) ? assetIds : undefined,
                 audio_url: dubbingAudioMap.get(epId),
@@ -1153,6 +1172,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             const noEpDurs = byEpisodeDuration.get(0) ?? []
             const noEpCams = byEpisodeCamera.get(0) ?? []
             const noEpMoods = byEpisodeMood.get(0) ?? []
+            const noEpSpatialAnchors = byEpisodeSpatialAnchor.get(0) ?? []
+            const noEpSubjectPositions = byEpisodeSubjectPosition.get(0) ?? []
+            const noEpTransitionNotes = byEpisodeTransitionNote.get(0) ?? []
             const noEpChars = byEpisodeChars.get(0) ?? []
             const noEpAssetIds = byEpisodeAssetIds.get(0) ?? []
             const noEpSceneGroupKeys = byEpisodeSceneGroupKeys.get(0) ?? []
@@ -1163,6 +1185,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               durations: noEpDurs.some(Boolean) ? noEpDurs : undefined,
               camera_movements: noEpCams.some(Boolean) ? noEpCams : undefined,
               moods: noEpMoods.some(Boolean) ? noEpMoods : undefined,
+              spatial_anchors: noEpSpatialAnchors.some(Boolean) ? noEpSpatialAnchors : undefined,
+              subject_positions: noEpSubjectPositions.some(Boolean) ? noEpSubjectPositions : undefined,
+              transition_notes: noEpTransitionNotes.some(Boolean) ? noEpTransitionNotes : undefined,
               scene_characters: noEpChars.some((arr) => arr.length > 0) ? noEpChars : undefined,
               scene_asset_ids: noEpAssetIds.some((arr) => arr.length > 0) ? noEpAssetIds : undefined,
               model_name: selectedVideoModel,
@@ -1184,6 +1209,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
           const allDurs = eligibleSbs.map((sb) => sb.duration || 0)
           const allCams = eligibleSbs.map((sb) => sb.camera_movement || '')
           const allMoods = eligibleSbs.map((sb) => sb.mood || '')
+          const allSpatialAnchors = eligibleSbs.map((sb) => sb.spatial_anchor || '')
+          const allSubjectPositions = eligibleSbs.map((sb) => sb.subject_positions || '')
+          const allTransitionNotes = eligibleSbs.map((sb) => sb.transition_note || '')
           const allChars = eligibleSbs.map((sb) => sb.characters || [])
           const allAssetIds = eligibleSbs.map((sb) => sb.asset_ids || [])
           const allSceneGroupKeys = eligibleSbs.map((sb) => sb.scene_group_key || '')
@@ -1195,6 +1223,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             durations: allDurs.some(Boolean) ? allDurs : undefined,
             camera_movements: allCams.some(Boolean) ? allCams : undefined,
             moods: allMoods.some(Boolean) ? allMoods : undefined,
+            spatial_anchors: allSpatialAnchors.some(Boolean) ? allSpatialAnchors : undefined,
+            subject_positions: allSubjectPositions.some(Boolean) ? allSubjectPositions : undefined,
+            transition_notes: allTransitionNotes.some(Boolean) ? allTransitionNotes : undefined,
             scene_characters: allChars.some((arr) => arr.length > 0) ? allChars : undefined,
             scene_asset_ids: allAssetIds.some((arr) => arr.length > 0) ? allAssetIds : undefined,
             model_name: selectedVideoModel,

@@ -595,6 +595,9 @@ export interface VideoEpisodeGenerateRequest {
   durations?: number[]
   camera_movements?: string[]
   moods?: string[]
+  spatial_anchors?: string[]
+  subject_positions?: string[]
+  transition_notes?: string[]
   scene_characters?: string[][]
   scene_asset_ids?: number[][]
   audio_url?: string
@@ -610,6 +613,9 @@ export interface VideoGenerateRequest {
   durations?: number[]
   camera_movements?: string[]
   moods?: string[]
+  spatial_anchors?: string[]
+  subject_positions?: string[]
+  transition_notes?: string[]
   scene_characters?: string[][]
   scene_asset_ids?: number[][]
   style_preset?: string

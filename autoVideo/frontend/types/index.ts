@@ -281,6 +281,9 @@ export interface Storyboard {
   is_manual_edited: boolean
   agent_history: ChatMessage[]
   asset_ids: number[]
+  spatial_anchor?: string
+  subject_positions?: string
+  transition_note?: string
   scene_group_key?: string
   is_scene_first_clip?: boolean
   end_frame_image_url?: string
