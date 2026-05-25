@@ -52,6 +52,51 @@ type batchTaskResult struct {
 	Message   string `json:"message,omitempty"`
 }
 
+func compactVoiceDebugSummary(raw map[string]any) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	summary := map[string]any{}
+	if counts, ok := raw["voice_counts"].(map[string]any); ok {
+		primaryKey := ""
+		primaryCount := -1.0
+		for k, v := range counts {
+			if num, ok := v.(float64); ok && num > primaryCount {
+				primaryKey = k
+				primaryCount = num
+			}
+		}
+		if primaryKey != "" {
+			summary["primary_voice_key"] = primaryKey
+		}
+	}
+	if sources, ok := raw["voice_sources"].(map[string]any); ok {
+		primarySource := ""
+		primaryCount := -1.0
+		for k, v := range sources {
+			if num, ok := v.(float64); ok && num > primaryCount {
+				primarySource = k
+				primaryCount = num
+			}
+		}
+		if primarySource != "" {
+			summary["primary_voice_source"] = primarySource
+		}
+		if _, ok := sources["character_binding"]; ok {
+			summary["has_character_binding"] = true
+		} else {
+			summary["has_character_binding"] = false
+		}
+	}
+	if bindings, ok := raw["character_voice_bindings"].(float64); ok {
+		summary["character_voice_bindings"] = int(bindings)
+	}
+	if len(summary) == 0 {
+		return nil
+	}
+	return summary
+}
+
 func parseVoiceDebugSummary(raw string) map[string]any {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

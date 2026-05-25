@@ -63,6 +63,31 @@ func normalizeRenderConfig(rc model.RenderConfig) model.RenderConfig {
 	return rc
 }
 
+func buildTaskDebugSummary(task *model.VideoTask) gin.H {
+	if task == nil {
+		return gin.H{}
+	}
+	summary := gin.H{
+		"requested_model":  task.RequestedModel,
+		"routed_generator": task.RoutedGenerator,
+		"runtime_provider": task.RuntimeProvider,
+		"effective_model":  task.EffectiveModel,
+		"route_reason":     task.RouteReason,
+	}
+	if len(task.Clips) > 0 {
+		clipMissingRoute := 0
+		for i := range task.Clips {
+			clip := task.Clips[i]
+			if strings.TrimSpace(clip.RequestedModel) == "" || strings.TrimSpace(clip.RoutedGenerator) == "" || strings.TrimSpace(clip.RuntimeProvider) == "" {
+				clipMissingRoute++
+			}
+		}
+		summary["clip_count"] = len(task.Clips)
+		summary["clip_missing_route"] = clipMissingRoute
+	}
+	return summary
+}
+
 func logTaskRouteState(logger *zap.Logger, event string, task *model.VideoTask) {
 	if logger == nil || task == nil {
 		return
@@ -481,11 +506,18 @@ func (h *VideoHandler) ListProjectVideos(c *gin.Context) {
 			missingRoute++
 		}
 	}
+	items := make([]gin.H, 0, len(tasks))
+	for i := range tasks {
+		items = append(items, gin.H{
+			"task":               tasks[i],
+			"task_debug_summary": buildTaskDebugSummary(&tasks[i]),
+		})
+	}
 	response.OK(c, gin.H{
 		"total":               total,
 		"page":                page,
 		"page_size":           pageSize,
-		"items":               tasks,
+		"items":               items,
 		"missing_route_items": missingRoute,
 	})
 }
