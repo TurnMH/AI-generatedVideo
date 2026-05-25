@@ -43,7 +43,7 @@ import {
   Link2Off,
   Link2,
 } from 'lucide-react'
-import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask } from '@/lib/api'
+import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask, type VideoClipDebugInfo, type VideoTaskDebugSummary } from '@/lib/api'
 import { ProductionSkillsPanel } from '@/components/skills/ProductionSkillsPanel'
 import type {
   Project,
@@ -167,7 +167,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       for (;;) {
         const response = await videoAPI.listTasks(projectId, { page, page_size: videoTaskPageSize })
         const payload = response.data ?? {}
-        const batch = (payload.items ?? []) as VTask[]
+        const batch = ((payload.items ?? []) as Array<{ task?: VTask; task_debug_summary?: VideoTaskDebugSummary; clips_debug?: VideoClipDebugInfo[] }>).map((item) => ({
+          ...(item.task ?? {} as VTask),
+          task_debug_summary: item.task_debug_summary,
+          clips_debug: item.clips_debug,
+        }))
         total = payload.total ?? batch.length
         items.push(...batch)
 
@@ -195,6 +199,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     compose_stage?: string;
     serial_scene?: boolean;
     scene_group_keys?: string[];
+    task_debug_summary?: VideoTaskDebugSummary;
+    clips_debug?: VideoClipDebugInfo[];
   }
   interface VTaskListResponse {
     items: VTask[]
@@ -929,7 +935,24 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   }
 
   const openTaskDetail = async (task: VTask) => {
-    setTaskDetailInfo(task)
+    setTaskDetailLoading(true)
+    try {
+      const detailRes = await videoAPI.getTask<VTask>(task.id)
+      const detailPayload = detailRes.data?.data
+      if (detailPayload?.task) {
+        setTaskDetailInfo({
+          ...detailPayload.task,
+          task_debug_summary: detailPayload.task_debug_summary,
+          clips_debug: detailPayload.clips_debug,
+        })
+      } else {
+        setTaskDetailInfo(task)
+      }
+    } catch {
+      setTaskDetailInfo(task)
+    } finally {
+      setTaskDetailLoading(false)
+    }
     const episodeId = task.episode_id ? Number(task.episode_id) : NaN
     if (!Number.isFinite(episodeId) || episodeId <= 0) {
       setTaskDetailScenes([])
@@ -2316,6 +2339,27 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                           </div>
                         </div>
 
+                        {t.task_debug_summary && (
+                          <div className="mt-3 grid gap-2 md:grid-cols-4">
+                            <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+                              <div className="text-[10px] text-surface-400">路由摘要</div>
+                              <div className="mt-1 text-xs text-surface-700 break-words">{t.task_debug_summary.routed_generator || '—'} / {t.task_debug_summary.runtime_provider || '—'}</div>
+                            </div>
+                            <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+                              <div className="text-[10px] text-surface-400">空间锚点覆盖</div>
+                              <div className="mt-1 text-xs text-surface-700">{t.task_debug_summary.clip_with_spatial_hints ?? 0} / {t.task_debug_summary.clip_count ?? t.clips?.length ?? 0}</div>
+                            </div>
+                            <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+                              <div className="text-[10px] text-surface-400">站位/朝向覆盖</div>
+                              <div className="mt-1 text-xs text-surface-700">{t.task_debug_summary.clip_with_position_hints ?? 0} / {t.task_debug_summary.clip_count ?? t.clips?.length ?? 0}</div>
+                            </div>
+                            <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+                              <div className="text-[10px] text-surface-400">过渡动作覆盖</div>
+                              <div className="mt-1 text-xs text-surface-700">{t.task_debug_summary.clip_with_transition_hints ?? 0} / {t.task_debug_summary.clip_count ?? t.clips?.length ?? 0}</div>
+                            </div>
+                          </div>
+                        )}
+
                         {t.compose_stage && t.compose_stage !== '' && t.compose_stage !== 'done' && (
                           <div className="mt-3 rounded-lg bg-purple-50 border border-purple-200 p-3">
                             {(() => {
@@ -2400,6 +2444,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                 }
                                 const scene = taskDetailScenes.find((item) => item.sequenceNumber === clip.clip_order + 1)
                                 const isChainBroken = clip.error_msg?.startsWith('serial chain broken')
+                                const clipDebug = t.clips_debug?.find((item) => item.clip_order === clip.clip_order)
                                 return (
                                   <div
                                     key={clip.id}
@@ -2466,6 +2511,28 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                               <p className="mt-1 line-clamp-3 break-words text-surface-700">{scene?.sceneDescription || '暂无'}</p>
                                             </div>
                                           </div>
+                                          {(clipDebug?.spatial_anchor || clipDebug?.subject_positions || clipDebug?.transition_note) ? (
+                                            <div className="grid gap-2 text-xs text-surface-500 md:grid-cols-3">
+                                              {clipDebug?.spatial_anchor ? (
+                                                <div className="rounded-md border border-indigo-100 bg-indigo-50/70 px-2.5 py-2">
+                                                  <p className="text-[10px] text-indigo-500">空间锚点</p>
+                                                  <p className="mt-1 break-words text-indigo-900">{clipDebug.spatial_anchor}</p>
+                                                </div>
+                                              ) : null}
+                                              {clipDebug?.subject_positions ? (
+                                                <div className="rounded-md border border-sky-100 bg-sky-50/70 px-2.5 py-2">
+                                                  <p className="text-[10px] text-sky-500">人物站位/朝向</p>
+                                                  <p className="mt-1 break-words text-sky-900">{clipDebug.subject_positions}</p>
+                                                </div>
+                                              ) : null}
+                                              {clipDebug?.transition_note ? (
+                                                <div className="rounded-md border border-amber-100 bg-amber-50/70 px-2.5 py-2">
+                                                  <p className="text-[10px] text-amber-500">过渡动作</p>
+                                                  <p className="mt-1 break-words text-amber-900">{clipDebug.transition_note}</p>
+                                                </div>
+                                              ) : null}
+                                            </div>
+                                          ) : null}
                                           {clip.error_msg ? (
                                             <p className={`text-xs ${clip.status === 'failed' ? 'text-red-600' : 'text-surface-500'} break-all`}>
                                               {clip.error_msg}

@@ -484,6 +484,41 @@ export const storageAPI = {
     }),
 }
 
+export interface VideoClipDebugInfo {
+  clip_order: number
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  scene_group_key?: string
+  scene_seq?: number
+  spatial_anchor?: string
+  subject_positions?: string
+  transition_note?: string
+}
+
+export interface VideoTaskDebugSummary {
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  route_reason?: string
+  clip_count?: number
+  clip_missing_route?: number
+  clip_with_spatial_hints?: number
+  clip_with_position_hints?: number
+  clip_with_transition_hints?: number
+}
+
+export interface VideoTaskDetailResponse<TTask = unknown> {
+  code?: number
+  data?: {
+    task: TTask
+    task_debug_summary?: VideoTaskDebugSummary
+    clips_debug?: VideoClipDebugInfo[]
+  }
+}
+
 export const videoAPI = {
   list: (projectId: number, params?: { episode_id?: number; page?: number; page_size?: number }) =>
     api.get(`/api/v1/projects/${projectId}/videos`, { params }),
@@ -507,8 +542,8 @@ export const videoAPI = {
     api.get(`/api/v1/projects/${projectId}/videos/${videoId}/export`),
   listTasks: (projectId: number, params?: { episode_id?: number; page?: number; page_size?: number }) =>
     api.get(`/api/v1/projects/${projectId}/videos`, { params }),
-  getTask: (taskId: number) =>
-    api.get(`/api/v1/videos/tasks/${taskId}`),
+  getTask: <TTask = unknown>(taskId: number) =>
+    api.get<VideoTaskDetailResponse<TTask>>(`/api/v1/videos/tasks/${taskId}`),
   deleteTask: (taskId: number) =>
     api.delete(`/api/v1/videos/tasks/${taskId}`),
   /** Cancel a pending/processing task (calls DELETE /api/v1/videos/tasks/:id) */
