@@ -26,6 +26,7 @@ import {
   Layers3,
   ArrowRightLeft,
   ScanFace,
+  Clapperboard,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/lib/store/auth'
@@ -53,6 +54,11 @@ const navItems = [
     label: '视频（串行）',
     href: '/video-serial',
     icon: Film,
+  },
+  {
+    label: '口播广告工作台',
+    href: '/ad-video',
+    icon: Clapperboard,
   },
   {
     label: '剧本库',
