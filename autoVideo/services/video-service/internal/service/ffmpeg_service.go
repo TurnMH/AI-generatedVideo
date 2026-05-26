@@ -1060,7 +1060,7 @@ func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, r
 		style.FontColor = "&H00FFFFFF"
 	}
 	if style.HighlightColor == "" {
-		style.HighlightColor = "&H00FFCC99"
+		style.HighlightColor = "&H00FFD766"
 	}
 	if style.OutlineColor == "" {
 		style.OutlineColor = "&H00000000"
@@ -1172,13 +1172,13 @@ func buildASSKaraokeText(referenceLine string, words []whisperClient.Word) strin
 	assignments := alignTokensToWords(tokens, words)
 	var out strings.Builder
 	for i, token := range tokens {
-		d := 35
+		d := 16
 		if i < len(assignments) && len(assignments[i]) > 0 {
 			start := assignments[i][0].Start
 			end := assignments[i][len(assignments[i])-1].End
 			centis := int((end-start)*100 + 0.5)
-			if centis < 20 {
-				centis = 20
+			if centis < 10 {
+				centis = 10
 			}
 			d = centis
 		}
@@ -1189,34 +1189,34 @@ func buildASSKaraokeText(referenceLine string, words []whisperClient.Word) strin
 
 func alignTokensToWords(tokens []string, words []whisperClient.Word) [][]whisperClient.Word {
 	result := make([][]whisperClient.Word, 0, len(tokens))
+	if len(tokens) == 0 {
+		return result
+	}
 	cursor := 0
-	remainingTokens := len(tokens)
-	remainingWords := len(words)
-	for _, token := range tokens {
-		clean := removeSubtitleSeparators(token)
-		weight := utf8.RuneCountInString(clean)
+	for i, token := range tokens {
+		weight := tokenTimingWeight(token)
 		if weight <= 0 {
 			result = append(result, nil)
-			remainingTokens--
 			continue
 		}
+		remainingTokenWeight := 0
+		for _, rest := range tokens[i:] {
+			remainingTokenWeight += maxInt(tokenTimingWeight(rest), 1)
+		}
+		remainingWords := len(words) - cursor
+		if remainingWords < 0 {
+			remainingWords = 0
+		}
 		assign := 1
-		if remainingTokens == 1 {
+		if i == len(tokens)-1 {
 			assign = remainingWords
-		} else {
-			totalWeight := 0
-			for _, rest := range tokens[len(result):] {
-				totalWeight += maxInt(utf8.RuneCountInString(removeSubtitleSeparators(rest)), 1)
-			}
-			if totalWeight <= 0 {
-				totalWeight = remainingTokens
-			}
-			assign = int(float64(remainingWords) * float64(maxInt(weight, 1)) / float64(totalWeight))
+		} else if remainingTokenWeight > 0 && remainingWords > 0 {
+			assign = int(float64(remainingWords) * float64(maxInt(weight, 1)) / float64(remainingTokenWeight))
 			if assign < 1 {
 				assign = 1
 			}
-			maxAllowed := remainingWords - (remainingTokens - 1)
-			if assign > maxAllowed {
+			maxAllowed := remainingWords - (len(tokens) - i - 1)
+			if maxAllowed > 0 && assign > maxAllowed {
 				assign = maxAllowed
 			}
 		}
@@ -1225,8 +1225,6 @@ func alignTokensToWords(tokens []string, words []whisperClient.Word) [][]whisper
 			end = len(words)
 		}
 		result = append(result, words[cursor:end])
-		remainingWords -= end - cursor
-		remainingTokens--
 		cursor = end
 	}
 	if cursor < len(words) && len(result) > 0 {
@@ -1241,32 +1239,55 @@ func splitSubtitleDisplayTokens(text string) []string {
 		return nil
 	}
 	var tokens []string
-	var current []rune
-	flush := func() {
-		if len(current) == 0 {
+	var latin []rune
+	flushLatin := func() {
+		if len(latin) == 0 {
 			return
 		}
-		tokens = append(tokens, strings.TrimSpace(string(current)))
-		current = current[:0]
+		token := strings.TrimSpace(string(latin))
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+		latin = latin[:0]
 	}
 	for _, r := range []rune(text) {
 		switch {
-		case unicode.IsSpace(r):
-			flush()
-		case strings.ContainsRune("，。、！？；：,.!?;:()（）", r):
-			flush()
+		case unicode.IsSpace(r) || strings.ContainsRune("，。、！？；：,.!?;:()（）", r):
+			flushLatin()
+		case isLatinOrDigitRune(r):
+			latin = append(latin, r)
 		default:
-			current = append(current, r)
+			flushLatin()
+			if !unicode.IsSpace(r) {
+				tokens = append(tokens, string(r))
+			}
 		}
 	}
-	flush()
-	filtered := tokens[:0]
-	for _, t := range tokens {
-		if strings.TrimSpace(t) != "" {
-			filtered = append(filtered, t)
+	flushLatin()
+	return tokens
+}
+
+func tokenTimingWeight(token string) int {
+	if isASCIIWordToken(token) {
+		return maxInt(utf8.RuneCountInString(token), 1)
+	}
+	return 1
+}
+
+func isASCIIWordToken(token string) bool {
+	if strings.TrimSpace(token) == "" {
+		return false
+	}
+	for _, r := range token {
+		if !isLatinOrDigitRune(r) {
+			return false
 		}
 	}
-	return filtered
+	return true
+}
+
+func isLatinOrDigitRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
 func removeSubtitleSeparators(text string) string {
