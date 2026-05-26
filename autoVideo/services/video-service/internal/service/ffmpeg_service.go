@@ -1168,7 +1168,7 @@ type assActiveTokenEvent struct {
 }
 
 func buildASSActiveTokenEvents(referenceLine string, words []whisperClient.Word, style SubtitleStyle) []assActiveTokenEvent {
-	tokens := splitSubtitleDisplayTokens(referenceLine)
+	tokens := splitSubtitleDisplayTokensByWordCount(referenceLine, len(words))
 	if len(tokens) == 0 {
 		tokens = []string{strings.TrimSpace(referenceLine)}
 	}
@@ -1252,12 +1252,85 @@ func alignTokensToWords(tokens []string, words []whisperClient.Word) [][]whisper
 	return result
 }
 
+type subtitleTokenUnit struct {
+	Text   string
+	Weight int
+}
+
 func splitSubtitleDisplayTokens(text string) []string {
+	return splitSubtitleDisplayTokensByWordCount(text, 0)
+}
+
+func splitSubtitleDisplayTokensByWordCount(text string, desiredGroups int) []string {
+	units := tokenizeSubtitleTokenUnits(text)
+	if len(units) == 0 {
+		return nil
+	}
+	if desiredGroups <= 0 || desiredGroups >= len(units) {
+		out := make([]string, 0, len(units))
+		for _, u := range units {
+			out = append(out, u.Text)
+		}
+		return out
+	}
+	totalWeight := 0
+	for _, u := range units {
+		totalWeight += maxInt(u.Weight, 1)
+	}
+	if totalWeight <= 0 {
+		totalWeight = len(units)
+	}
+	result := make([]string, 0, desiredGroups)
+	remainingWeight := totalWeight
+	remainingGroups := desiredGroups
+	remainingUnits := len(units)
+	var current strings.Builder
+	currentWeight := 0
+	flush := func() {
+		text := strings.TrimSpace(current.String())
+		if text != "" {
+			result = append(result, text)
+		}
+		current.Reset()
+		currentWeight = 0
+	}
+	for idx, unit := range units {
+		current.WriteString(unit.Text)
+		currentWeight += maxInt(unit.Weight, 1)
+		remainingUnits = len(units) - idx - 1
+		if remainingGroups <= 1 {
+			continue
+		}
+		targetWeight := float64(remainingWeight) / float64(remainingGroups)
+		shouldCut := float64(currentWeight) >= targetWeight
+		if remainingUnits == remainingGroups-1 {
+			shouldCut = true
+		}
+		if shouldCut {
+			flush()
+			remainingWeight -= currentWeight
+			if remainingWeight < 0 {
+				remainingWeight = 0
+			}
+			remainingGroups--
+		}
+	}
+	flush()
+	if len(result) > desiredGroups && desiredGroups > 0 {
+		merged := make([]string, 0, desiredGroups)
+		merged = append(merged, result[:desiredGroups-1]...)
+		merged = append(merged, strings.Join(result[desiredGroups-1:], ""))
+		return merged
+	}
+	return result
+}
+
+func tokenizeSubtitleTokenUnits(text string) []subtitleTokenUnit {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	var tokens []string
+	var units []subtitleTokenUnit
 	var latin []rune
 	flushLatin := func() {
 		if len(latin) == 0 {
@@ -1265,7 +1338,7 @@ func splitSubtitleDisplayTokens(text string) []string {
 		}
 		token := strings.TrimSpace(string(latin))
 		if token != "" {
-			tokens = append(tokens, token)
+			units = append(units, subtitleTokenUnit{Text: token, Weight: maxInt(utf8.RuneCountInString(token), 1)})
 		}
 		latin = latin[:0]
 	}
@@ -1278,12 +1351,12 @@ func splitSubtitleDisplayTokens(text string) []string {
 		default:
 			flushLatin()
 			if !unicode.IsSpace(r) {
-				tokens = append(tokens, string(r))
+				units = append(units, subtitleTokenUnit{Text: string(r), Weight: 1})
 			}
 		}
 	}
 	flushLatin()
-	return tokens
+	return units
 }
 
 func tokenTimingWeight(token string) int {
