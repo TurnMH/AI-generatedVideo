@@ -199,6 +199,20 @@ export const chatAPI = {
     api.post('/api/v1/chat/gemini', { messages }),
 }
 
+export const utilsAPI = {
+  translatePrompt: (text: string) => scriptApi.post('/api/v1/utils/translate', { text }),
+  optimizeVideoPrompt: (data: {
+    prompt: string
+    target_model?: string
+    text_model?: string
+    mode?: string
+    style_preset?: string
+    aspect_ratio?: string
+    duration?: string
+    generate_audio?: boolean
+  }) => scriptApi.post('/api/v1/utils/optimize-video-prompt', data),
+}
+
 export const modelAPI = {
   list: (params?: { type?: string; provider?: string; speed_rating?: string; enabled?: string; sort_by?: string }) =>
     api.get('/api/v1/models', { params }),
@@ -526,6 +540,8 @@ export const videoAPI = {
     api.get(`/api/v1/projects/${projectId}/videos/stats`),
   generate: (projectId: number, data: VideoGenerateRequest) =>
     api.post(`/api/v1/projects/${projectId}/videos/generate`, data),
+  generateManual: (data: VideoGenerateRequest & { project_id: number }) =>
+    api.post('/api/v1/videos/generate', data),
   generateBatch: (projectId: number, data: VideoGenerateBatchRequest) =>
     api.post(`/api/v1/projects/${projectId}/videos/generate-batch`, data),
   retry: (projectId: number, videoId: number, modelName?: string) =>
@@ -556,6 +572,8 @@ export const videoAPI = {
     api.post(`/api/v1/projects/${projectId}/videos/${taskId}/retry`, { model_name: modelName }),
   compose: (taskId: number) =>
     api.post(`/api/v1/videos/tasks/${taskId}/compose`),
+  composeAdVideo: (taskIds: number[]) =>
+    api.post('/api/v1/videos/ad-compose', { task_ids: taskIds }),
   modelStatus: () =>
     api.get<{ models: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] }>('/api/v1/videos/model-status'),
   getShotsMetadata: (projectId: number, episodeId: number) =>
@@ -942,11 +960,6 @@ export const promptTemplateAPI = {
   preview: (id: number, variables: Record<string, string>) =>
     api.post(`/api/v1/prompt-templates/${id}/preview`, { variables }),
   reseedDefaults: () => api.post('/api/v1/prompt-templates/reseed'),
-}
-
-export const utilsAPI = {
-  translatePrompt: (text: string) =>
-    api.post<{ translated: string }>('/api/v1/utils/translate', { text }),
 }
 
 export interface ProductionSkill {

@@ -1434,6 +1434,69 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 
 // uploadVideo —— 将本地视频文件上传到存储服务，返回公开访问 URL
 // uploadVideo pushes the local file to the storage-service and returns the public URL.
+
+func pickCompositeTaskResultURL(task *model.VideoTask) string {
+	if task == nil {
+		return ""
+	}
+	if task.RenderConfig != nil {
+		variant := strings.TrimSpace(fmt.Sprint(task.RenderConfig["active_result_variant"]))
+		if variant == "subtitled" {
+			if u := strings.TrimSpace(fmt.Sprint(task.RenderConfig["subtitled_result_url"])); u != "" {
+				return u
+			}
+		}
+		if variant == "original" {
+			if u := strings.TrimSpace(fmt.Sprint(task.RenderConfig["original_result_url"])); u != "" {
+				return u
+			}
+		}
+	}
+	if u := strings.TrimSpace(task.ResultURL); u != "" {
+		return u
+	}
+	if task.RenderConfig != nil {
+		for _, key := range []string{"subtitled_result_url", "original_result_url"} {
+			if u := strings.TrimSpace(fmt.Sprint(task.RenderConfig[key])); u != "" {
+				return u
+			}
+		}
+	}
+	return ""
+}
+
+func (s *VideoService) ComposeAdVideo(ctx context.Context, taskIDs []int64) (string, map[string]any, error) {
+	if len(taskIDs) == 0 {
+		return "", nil, fmt.Errorf("task_ids is empty")
+	}
+	items := make([]*model.VideoTask, 0, len(taskIDs))
+	urls := make([]string, 0, len(taskIDs))
+	meta := make([]map[string]any, 0, len(taskIDs))
+	for idx, id := range taskIDs {
+		task, err := s.repo.GetTask(ctx, id)
+		if err != nil {
+			return "", nil, fmt.Errorf("get task %d: %w", id, err)
+		}
+		url := pickCompositeTaskResultURL(task)
+		if url == "" {
+			return "", nil, fmt.Errorf("task %d has no usable result url", id)
+		}
+		items = append(items, task)
+		urls = append(urls, url)
+		meta = append(meta, map[string]any{"task_id": id, "order": idx, "result_url": url, "status": task.Status})
+	}
+	mergedPath, err := s.ffmpeg.ConcatClips(ctx, urls, "16:9")
+	if err != nil {
+		return "", nil, fmt.Errorf("concat ad video: %w", err)
+	}
+	defer os.RemoveAll(filepath.Dir(mergedPath))
+	resultURL, err := s.uploadVideo(ctx, 0, items[0].ProjectID, mergedPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("upload ad video: %w", err)
+	}
+	return resultURL, map[string]any{"source_task_ids": taskIDs, "source_items": meta}, nil
+}
+
 func (s *VideoService) uploadVideo(ctx context.Context, taskID, projectID int64, filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {

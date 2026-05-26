@@ -375,6 +375,10 @@ type extractVideoContentReq struct {
 	OnlyAudio bool   `json:"only_audio"`
 }
 
+type composeAdVideoReq struct {
+	TaskIDs []int64 `json:"task_ids"`
+}
+
 func supportsTextOnlyVideoRequest(modelName string, renderConfig model.RenderConfig) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(modelName))
 	if strings.Contains(trimmed, "wan-t2v") || strings.Contains(trimmed, "t2v") {
@@ -652,6 +656,31 @@ func (h *VideoHandler) Compose(c *gin.Context) {
 	}()
 
 	response.OK(c, gin.H{"task_id": id, "message": "composition started"})
+}
+
+// ComposeAdVideo merges multiple existing task result videos into one ad video.
+// POST /api/v1/videos/ad-compose
+func (h *VideoHandler) ComposeAdVideo(c *gin.Context) {
+	var req composeAdVideoReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if len(req.TaskIDs) == 0 {
+		response.BadRequest(c, "task_ids is required")
+		return
+	}
+	resultURL, meta, err := h.svc.ComposeAdVideo(c.Request.Context(), req.TaskIDs)
+	if err != nil {
+		h.logger.Error("compose ad video", zap.Int64s("task_ids", req.TaskIDs), zap.Error(err))
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.OK(c, gin.H{
+		"task_ids": req.TaskIDs,
+		"result_url": resultURL,
+		"meta": meta,
+	})
 }
 
 // Download —— 重定向到已完成视频的下载地址

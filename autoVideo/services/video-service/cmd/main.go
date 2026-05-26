@@ -397,6 +397,7 @@ func main() {
 			auth.GET("/tasks/:id", videoHandler.GetTask)
 			auth.DELETE("/tasks/:id", videoHandler.DeleteTask)
 			auth.POST("/tasks/:id/compose", videoHandler.Compose)
+			auth.POST("/ad-compose", videoHandler.ComposeAdVideo)
 		}
 
 		// Project-scoped video endpoints
