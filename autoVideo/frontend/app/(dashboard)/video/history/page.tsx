@@ -37,6 +37,7 @@ type BackendTask = {
   effective_model?: string
   result_url?: string
   error_msg?: string
+  subtitle_text?: string
   render_config?: Record<string, unknown>
 }
 
@@ -173,6 +174,12 @@ export default function ManualVideoHistoryPage() {
             const providerBadge = task.runtime_provider || '未写入 provider'
             const hasResult = Boolean(task.result_url)
             const hasError = Boolean(task.error_msg)
+            const dialogues = Array.isArray(task.render_config?.dialogues)
+              ? (task.render_config?.dialogues as unknown[]).map((item) => String(item || '').trim()).filter(Boolean)
+              : []
+            const subtitleText = String(task.subtitle_text || task.render_config?.subtitle_text || '').trim()
+            const audioSummary = dialogues.join(' / ') || subtitleText
+            const nativeAudioEnabled = Boolean(task.render_config?.generate_audio)
             return (
               <div key={task.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -188,6 +195,15 @@ export default function ManualVideoHistoryPage() {
                       <span className={`rounded-full px-2.5 py-1 ${hasResult ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{hasResult ? '结果已就绪' : '结果未就绪'}</span>
                       <span className={`rounded-full px-2.5 py-1 ${hasError ? 'bg-rose-500/15 text-rose-300' : 'bg-slate-800 text-slate-300'}`}>{hasError ? '存在错误' : '无错误'}</span>
                     </div>
+                    {audioSummary && (
+                      <div className="mt-3 rounded-lg border border-violet-400/20 bg-violet-400/5 px-3 py-2 text-xs text-violet-100">
+                        <div className="mb-1 flex items-center justify-between gap-2 font-medium text-violet-200">
+                          <span>旁白 / dialogues 摘要</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${nativeAudioEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{nativeAudioEnabled ? 'native audio' : '非 native audio'}</span>
+                        </div>
+                        <div className="line-clamp-3 whitespace-pre-wrap break-words">{audioSummary}</div>
+                      </div>
+                    )}
                     {task.error_msg && (
                       <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/5 px-3 py-2 text-xs text-rose-200">
                         {task.error_msg}
@@ -207,12 +223,32 @@ export default function ManualVideoHistoryPage() {
                       {busyAction === `cancel-${task.id}` ? '处理中…' : '取消'}
                     </Button>
                     {task.result_url && (
-                      <Button variant="outline" asChild>
-                        <a href={task.result_url} target="_blank" rel="noreferrer">结果</a>
-                      </Button>
+                      <>
+                        <Button variant="outline" asChild>
+                          <Link href={`/video/history/${task.id}?preview=1`}>在线查看</Link>
+                        </Button>
+                        {audioSummary && (
+                          <Button
+                            variant="outline"
+                            disabled={busyAction !== ''}
+                            onClick={() => runAction(`subtitle-${task.id}`, () => videoAPI.compose(task.id), '已触发重新合成（将尝试烧录字幕）')}
+                          >
+                            {busyAction === `subtitle-${task.id}` ? '处理中…' : '添加字幕'}
+                          </Button>
+                        )}
+                        <Button variant="outline" asChild>
+                          <a href={task.result_url} target="_blank" rel="noreferrer">结果</a>
+                        </Button>
+                      </>
                     )}
                   </div>
                 </div>
+                {task.result_url && (
+                  <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
+                    <div className="mb-2 text-xs text-slate-400">在线预览</div>
+                    <video className="max-h-[360px] w-full rounded-lg bg-black" controls preload="metadata" src={task.result_url} />
+                  </div>
+                )}
               </div>
             )
           })}

@@ -81,6 +81,26 @@ func (s SubtitleStyle) ForceStyle() string {
 	)
 }
 
+func escapeSubtitleFilterPath(path string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		":", "\\:",
+		",", "\\,",
+		"[", "\\[",
+		"]", "\\]",
+		";", "\\;",
+		"'", "\\'",
+	)
+	return replacer.Replace(path)
+}
+
+func escapeSubtitleForceStyle(style string) string {
+	style = strings.ReplaceAll(style, `\\`, `\\\\`)
+	style = strings.ReplaceAll(style, `:`, `\\:`)
+	style = strings.ReplaceAll(style, `'`, `\\'`)
+	return fmt.Sprintf("'%s'", style)
+}
+
 // NewFFmpegService —— 创建 FFmpeg 服务实例，设置临时目录和二进制路径
 func NewFFmpegService(tempDir, bin string) *FFmpegService {
 	if bin == "" {
@@ -313,7 +333,7 @@ func (f *FFmpegService) AddSubtitleWithStyle(ctx context.Context, videoPath, sub
 	}
 
 	output := filepath.Join(workDir, "with_sub.mp4")
-	subtitleFilter := fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, style.ForceStyle())
+	subtitleFilter := fmt.Sprintf("subtitles=%s:force_style=%s", escapeSubtitleFilterPath(srtPath), escapeSubtitleForceStyle(style.ForceStyle()))
 	if err := f.RunFFmpeg(ctx,
 		"-i", videoPath,
 		"-vf", subtitleFilter,
@@ -351,7 +371,7 @@ func (f *FFmpegService) AddSubtitleFromVTTWithStyle(ctx context.Context, videoPa
 	}
 
 	output := filepath.Join(workDir, "with_sub.mp4")
-	subtitleFilter := fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, style.ForceStyle())
+	subtitleFilter := fmt.Sprintf("subtitles=%s:force_style=%s", escapeSubtitleFilterPath(srtPath), escapeSubtitleForceStyle(style.ForceStyle()))
 	if err := f.RunFFmpeg(ctx,
 		"-i", videoPath,
 		"-vf", subtitleFilter,
