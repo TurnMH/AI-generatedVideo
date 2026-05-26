@@ -1172,17 +1172,18 @@ func buildASSKaraokeText(referenceLine string, words []whisperClient.Word) strin
 	assignments := alignTokensToWords(tokens, words)
 	var out strings.Builder
 	for i, token := range tokens {
-		d := 16
-		if i < len(assignments) && len(assignments[i]) > 0 {
-			start := assignments[i][0].Start
-			end := assignments[i][len(assignments[i])-1].End
-			centis := int((end-start)*100 + 0.5)
-			if centis < 10 {
-				centis = 10
-			}
-			d = centis
+		pieces := splitKaraokeRenderPieces(token)
+		if len(pieces) == 0 {
+			pieces = []string{token}
 		}
-		out.WriteString(fmt.Sprintf("{\\k%d}%s", d, escapeASSText(token)))
+		pieceDurations := splitTokenDurations(pieces, assignmentsForIndex(assignments, i))
+		for j, piece := range pieces {
+			d := 8
+			if j < len(pieceDurations) && pieceDurations[j] > 0 {
+				d = pieceDurations[j]
+			}
+			out.WriteString(fmt.Sprintf("{\\k%d}%s", d, escapeASSText(piece)))
+		}
 	}
 	return out.String()
 }
@@ -1268,10 +1269,7 @@ func splitSubtitleDisplayTokens(text string) []string {
 }
 
 func tokenTimingWeight(token string) int {
-	if isASCIIWordToken(token) {
-		return maxInt(utf8.RuneCountInString(token), 1)
-	}
-	return 1
+	return maxInt(len(splitKaraokeRenderPieces(token)), 1)
 }
 
 func isASCIIWordToken(token string) bool {
@@ -1288,6 +1286,90 @@ func isASCIIWordToken(token string) bool {
 
 func isLatinOrDigitRune(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+func assignmentsForIndex(assignments [][]whisperClient.Word, idx int) []whisperClient.Word {
+	if idx < 0 || idx >= len(assignments) {
+		return nil
+	}
+	return assignments[idx]
+}
+
+func splitKaraokeRenderPieces(token string) []string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	if isASCIIWordToken(token) {
+		runes := []rune(token)
+		if len(runes) <= 2 {
+			return []string{token}
+		}
+		pieces := make([]string, 0, len(runes))
+		for _, r := range runes {
+			pieces = append(pieces, string(r))
+		}
+		return pieces
+	}
+	pieces := make([]string, 0, utf8.RuneCountInString(token))
+	for _, r := range []rune(token) {
+		pieces = append(pieces, string(r))
+	}
+	return pieces
+}
+
+func splitTokenDurations(pieces []string, words []whisperClient.Word) []int {
+	if len(pieces) == 0 {
+		return nil
+	}
+	totalCentis := 0
+	if len(words) > 0 {
+		start := words[0].Start
+		end := words[len(words)-1].End
+		totalCentis = int((end-start)*100 + 0.5)
+	}
+	if totalCentis < len(pieces)*8 {
+		totalCentis = len(pieces) * 8
+	}
+	weights := make([]int, len(pieces))
+	totalWeight := 0
+	for i, piece := range pieces {
+		w := utf8.RuneCountInString(strings.TrimSpace(piece))
+		if w <= 0 {
+			w = 1
+		}
+		weights[i] = w
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		totalWeight = len(pieces)
+	}
+	out := make([]int, len(pieces))
+	remainingDur := totalCentis
+	remainingWeight := totalWeight
+	for i := range pieces {
+		d := remainingDur
+		if i < len(pieces)-1 && remainingWeight > 0 {
+			d = int(float64(totalCentis) * float64(weights[i]) / float64(totalWeight))
+			if d < 8 {
+				d = 8
+			}
+			maxAllowed := remainingDur - 8*(len(pieces)-i-1)
+			if maxAllowed > 0 && d > maxAllowed {
+				d = maxAllowed
+			}
+		}
+		if d < 8 {
+			d = 8
+		}
+		out[i] = d
+		remainingDur -= d
+		remainingWeight -= weights[i]
+	}
+	if len(out) > 0 && remainingDur > 0 {
+		out[len(out)-1] += remainingDur
+	}
+	return out
 }
 
 func removeSubtitleSeparators(text string) string {
