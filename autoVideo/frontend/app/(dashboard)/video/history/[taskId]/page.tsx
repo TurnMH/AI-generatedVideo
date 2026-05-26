@@ -20,6 +20,7 @@ type TaskShape = {
   effective_model?: string
   result_url?: string
   error_msg?: string
+  subtitle_text?: string
   created_at?: string
   updated_at?: string
   render_config?: Record<string, unknown>
@@ -55,6 +56,29 @@ export default function ManualVideoHistoryDetailPage() {
   const task = payload?.data?.task
   const taskDebug = payload?.data?.task_debug_summary
   const clipsDebug = payload?.data?.clips_debug || []
+  const submissionPreview = payload?.data?.submission_preview as
+    | {
+        generate_audio?: boolean
+        strategy?: string
+        note?: string
+        items?: Array<{
+          clip_order?: number
+          visual_prompt?: string
+          voice_text?: string
+          actual_submission_text?: string
+          generate_audio?: boolean
+          native_audio_model_hint?: string
+        }>
+      }
+    | undefined
+  const dialoguesText = Array.isArray(task?.render_config?.dialogues)
+    ? (task?.render_config?.dialogues as unknown[]).map((item) => String(item || '')).filter(Boolean).join('\n\n')
+    : ''
+  const visualPromptText = Array.isArray(task?.render_config?.scene_descriptions)
+    ? (task?.render_config?.scene_descriptions as unknown[]).map((item) => String(item || '')).join('\n\n')
+    : String(task?.render_config?.scene_description || task?.['scene_description'] || '')
+  const subtitleText = String(task?.subtitle_text || task?.render_config?.subtitle_text || '')
+  const nativeAudioEnabled = Boolean(task?.render_config?.generate_audio)
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
     try {
@@ -129,6 +153,12 @@ export default function ManualVideoHistoryDetailPage() {
                   </Button>
                 )}
               </div>
+              {task.result_url && (
+                <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="mb-2 text-xs text-slate-400">任务结果在线查看</div>
+                  <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={task.result_url} />
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -144,6 +174,67 @@ export default function ManualVideoHistoryDetailPage() {
               <div>runtime_provider：{taskDebug?.runtime_provider || '-'}</div>
               <div>route_reason：{taskDebug?.route_reason || '-'}</div>
               <div>clip_count：{taskDebug?.clip_count ?? '-'}</div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+            <CardHeader>
+              <CardTitle>真实提交文本 / 音频字段</CardTitle>
+              <CardDescription className="text-slate-400">直接读取 task.render_config / subtitle_text / submission_preview；用于核对“展示台词”和“实际送模型文本”是否一致</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-slate-200">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>generate_audio：{String(nativeAudioEnabled)}</div>
+                <div>subtitle_text：{subtitleText || '-'}</div>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-emerald-200">scene_descriptions（视觉文本）</div>
+                  <div className="max-h-64 overflow-auto rounded-lg border border-emerald-400/20 bg-slate-950/60 p-3 whitespace-pre-wrap break-words">
+                    {visualPromptText || '-'}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-violet-200">dialogues（展示中的旁白/对白文本）</div>
+                  <div className="max-h-64 overflow-auto rounded-lg border border-violet-400/20 bg-slate-950/60 p-3 whitespace-pre-wrap break-words">
+                    {dialoguesText || '（空）'}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-dashed border-white/10 bg-slate-950/30 px-3 py-2 text-xs leading-5 text-slate-400">
+                当前声音来源判定：{nativeAudioEnabled ? <span className="font-mono text-emerald-300">native audio（dialogues / subtitle_text 只是意图文本，不等于逐字朗读保证）</span> : <span className="font-mono text-slate-200">非 native audio / 需结合 dubbing 链路判断</span>}。视觉区里的 <span className="font-mono text-slate-200">scene_descriptions</span> 只描述画面，不应被当成旁白真值。
+              </div>
+              {submissionPreview?.items?.length ? (
+                <div className="space-y-3">
+                  <div className="text-xs font-medium text-amber-200">submission_preview（当前代码推导的实际送模型文本）</div>
+                  <div className="rounded-lg border border-amber-400/20 bg-amber-950/10 px-3 py-2 text-xs leading-5 text-slate-300">
+                    <div>strategy：{submissionPreview.strategy || '-'}</div>
+                    <div className="mt-1">note：{submissionPreview.note || '-'}</div>
+                  </div>
+                  {submissionPreview.items.map((item, idx) => (
+                    <div key={`submission-preview-${item.clip_order ?? idx}`} className="grid gap-3 rounded-xl border border-white/10 bg-slate-950/40 p-3 lg:grid-cols-3">
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-emerald-200">clip #{item.clip_order ?? idx} 视觉 prompt</div>
+                        <div className="max-h-56 overflow-auto rounded-lg border border-emerald-400/20 bg-slate-950/60 p-3 whitespace-pre-wrap break-words">
+                          {item.visual_prompt || '-'}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-violet-200">clip #{item.clip_order ?? idx} 旁白/对白意图</div>
+                        <div className="max-h-56 overflow-auto rounded-lg border border-violet-400/20 bg-slate-950/60 p-3 whitespace-pre-wrap break-words">
+                          {item.voice_text || '（空）'}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-xs font-medium text-amber-200">clip #{item.clip_order ?? idx} 实际送模型文本</div>
+                        <div className="max-h-56 overflow-auto rounded-lg border border-amber-400/20 bg-slate-950/60 p-3 whitespace-pre-wrap break-words">
+                          {item.actual_submission_text || '-'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -169,6 +260,16 @@ export default function ManualVideoHistoryDetailPage() {
                       <div className="break-all">clip_url：{clipTask?.clip_url || '-'}</div>
                       <div className="md:col-span-2">error_msg：{clipTask?.error_msg || '-'}</div>
                     </div>
+                    {clipTask?.clip_url && (
+                      <div className="mt-3 space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" asChild>
+                            <a href={clipTask.clip_url} target="_blank" rel="noreferrer">在线查看 clip</a>
+                          </Button>
+                        </div>
+                        <video className="max-h-[320px] w-full rounded-lg bg-black" controls preload="metadata" src={clipTask.clip_url} />
+                      </div>
+                    )}
                   </div>
                 )
               })}

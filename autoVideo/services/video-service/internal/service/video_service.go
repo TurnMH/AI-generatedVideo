@@ -463,6 +463,16 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			}
 		}
 		genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, clipAssetRefs)
+		s.logger.Info("native-audio request prepared",
+			zap.Int64("task_id", taskID),
+			zap.Int64("clip_id", c.ID),
+			zap.Int("clip_order", c.ClipOrder),
+			zap.String("model", resolvedModelName),
+			zap.Bool("supports_native_audio", gen.SupportsNativeAudio()),
+			zap.Bool("generate_audio", genReq.GenerateAudio),
+			zap.String("voice_text_preview", truncateForPrompt(genReq.VoiceText, 240)),
+			zap.String("prompt_preview", truncateForPrompt(genReq.Prompt, 320)),
+		)
 		result, err := generateClipWithRetry(ctx, gen, genReq, maxAttempts, s.logger, c.ID)
 		if err != nil {
 			c.Status = model.StatusFailed
@@ -2080,7 +2090,6 @@ func explainVideoGeneratorRoute(modelName string) VideoRouteExplain {
 		explain.IsConfiguredAlias = true
 	case "doubao", "v4.0", "xingguang-3.0", "doubao-v4", "doubao-v4.0":
 		explain.RoutedGenerator = "doubao"
-		explain.ProviderModel = "V4.0"
 		explain.RouteReason = "doubao-v4-family"
 		explain.IsConfiguredAlias = true
 	case "doubao-seedance", "doubao-seedream", "seedream", "xingtu":

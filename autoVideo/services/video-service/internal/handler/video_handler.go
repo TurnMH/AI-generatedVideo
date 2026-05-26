@@ -87,6 +87,134 @@ func renderConfigStringSlice(rc model.RenderConfig, key string, n int) []string 
 	return result
 }
 
+func renderConfigStringValues(rc model.RenderConfig, key string) []string {
+	if len(rc) == 0 {
+		return nil
+	}
+	raw, ok := rc[key]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func renderConfigBoolValue(rc model.RenderConfig, key string) bool {
+	if len(rc) == 0 {
+		return false
+	}
+	raw, ok := rc[key]
+	if !ok {
+		return false
+	}
+	v, _ := raw.(bool)
+	return v
+}
+
+func firstNonEmptyString(vals ...string) string {
+	for _, v := range vals {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func buildNativeAudioSubmissionText(prompt, voiceText string, generateAudio bool) string {
+	prompt = strings.TrimSpace(prompt)
+	voiceText = strings.TrimSpace(voiceText)
+	if !generateAudio || voiceText == "" {
+		return prompt
+	}
+	if prompt == "" {
+		return voiceText
+	}
+	if strings.Contains(prompt, voiceText) {
+		return prompt
+	}
+	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+}
+
+func buildTaskSubmissionPreview(task *model.VideoTask) gin.H {
+	if task == nil {
+		return gin.H{}
+	}
+	visualTexts := renderConfigStringValues(task.RenderConfig, "scene_descriptions")
+	if len(visualTexts) == 0 {
+		if visual := strings.TrimSpace(firstNonEmptyString(
+			fmt.Sprintf("%v", task.RenderConfig["scene_description"]),
+			task.SceneDescription,
+		)); visual != "" && visual != "%!v(<nil>)" {
+			visualTexts = []string{visual}
+		}
+	}
+	dialogueTexts := renderConfigStringValues(task.RenderConfig, "dialogues")
+	if len(dialogueTexts) == 0 {
+		if subtitle := strings.TrimSpace(task.SubtitleText); subtitle != "" {
+			dialogueTexts = []string{subtitle}
+		}
+	}
+	generateAudio := renderConfigBoolValue(task.RenderConfig, "generate_audio")
+	clipCount := len(task.Clips)
+	if clipCount == 0 {
+		clipCount = 1
+	}
+	if len(visualTexts) > clipCount {
+		clipCount = len(visualTexts)
+	}
+	if len(dialogueTexts) > clipCount {
+		clipCount = len(dialogueTexts)
+	}
+	items := make([]gin.H, 0, clipCount)
+	for i := 0; i < clipCount; i++ {
+		visualText := ""
+		if i < len(visualTexts) {
+			visualText = strings.TrimSpace(visualTexts[i])
+		}
+		voiceText := ""
+		if i < len(dialogueTexts) {
+			voiceText = strings.TrimSpace(dialogueTexts[i])
+		}
+		if voiceText == "" {
+			voiceText = strings.TrimSpace(task.SubtitleText)
+		}
+		items = append(items, gin.H{
+			"clip_order":              i,
+			"visual_prompt":           visualText,
+			"voice_text":              voiceText,
+			"actual_submission_text":  buildNativeAudioSubmissionText(visualText, voiceText, generateAudio),
+			"generate_audio":          generateAudio,
+			"native_audio_model_hint": firstNonEmptyString(task.RoutedGenerator, task.RequestedModel, task.ModelName),
+		})
+	}
+	return gin.H{
+		"generate_audio": generateAudio,
+		"strategy":       "current-native-audio-implementation-appends-dialogue-into-content-text",
+		"note":           "当前实现里，native audio 文本并无独立 provider 字段证据；video-service 会把对白/旁白并入 content.text。模型可能据此生成口播，但不保证逐字朗读。",
+		"items":          items,
+	}
+}
+
 func buildClipDebugSummaries(task *model.VideoTask) []gin.H {
 	if task == nil || len(task.Clips) == 0 {
 		return nil
@@ -408,6 +536,7 @@ func (h *VideoHandler) GetTask(c *gin.Context) {
 		"task":               task,
 		"task_debug_summary": buildTaskDebugSummary(task),
 		"clips_debug":        buildClipDebugSummaries(task),
+		"submission_preview": buildTaskSubmissionPreview(task),
 	})
 }
 
