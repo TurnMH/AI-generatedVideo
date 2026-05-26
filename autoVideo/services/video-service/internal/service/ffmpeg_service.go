@@ -43,7 +43,7 @@ func (s SubtitleStyle) ForceStyle() string {
 		s.FontName = "Arial"
 	}
 	if s.FontSize == 0 {
-		s.FontSize = 24
+		s.FontSize = 18
 	}
 	if s.FontColor == "" {
 		s.FontColor = "&H00FFFFFF"
@@ -72,7 +72,7 @@ func (s SubtitleStyle) ForceStyle() string {
 		s.Alignment = 2
 	}
 	if s.MarginV == 0 {
-		s.MarginV = 20
+		s.MarginV = 36
 	}
 	bold := 0
 	if s.Bold {
@@ -839,7 +839,7 @@ func splitSubtitleLines(text string) []string {
 		if chunk == "" {
 			continue
 		}
-		parts := strings.FieldsFunc(chunk, func(r rune) bool {
+		majorParts := strings.FieldsFunc(chunk, func(r rune) bool {
 			switch r {
 			case '。', '！', '？', '；', ';':
 				return true
@@ -847,18 +847,66 @@ func splitSubtitleLines(text string) []string {
 				return false
 			}
 		})
-		if len(parts) == 0 {
-			parts = []string{chunk}
+		if len(majorParts) == 0 {
+			majorParts = []string{chunk}
 		}
-		for _, part := range parts {
+		for _, part := range majorParts {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				continue
 			}
-			lines = append(lines, part)
+			for _, short := range splitSubtitleShortLine(part) {
+				short = strings.TrimSpace(short)
+				if short == "" {
+					continue
+				}
+				lines = append(lines, short)
+			}
 		}
 	}
 	return lines
+}
+
+func splitSubtitleShortLine(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	const maxRunes = 14
+	var out []string
+	for _, piece := range strings.FieldsFunc(text, func(r rune) bool {
+		switch r {
+		case '，', ',', '、', '：', ':':
+			return true
+		default:
+			return false
+		}
+	}) {
+		piece = strings.TrimSpace(piece)
+		if piece == "" {
+			continue
+		}
+		if utf8.RuneCountInString(piece) <= maxRunes {
+			out = append(out, piece)
+			continue
+		}
+		runes := []rune(piece)
+		for len(runes) > 0 {
+			take := maxRunes
+			if len(runes) < take {
+				take = len(runes)
+			}
+			segment := strings.TrimSpace(string(runes[:take]))
+			if segment != "" {
+				out = append(out, segment)
+			}
+			runes = runes[take:]
+		}
+	}
+	if len(out) == 0 {
+		return []string{text}
+	}
+	return out
 }
 
 func secondsToSRTTimestamp(seconds float64) string {
