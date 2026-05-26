@@ -80,6 +80,10 @@ export default function ManualVideoHistoryDetailPage() {
   const subtitleText = String(task?.subtitle_text || task?.render_config?.subtitle_text || '')
   const nativeAudioEnabled = Boolean(task?.render_config?.generate_audio)
   const audioSummary = dialoguesText || subtitleText
+  const originalResultUrl = String(task?.render_config?.original_result_url || '').trim()
+  const subtitledResultUrl = String(task?.render_config?.subtitled_result_url || '').trim()
+  const activeResultVariant = String(task?.render_config?.active_result_variant || '').trim()
+  const previewUrl = subtitledResultUrl || task?.result_url || originalResultUrl
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
     try {
@@ -129,6 +133,8 @@ export default function ManualVideoHistoryDetailPage() {
                 <div>created_at：{task.created_at || '-'}</div>
                 <div>updated_at：{task.updated_at || '-'}</div>
                 <div className="md:col-span-2 break-all">result_url：{task.result_url || '-'}</div>
+                <div className="md:col-span-2 break-all">original_result_url：{originalResultUrl || '-'}</div>
+                <div className="md:col-span-2 break-all">subtitled_result_url：{subtitledResultUrl || '-'}</div>
                 <div className="md:col-span-2">error_msg：{task.error_msg || '-'}</div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -143,7 +149,7 @@ export default function ManualVideoHistoryDetailPage() {
                 <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('compose', () => videoAPI.compose(task.id), '已触发重新合成')}>
                   {busyAction === 'compose' ? '处理中…' : '重新合成'}
                 </Button>
-                {task.result_url && audioSummary && (
+                {previewUrl && audioSummary && (
                   <Button
                     variant="outline"
                     disabled={busyAction !== ''}
@@ -157,16 +163,34 @@ export default function ManualVideoHistoryDetailPage() {
                     {busyAction === 'export' ? '处理中…' : '请求导出'}
                   </Button>
                 )}
-                {task.result_url && (
+                {previewUrl && (
                   <Button variant="outline" asChild>
-                    <a href={task.result_url} target="_blank" rel="noreferrer">打开结果视频</a>
+                    <a href={previewUrl} target="_blank" rel="noreferrer">打开当前结果</a>
+                  </Button>
+                )}
+                {originalResultUrl && (
+                  <Button variant="outline" asChild>
+                    <a href={originalResultUrl} target="_blank" rel="noreferrer">打开原视频</a>
+                  </Button>
+                )}
+                {subtitledResultUrl && (
+                  <Button variant="outline" asChild>
+                    <a href={subtitledResultUrl} target="_blank" rel="noreferrer">打开字幕版</a>
                   </Button>
                 )}
               </div>
-              {task.result_url && (
+              {previewUrl && (
                 <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
-                  <div className="mb-2 text-xs text-slate-400">任务结果在线查看</div>
-                  <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={task.result_url} />
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <span>任务结果在线查看</span>
+                    <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200">
+                      {activeResultVariant === 'subtitled' ? '当前默认：字幕版' : '当前默认：原视频'}
+                    </span>
+                    {originalResultUrl && subtitledResultUrl && (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300">已保留原视频 + 字幕版</span>
+                    )}
+                  </div>
+                  <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={previewUrl} />
                 </div>
               )}
             </CardContent>

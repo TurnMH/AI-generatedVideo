@@ -1083,6 +1083,28 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 		s.markFailed(ctx, taskID, err.Error())
 		return err
 	}
+	if len(task.RenderConfig) == 0 {
+		task.RenderConfig = model.RenderConfig{}
+	}
+	originalResultURL := firstNonEmpty(renderConfigString(task.RenderConfig, "original_result_url"), strings.TrimSpace(task.ResultURL))
+	subtitleVariantApplied := subtitleURL2 != "" || subtitleText != ""
+	if subtitleVariantApplied {
+		if originalResultURL != "" && originalResultURL != resultURL {
+			task.RenderConfig["original_result_url"] = originalResultURL
+		}
+		task.RenderConfig["subtitled_result_url"] = resultURL
+		task.RenderConfig["active_result_variant"] = "subtitled"
+	} else if resultURL != "" {
+		if originalResultURL == "" {
+			task.RenderConfig["original_result_url"] = resultURL
+		} else {
+			task.RenderConfig["original_result_url"] = originalResultURL
+		}
+		task.RenderConfig["active_result_variant"] = "original"
+	}
+	if err := s.repo.UpdateTask(ctx, task); err != nil {
+		s.logger.Warn("compose: persist result variants failed", zap.Int64("task_id", taskID), zap.Error(err))
+	}
 	go os.RemoveAll(filepath.Dir(mergedPath))
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageDone)
 	finalDuration := totalDur

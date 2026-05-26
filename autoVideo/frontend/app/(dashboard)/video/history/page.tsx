@@ -180,6 +180,10 @@ export default function ManualVideoHistoryPage() {
             const subtitleText = String(task.subtitle_text || task.render_config?.subtitle_text || '').trim()
             const audioSummary = dialogues.join(' / ') || subtitleText
             const nativeAudioEnabled = Boolean(task.render_config?.generate_audio)
+            const originalResultUrl = String(task.render_config?.original_result_url || '').trim()
+            const subtitledResultUrl = String(task.render_config?.subtitled_result_url || '').trim()
+            const activeResultVariant = String(task.render_config?.active_result_variant || '').trim()
+            const previewUrl = subtitledResultUrl || task.result_url || originalResultUrl
             return (
               <div key={task.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -222,7 +226,7 @@ export default function ManualVideoHistoryPage() {
                     <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction(`cancel-${task.id}`, () => videoAPI.cancelVideoTask(task.id), '已取消/删除任务')}>
                       {busyAction === `cancel-${task.id}` ? '处理中…' : '取消'}
                     </Button>
-                    {task.result_url && (
+                    {previewUrl && (
                       <>
                         <Button variant="outline" asChild>
                           <Link href={`/video/history/${task.id}?preview=1`}>在线查看</Link>
@@ -237,16 +241,34 @@ export default function ManualVideoHistoryPage() {
                           </Button>
                         )}
                         <Button variant="outline" asChild>
-                          <a href={task.result_url} target="_blank" rel="noreferrer">结果</a>
+                          <a href={previewUrl} target="_blank" rel="noreferrer">当前结果</a>
                         </Button>
+                        {originalResultUrl && (
+                          <Button variant="outline" asChild>
+                            <a href={originalResultUrl} target="_blank" rel="noreferrer">原视频</a>
+                          </Button>
+                        )}
+                        {subtitledResultUrl && (
+                          <Button variant="outline" asChild>
+                            <a href={subtitledResultUrl} target="_blank" rel="noreferrer">字幕版</a>
+                          </Button>
+                        )}
                       </>
                     )}
                   </div>
                 </div>
-                {task.result_url && (
+                {previewUrl && (
                   <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
-                    <div className="mb-2 text-xs text-slate-400">在线预览</div>
-                    <video className="max-h-[360px] w-full rounded-lg bg-black" controls preload="metadata" src={task.result_url} />
+                    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                      <span>在线预览</span>
+                      <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200">
+                        {activeResultVariant === 'subtitled' ? '当前默认：字幕版' : '当前默认：原视频'}
+                      </span>
+                      {originalResultUrl && subtitledResultUrl && (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300">已保留原视频 + 字幕版</span>
+                      )}
+                    </div>
+                    <video className="max-h-[360px] w-full rounded-lg bg-black" controls preload="metadata" src={previewUrl} />
                   </div>
                 )}
               </div>
