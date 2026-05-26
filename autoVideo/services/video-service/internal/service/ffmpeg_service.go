@@ -942,7 +942,7 @@ func buildSRTFromSegments(segments []whisperClient.Segment) string {
 }
 
 func buildSRTFromSegmentsWithReference(segments []whisperClient.Segment, referenceText string) string {
-	referenceLines := splitSubtitleLines(referenceText)
+	referenceLines := splitProvidedSubtitleLines(referenceText)
 	if len(referenceLines) == 0 {
 		return buildSRTFromSegments(segments)
 	}
@@ -967,6 +967,26 @@ func buildSRTFromSegmentsWithReference(segments []whisperClient.Segment, referen
 	}
 	srt, _ := buildWindowedSRT(1, start, end, referenceLines)
 	return srt
+}
+
+func splitProvidedSubtitleLines(text string) []string {
+	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\r", "\n")
+	if normalized == "" {
+		return nil
+	}
+	chunks := strings.Split(normalized, "\n")
+	lines := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		lines = append(lines, chunk)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return lines
 }
 
 func buildWindowedSRT(seqStart int, start, end float64, parts []string) (string, int) {
