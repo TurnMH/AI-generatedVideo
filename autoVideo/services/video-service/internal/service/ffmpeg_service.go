@@ -1057,10 +1057,10 @@ func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, r
 		style.FontSize = 18
 	}
 	if style.FontColor == "" {
-		style.FontColor = "&H00F3F3F3"
+		style.FontColor = "&H00FFFFFF"
 	}
 	if style.HighlightColor == "" {
-		style.HighlightColor = "&H00FFB347"
+		style.HighlightColor = "&H00FFD700"
 	}
 	if style.OutlineColor == "" {
 		style.OutlineColor = "&H00000000"
