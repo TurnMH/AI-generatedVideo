@@ -101,8 +101,24 @@ func escapeSubtitleForceStyle(style string) string {
 	return fmt.Sprintf("'%s'", style)
 }
 
+func resolvePreferredFFmpegBin(bin string) string {
+	trimmed := strings.TrimSpace(bin)
+	preferred := "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
+	if trimmed == "" || trimmed == "ffmpeg" || trimmed == "/opt/homebrew/bin/ffmpeg" {
+		if _, err := os.Stat(preferred); err == nil {
+			return preferred
+		}
+		if trimmed == "" {
+			return "ffmpeg"
+		}
+		return trimmed
+	}
+	return trimmed
+}
+
 // NewFFmpegService —— 创建 FFmpeg 服务实例，设置临时目录和二进制路径
 func NewFFmpegService(tempDir, bin string) *FFmpegService {
+	bin = resolvePreferredFFmpegBin(bin)
 	if bin == "" {
 		bin = "ffmpeg"
 	}
