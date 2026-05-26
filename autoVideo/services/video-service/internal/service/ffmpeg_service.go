@@ -1083,7 +1083,7 @@ func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, r
 	out.WriteString("[V4+ Styles]\n")
 	fmt.Fprintf(&out, "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n")
 	fmt.Fprintf(&out, "Style: Default,%s,%d,%s,%s,%s,&H00000000,%d,0,0,0,100,100,0,0,1,%d,0,%d,24,24,%d,1\n\n",
-		style.FontName, style.FontSize, style.HighlightColor, style.FontColor, style.OutlineColor, bold, style.OutlineWidth, style.Alignment, style.MarginV)
+		style.FontName, style.FontSize, style.FontColor, style.HighlightColor, style.OutlineColor, bold, style.OutlineWidth, style.Alignment, style.MarginV)
 	out.WriteString("[Events]\n")
 	out.WriteString("Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
 
@@ -1092,13 +1092,10 @@ func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, r
 		if len(lw.words) == 0 || strings.TrimSpace(lw.text) == "" {
 			continue
 		}
-		start := lw.words[0].Start
-		end := lw.words[len(lw.words)-1].End
-		if end <= start {
-			end = start + 0.5
+		events := buildASSActiveTokenEvents(lw.text, lw.words, style)
+		for _, ev := range events {
+			fmt.Fprintf(&out, "Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", assTimestamp(ev.Start), assTimestamp(ev.End), ev.Text)
 		}
-		karaokeText := buildASSKaraokeText(lw.text, lw.words)
-		fmt.Fprintf(&out, "Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", assTimestamp(start), assTimestamp(end), karaokeText)
 	}
 	return out.String()
 }
@@ -1164,28 +1161,49 @@ func alignReferenceLinesToWords(lines []string, words []whisperClient.Word) []ka
 	return result
 }
 
-func buildASSKaraokeText(referenceLine string, words []whisperClient.Word) string {
+type assActiveTokenEvent struct {
+	Start float64
+	End   float64
+	Text  string
+}
+
+func buildASSActiveTokenEvents(referenceLine string, words []whisperClient.Word, style SubtitleStyle) []assActiveTokenEvent {
 	tokens := splitSubtitleDisplayTokens(referenceLine)
 	if len(tokens) == 0 {
 		tokens = []string{strings.TrimSpace(referenceLine)}
 	}
 	assignments := alignTokensToWords(tokens, words)
-	var out strings.Builder
-	for i, token := range tokens {
-		pieces := splitKaraokeRenderPieces(token)
-		if len(pieces) == 0 {
-			pieces = []string{token}
-		}
-		pieceDurations := splitTokenDurations(pieces, assignmentsForIndex(assignments, i))
-		for j, piece := range pieces {
-			d := 8
-			if j < len(pieceDurations) && pieceDurations[j] > 0 {
-				d = pieceDurations[j]
-			}
-			out.WriteString(fmt.Sprintf("{\\k%d}%s", d, escapeASSText(piece)))
-		}
+	if len(tokens) == 0 || len(assignments) == 0 {
+		return nil
 	}
-	return out.String()
+	baseColorTag := assColorTag(style.FontColor)
+	highlightColorTag := assColorTag(style.HighlightColor)
+	resetTag := baseColorTag
+	events := make([]assActiveTokenEvent, 0, len(tokens))
+	for i := range tokens {
+		assigned := assignmentsForIndex(assignments, i)
+		if len(assigned) == 0 {
+			continue
+		}
+		start := assigned[0].Start
+		end := assigned[len(assigned)-1].End
+		if end <= start {
+			end = start + 0.08
+		}
+		var text strings.Builder
+		text.WriteString(baseColorTag)
+		for j, part := range tokens {
+			if j == i {
+				text.WriteString(highlightColorTag)
+				text.WriteString(escapeASSText(part))
+				text.WriteString(resetTag)
+			} else {
+				text.WriteString(escapeASSText(part))
+			}
+		}
+		events = append(events, assActiveTokenEvent{Start: start, End: end, Text: text.String()})
+	}
+	return events
 }
 
 func alignTokensToWords(tokens []string, words []whisperClient.Word) [][]whisperClient.Word {
@@ -1390,6 +1408,17 @@ func escapeASSText(text string) string {
 	text = strings.ReplaceAll(text, `}`, `\\}`)
 	text = strings.ReplaceAll(text, "\n", `\\N`)
 	return text
+}
+
+func assColorTag(color string) string {
+	color = strings.TrimSpace(color)
+	if color == "" {
+		return ""
+	}
+	if !strings.HasPrefix(color, "&H") {
+		return ""
+	}
+	return fmt.Sprintf("{\\c%s}", color)
 }
 
 func buildWindowedSRT(seqStart int, start, end float64, parts []string) (string, int) {
