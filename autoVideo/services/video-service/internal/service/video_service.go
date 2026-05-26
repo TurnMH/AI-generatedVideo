@@ -1054,15 +1054,37 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	// Burn subtitles: prefer timed VTT URL over plain text
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageSubtitle)
 	subtitleStyle2 := parseSubtitleStyle(task.RenderConfig)
-	if subtitleURL2 != "" {
-		if p, err := s.ffmpeg.AddSubtitleFromVTTWithStyle(ctx, finalPath, subtitleURL2, subtitleStyle2); err == nil {
-			finalPath = p
-		} else {
-			s.logger.Warn("compose: add vtt subtitle failed", zap.Error(err))
-		}
-	} else if subtitleText != "" {
-		if p, err := s.ffmpeg.AddSubtitleWithStyle(ctx, finalPath, subtitleText, subtitleStyle2); err == nil {
-			finalPath = p
+	subtitleRequested := subtitleURL2 != "" || subtitleText != ""
+	subtitleApplied := false
+	subtitleStatus := "not_requested"
+	subtitleError := ""
+	if subtitleRequested {
+		if ok, reason := s.ffmpeg.SupportsSubtitleBurn(ctx); !ok {
+			subtitleStatus = "failed"
+			subtitleError = reason
+			s.logger.Warn("compose: subtitle burn unavailable",
+				zap.Int64("task_id", taskID),
+				zap.String("reason", reason))
+		} else if subtitleURL2 != "" {
+			if p, err := s.ffmpeg.AddSubtitleFromVTTWithStyle(ctx, finalPath, subtitleURL2, subtitleStyle2); err == nil {
+				finalPath = p
+				subtitleApplied = true
+				subtitleStatus = "applied"
+			} else {
+				subtitleStatus = "failed"
+				subtitleError = err.Error()
+				s.logger.Warn("compose: add vtt subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
+			}
+		} else if subtitleText != "" {
+			if p, err := s.ffmpeg.AddSubtitleWithStyle(ctx, finalPath, subtitleText, subtitleStyle2); err == nil {
+				finalPath = p
+				subtitleApplied = true
+				subtitleStatus = "applied"
+			} else {
+				subtitleStatus = "failed"
+				subtitleError = err.Error()
+				s.logger.Warn("compose: add subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
+			}
 		}
 	}
 
@@ -1087,8 +1109,14 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 		task.RenderConfig = model.RenderConfig{}
 	}
 	originalResultURL := firstNonEmpty(renderConfigString(task.RenderConfig, "original_result_url"), strings.TrimSpace(task.ResultURL))
-	subtitleVariantApplied := subtitleURL2 != "" || subtitleText != ""
-	if subtitleVariantApplied {
+	task.RenderConfig["subtitle_compose_requested"] = subtitleRequested
+	task.RenderConfig["subtitle_compose_status"] = subtitleStatus
+	if subtitleError != "" {
+		task.RenderConfig["subtitle_compose_error"] = subtitleError
+	} else {
+		delete(task.RenderConfig, "subtitle_compose_error")
+	}
+	if subtitleApplied {
 		if originalResultURL != "" && originalResultURL != resultURL {
 			task.RenderConfig["original_result_url"] = originalResultURL
 		}
@@ -1100,6 +1128,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 		} else {
 			task.RenderConfig["original_result_url"] = originalResultURL
 		}
+		delete(task.RenderConfig, "subtitled_result_url")
 		task.RenderConfig["active_result_variant"] = "original"
 	}
 	if err := s.repo.UpdateTask(ctx, task); err != nil {

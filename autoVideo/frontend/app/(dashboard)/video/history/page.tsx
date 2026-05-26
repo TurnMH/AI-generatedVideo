@@ -184,6 +184,8 @@ export default function ManualVideoHistoryPage() {
             const originalResultUrl = String(task.render_config?.original_result_url || '').trim()
             const subtitledResultUrl = String(task.render_config?.subtitled_result_url || '').trim()
             const activeResultVariant = String(task.render_config?.active_result_variant || '').trim()
+            const subtitleComposeStatus = String(task.render_config?.subtitle_compose_status || '').trim()
+            const subtitleComposeError = String(task.render_config?.subtitle_compose_error || '').trim()
             const previewVariant = previewVariantMap[task.id] || (activeResultVariant === 'subtitled' ? 'subtitled' : 'current')
             const previewUrl = previewVariant === 'original'
               ? (originalResultUrl || task.result_url || subtitledResultUrl)
@@ -204,6 +206,8 @@ export default function ManualVideoHistoryPage() {
                       <span className="rounded-full bg-slate-800 px-2.5 py-1 text-slate-200">provider: {providerBadge}</span>
                       <span className={`rounded-full px-2.5 py-1 ${hasResult ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{hasResult ? '结果已就绪' : '结果未就绪'}</span>
                       <span className={`rounded-full px-2.5 py-1 ${hasError ? 'bg-rose-500/15 text-rose-300' : 'bg-slate-800 text-slate-300'}`}>{hasError ? '存在错误' : '无错误'}</span>
+                      {subtitleComposeStatus === 'applied' && <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-emerald-300">字幕烧录成功</span>}
+                      {subtitleComposeStatus === 'failed' && <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-amber-300">字幕烧录失败</span>}
                     </div>
                     {audioSummary && (
                       <div className="mt-3 rounded-lg border border-violet-400/20 bg-violet-400/5 px-3 py-2 text-xs text-violet-100">
@@ -212,6 +216,11 @@ export default function ManualVideoHistoryPage() {
                           <span className={`rounded-full px-2 py-0.5 text-[10px] ${nativeAudioEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}>{nativeAudioEnabled ? 'native audio' : '非 native audio'}</span>
                         </div>
                         <div className="line-clamp-3 whitespace-pre-wrap break-words">{audioSummary}</div>
+                      </div>
+                    )}
+                    {subtitleComposeStatus === 'failed' && (
+                      <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-100">
+                        字幕烧录失败：{subtitleComposeError || '当前 ffmpeg 环境不支持字幕滤镜或烧录失败'}
                       </div>
                     )}
                     {task.error_msg && (

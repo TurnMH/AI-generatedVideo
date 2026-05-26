@@ -649,6 +649,29 @@ func (f *FFmpegService) RunFFmpeg(ctx context.Context, args ...string) error {
 	return nil
 }
 
+func (f *FFmpegService) ffmpegCombinedOutput(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, f.Bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("ffmpeg: %w\n%s", err, string(out))
+	}
+	return string(out), nil
+}
+
+func (f *FFmpegService) SupportsSubtitleBurn(ctx context.Context) (bool, string) {
+	out, err := f.ffmpegCombinedOutput(ctx, "-hide_banner", "-filters")
+	if err != nil {
+		return false, err.Error()
+	}
+	hasSubtitles := strings.Contains(out, " subtitles ") || strings.Contains(out, "subtitles")
+	hasDrawtext := strings.Contains(out, " drawtext ") || strings.Contains(out, "drawtext")
+	hasAss := strings.Contains(out, " ass ") || strings.Contains(out, "ass")
+	if hasSubtitles || hasDrawtext || hasAss {
+		return true, ""
+	}
+	return false, "ffmpeg build missing subtitle filters (subtitles/drawtext/ass)"
+}
+
 func (f *FFmpegService) ProbeDuration(ctx context.Context, mediaPath string) (float64, error) {
 	out, err := f.runFFprobe(ctx,
 		"-v", "error",

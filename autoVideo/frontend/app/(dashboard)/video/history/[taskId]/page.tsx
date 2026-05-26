@@ -84,6 +84,8 @@ export default function ManualVideoHistoryDetailPage() {
   const originalResultUrl = String(task?.render_config?.original_result_url || '').trim()
   const subtitledResultUrl = String(task?.render_config?.subtitled_result_url || '').trim()
   const activeResultVariant = String(task?.render_config?.active_result_variant || '').trim()
+  const subtitleComposeStatus = String(task?.render_config?.subtitle_compose_status || '').trim()
+  const subtitleComposeError = String(task?.render_config?.subtitle_compose_error || '').trim()
   const previewUrl = previewVariant === 'original'
     ? (originalResultUrl || task?.result_url || subtitledResultUrl)
     : previewVariant === 'subtitled'
@@ -140,6 +142,8 @@ export default function ManualVideoHistoryDetailPage() {
                 <div className="md:col-span-2 break-all">result_url：{task.result_url || '-'}</div>
                 <div className="md:col-span-2 break-all">original_result_url：{originalResultUrl || '-'}</div>
                 <div className="md:col-span-2 break-all">subtitled_result_url：{subtitledResultUrl || '-'}</div>
+                <div>subtitle_compose_status：{subtitleComposeStatus || '-'}</div>
+                <div className="md:col-span-2 break-all">subtitle_compose_error：{subtitleComposeError || '-'}</div>
                 <div className="md:col-span-2">error_msg：{task.error_msg || '-'}</div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -187,6 +191,12 @@ export default function ManualVideoHistoryDetailPage() {
               {previewUrl && (
                 <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    {subtitleComposeStatus === 'failed' && (
+                      <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-300">字幕烧录失败</span>
+                    )}
+                    {subtitleComposeStatus === 'applied' && (
+                      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">字幕烧录成功</span>
+                    )}
                     <span>任务结果在线查看</span>
                     <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-200">
                       {activeResultVariant === 'subtitled' ? '当前默认：字幕版' : '当前默认：原视频'}
