@@ -74,6 +74,7 @@ export default function ManualVideoHistoryPage() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [busyAction, setBusyAction] = useState('')
+  const [previewVariantMap, setPreviewVariantMap] = useState<Record<number, 'current' | 'original' | 'subtitled'>>({})
   const { data, isLoading, mutate } = useSWR('manual-video-history-backend', () => videoAPI.listAllTasks({ page: 1, page_size: 100 }), {
     refreshInterval: (latest) => {
       const items = ((latest as { data?: { items?: BackendTask[] } } | undefined)?.data?.items || []) as BackendTask[]
@@ -183,7 +184,12 @@ export default function ManualVideoHistoryPage() {
             const originalResultUrl = String(task.render_config?.original_result_url || '').trim()
             const subtitledResultUrl = String(task.render_config?.subtitled_result_url || '').trim()
             const activeResultVariant = String(task.render_config?.active_result_variant || '').trim()
-            const previewUrl = subtitledResultUrl || task.result_url || originalResultUrl
+            const previewVariant = previewVariantMap[task.id] || (activeResultVariant === 'subtitled' ? 'subtitled' : 'current')
+            const previewUrl = previewVariant === 'original'
+              ? (originalResultUrl || task.result_url || subtitledResultUrl)
+              : previewVariant === 'subtitled'
+                ? (subtitledResultUrl || task.result_url || originalResultUrl)
+                : (task.result_url || subtitledResultUrl || originalResultUrl)
             return (
               <div key={task.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -268,6 +274,35 @@ export default function ManualVideoHistoryPage() {
                         <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300">已保留原视频 + 字幕版</span>
                       )}
                     </div>
+                    {(originalResultUrl || subtitledResultUrl) && (
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant={previewVariant === 'current' ? 'default' : 'outline'}
+                          onClick={() => setPreviewVariantMap((prev) => ({ ...prev, [task.id]: 'current' }))}
+                        >
+                          当前结果预览
+                        </Button>
+                        {originalResultUrl && (
+                          <Button
+                            size="sm"
+                            variant={previewVariant === 'original' ? 'default' : 'outline'}
+                            onClick={() => setPreviewVariantMap((prev) => ({ ...prev, [task.id]: 'original' }))}
+                          >
+                            原视频预览
+                          </Button>
+                        )}
+                        {subtitledResultUrl && (
+                          <Button
+                            size="sm"
+                            variant={previewVariant === 'subtitled' ? 'default' : 'outline'}
+                            onClick={() => setPreviewVariantMap((prev) => ({ ...prev, [task.id]: 'subtitled' }))}
+                          >
+                            字幕版预览
+                          </Button>
+                        )}
+                      </div>
+                    )}
                     <video className="max-h-[360px] w-full rounded-lg bg-black" controls preload="metadata" src={previewUrl} />
                   </div>
                 )}

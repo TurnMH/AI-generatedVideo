@@ -44,6 +44,7 @@ export default function ManualVideoHistoryDetailPage() {
   const params = useParams<{ taskId: string }>()
   const { toast } = useToast()
   const [busyAction, setBusyAction] = useState('')
+  const [previewVariant, setPreviewVariant] = useState<'current' | 'original' | 'subtitled'>('current')
   const taskId = Number(params?.taskId || 0)
   const { data, isLoading, mutate } = useSWR(taskId ? `manual-video-task-${taskId}` : null, () => videoAPI.getTask<TaskShape>(taskId), {
     refreshInterval: (latest) => {
@@ -83,7 +84,11 @@ export default function ManualVideoHistoryDetailPage() {
   const originalResultUrl = String(task?.render_config?.original_result_url || '').trim()
   const subtitledResultUrl = String(task?.render_config?.subtitled_result_url || '').trim()
   const activeResultVariant = String(task?.render_config?.active_result_variant || '').trim()
-  const previewUrl = subtitledResultUrl || task?.result_url || originalResultUrl
+  const previewUrl = previewVariant === 'original'
+    ? (originalResultUrl || task?.result_url || subtitledResultUrl)
+    : previewVariant === 'subtitled'
+      ? (subtitledResultUrl || task?.result_url || originalResultUrl)
+      : (task?.result_url || subtitledResultUrl || originalResultUrl)
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
     try {
@@ -190,6 +195,23 @@ export default function ManualVideoHistoryDetailPage() {
                       <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300">已保留原视频 + 字幕版</span>
                     )}
                   </div>
+                  {(originalResultUrl || subtitledResultUrl) && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      <Button size="sm" variant={previewVariant === 'current' ? 'default' : 'outline'} onClick={() => setPreviewVariant('current')}>
+                        当前结果预览
+                      </Button>
+                      {originalResultUrl && (
+                        <Button size="sm" variant={previewVariant === 'original' ? 'default' : 'outline'} onClick={() => setPreviewVariant('original')}>
+                          原视频预览
+                        </Button>
+                      )}
+                      {subtitledResultUrl && (
+                        <Button size="sm" variant={previewVariant === 'subtitled' ? 'default' : 'outline'} onClick={() => setPreviewVariant('subtitled')}>
+                          字幕版预览
+                        </Button>
+                      )}
+                    </div>
+                  )}
                   <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={previewUrl} />
                 </div>
               )}
