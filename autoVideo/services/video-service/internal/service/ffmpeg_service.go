@@ -879,8 +879,14 @@ func buildSRTFromSegments(segments []whisperClient.Segment) string {
 	var out strings.Builder
 	seq := 1
 	for _, seg := range segments {
-		text := strings.TrimSpace(seg.Text)
-		if text == "" {
+		parts := splitSubtitleLines(seg.Text)
+		if len(parts) == 0 {
+			text := strings.TrimSpace(seg.Text)
+			if text != "" {
+				parts = []string{text}
+			}
+		}
+		if len(parts) == 0 {
 			continue
 		}
 		start := seg.Start
@@ -888,8 +894,52 @@ func buildSRTFromSegments(segments []whisperClient.Segment) string {
 		if end <= start {
 			end = start + 0.5
 		}
-		fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", seq, secondsToSRTTimestamp(start), secondsToSRTTimestamp(end), text)
-		seq++
+		duration := end - start
+		weights := make([]int, len(parts))
+		totalWeight := 0
+		for i, part := range parts {
+			w := utf8.RuneCountInString(strings.TrimSpace(part))
+			if w <= 0 {
+				w = 1
+			}
+			weights[i] = w
+			totalWeight += w
+		}
+		if totalWeight <= 0 {
+			totalWeight = len(parts)
+		}
+		elapsed := start
+		for i, part := range parts {
+			remainingWeight := 0
+			for _, w := range weights[i:] {
+				remainingWeight += w
+			}
+			piece := end - elapsed
+			if i < len(parts)-1 && remainingWeight > 0 {
+				piece = duration * float64(weights[i]) / float64(totalWeight)
+				if piece < 0.35 {
+					piece = 0.35
+				}
+				maxAllowed := end - elapsed - 0.15*float64(len(parts)-i-1)
+				if maxAllowed > 0 && piece > maxAllowed {
+					piece = maxAllowed
+				}
+			}
+			if piece <= 0 {
+				piece = 0.35
+			}
+			cueStart := elapsed
+			cueEnd := elapsed + piece
+			if i == len(parts)-1 || cueEnd > end {
+				cueEnd = end
+			}
+			if cueEnd <= cueStart {
+				cueEnd = cueStart + 0.25
+			}
+			fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", seq, secondsToSRTTimestamp(cueStart), secondsToSRTTimestamp(cueEnd), strings.TrimSpace(part))
+			seq++
+			elapsed = cueEnd
+		}
 	}
 	return out.String()
 }
