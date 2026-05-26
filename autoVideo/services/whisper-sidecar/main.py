@@ -54,15 +54,23 @@ class TranscribeRequest(BaseModel):
     reference_text: Optional[str] = None
 
 
+class WordInfo(BaseModel):
+    start: float
+    end: float
+    word: str
+
+
 class SegmentInfo(BaseModel):
     start: float
     end: float
     text: str
+    words: list[WordInfo] = []
 
 
 class TranscribeResponse(BaseModel):
     srt: str
     segments: list[SegmentInfo]
+    words: list[WordInfo] = []
     language: str
 
 
@@ -118,6 +126,7 @@ def transcribe(req: TranscribeRequest):
             "beam_size": 5,
             "vad_filter": True,
             "vad_parameters": dict(min_silence_duration_ms=500),
+            "word_timestamps": True,
         }
         if req.language == "zh" or (not req.language):
             kwargs["initial_prompt"] = "以下是普通话的句子，请用简体中文输出。"
@@ -133,14 +142,29 @@ def transcribe(req: TranscribeRequest):
             pass
 
     srt = _segments_to_srt(segments)
-    seg_infos = [
-        SegmentInfo(start=s.start, end=s.end, text=s.text.strip())
-        for s in segments if s.text.strip()
-    ]
+    seg_infos = []
+    all_words = []
+    for s in segments:
+        text = s.text.strip()
+        if not text:
+            continue
+        seg_words = []
+        for w in getattr(s, "words", []) or []:
+            word_text = getattr(w, "word", "") or ""
+            word_text = word_text.strip()
+            start = float(getattr(w, "start", 0.0) or 0.0)
+            end = float(getattr(w, "end", start) or start)
+            if not word_text or end <= start:
+                continue
+            word = WordInfo(start=start, end=end, word=word_text)
+            seg_words.append(word)
+            all_words.append(word)
+        seg_infos.append(SegmentInfo(start=s.start, end=s.end, text=text, words=seg_words))
 
     return TranscribeResponse(
         srt=srt,
         segments=seg_infos,
+        words=all_words,
         language=info.language,
     )
 

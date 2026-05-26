@@ -34,17 +34,26 @@ type TranscribeRequest struct {
 	ReferenceText string `json:"reference_text,omitempty"`
 }
 
+// Word is a single timed word/character token.
+type Word struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Word  string  `json:"word"`
+}
+
 // Segment is a single timed subtitle segment.
 type Segment struct {
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
 	Text  string  `json:"text"`
+	Words []Word  `json:"words,omitempty"`
 }
 
 // TranscribeResponse is returned by the sidecar.
 type TranscribeResponse struct {
 	SRT      string    `json:"srt"`
 	Segments []Segment `json:"segments"`
+	Words    []Word    `json:"words,omitempty"`
 	Language string    `json:"language"`
 }
 

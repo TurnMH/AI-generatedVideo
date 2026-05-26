@@ -27,14 +27,15 @@ type FFmpegService struct {
 
 // SubtitleStyle controls the visual appearance of burned-in subtitles.
 type SubtitleStyle struct {
-	FontName    string  // e.g. "Arial", "NotoSansCJK" (default: "Arial")
-	FontSize    int     // default 24
-	FontColor   string  // e.g. "white", "&H00FFFFFF" (default: "white")
-	OutlineColor string // e.g. "black", "&H00000000" (default: "black")
-	OutlineWidth int    // default 2
-	Bold        bool
-	Alignment   int     // ASS alignment (2=bottom-center, 8=top-center, default: 2)
-	MarginV     int     // vertical margin in pixels (default: 20)
+	FontName       string // e.g. "Arial", "NotoSansCJK" (default: "Arial")
+	FontSize       int    // default 24
+	FontColor      string // e.g. "white", "&H00FFFFFF" (default: "white")
+	OutlineColor   string // e.g. "black", "&H00000000" (default: "black")
+	OutlineWidth   int    // default 2
+	HighlightColor string // current-word highlight color for ASS karaoke
+	Bold           bool
+	Alignment      int // ASS alignment (2=bottom-center, 8=top-center, default: 2)
+	MarginV        int // vertical margin in pixels (default: 20)
 }
 
 // ForceStyle returns the FFmpeg ASS force_style string for this SubtitleStyle.
@@ -396,6 +397,14 @@ func (f *FFmpegService) AddSubtitleFromSegmentsWithStyle(ctx context.Context, vi
 	return f.addSubtitleFromSRTContent(ctx, videoPath, srtContent, style)
 }
 
+func (f *FFmpegService) AddKaraokeSubtitleFromWordsWithStyle(ctx context.Context, videoPath string, words []whisperClient.Word, style SubtitleStyle, referenceText string) (string, error) {
+	assContent := buildASSKaraokeFromWords(words, style, referenceText)
+	if strings.TrimSpace(assContent) == "" {
+		return "", fmt.Errorf("empty karaoke subtitle content")
+	}
+	return f.addSubtitleFromASSContent(ctx, videoPath, assContent)
+}
+
 func (f *FFmpegService) addSubtitleFromSRTContent(ctx context.Context, videoPath, srtContent string, style SubtitleStyle) (string, error) {
 	workDir := filepath.Dir(videoPath)
 	srtPath := filepath.Join(workDir, "sub.srt")
@@ -411,6 +420,24 @@ func (f *FFmpegService) addSubtitleFromSRTContent(ctx context.Context, videoPath
 		output,
 	); err != nil {
 		return "", fmt.Errorf("add subtitle ffmpeg: %w", err)
+	}
+	return output, nil
+}
+
+func (f *FFmpegService) addSubtitleFromASSContent(ctx context.Context, videoPath, assContent string) (string, error) {
+	workDir := filepath.Dir(videoPath)
+	assPath := filepath.Join(workDir, "sub.ass")
+	if err := os.WriteFile(assPath, []byte(assContent), 0o644); err != nil {
+		return "", fmt.Errorf("write ass: %w", err)
+	}
+	output := filepath.Join(workDir, "with_sub.mp4")
+	subtitleFilter := fmt.Sprintf("ass=%s", escapeSubtitleFilterPath(assPath))
+	if err := f.RunFFmpeg(ctx,
+		"-i", videoPath,
+		"-vf", subtitleFilter,
+		output,
+	); err != nil {
+		return "", fmt.Errorf("add ass subtitle ffmpeg: %w", err)
 	}
 	return output, nil
 }
@@ -987,6 +1014,279 @@ func splitProvidedSubtitleLines(text string) []string {
 		return nil
 	}
 	return lines
+}
+
+func assTimestamp(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	hours := int(seconds) / 3600
+	minutes := (int(seconds) % 3600) / 60
+	secs := int(seconds) % 60
+	centis := int((seconds-float64(int(seconds)))*100 + 0.5)
+	if centis >= 100 {
+		centis = 99
+	}
+	return fmt.Sprintf("%d:%02d:%02d.%02d", hours, minutes, secs, centis)
+}
+
+func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, referenceText string) string {
+	lines := splitProvidedSubtitleLines(referenceText)
+	if len(lines) == 0 || len(words) == 0 {
+		return ""
+	}
+	cleanWords := make([]whisperClient.Word, 0, len(words))
+	for _, w := range words {
+		text := strings.TrimSpace(w.Word)
+		if text == "" {
+			continue
+		}
+		if w.End <= w.Start {
+			continue
+		}
+		w.Word = text
+		cleanWords = append(cleanWords, w)
+	}
+	if len(cleanWords) == 0 {
+		return ""
+	}
+	if style.FontName == "" {
+		style.FontName = "Arial"
+	}
+	if style.FontSize == 0 {
+		style.FontSize = 18
+	}
+	if style.FontColor == "" {
+		style.FontColor = "&H00FFFFFF"
+	}
+	if style.HighlightColor == "" {
+		style.HighlightColor = "&H00FFCC99"
+	}
+	if style.OutlineColor == "" {
+		style.OutlineColor = "&H00000000"
+	}
+	if style.OutlineWidth == 0 {
+		style.OutlineWidth = 2
+	}
+	if style.Alignment == 0 {
+		style.Alignment = 2
+	}
+	if style.MarginV == 0 {
+		style.MarginV = 36
+	}
+	bold := 0
+	if style.Bold {
+		bold = -1
+	}
+	var out strings.Builder
+	out.WriteString("[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n")
+	out.WriteString("[V4+ Styles]\n")
+	fmt.Fprintf(&out, "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n")
+	fmt.Fprintf(&out, "Style: Default,%s,%d,%s,%s,%s,&H00000000,%d,0,0,0,100,100,0,0,1,%d,0,%d,24,24,%d,1\n\n",
+		style.FontName, style.FontSize, style.FontColor, style.HighlightColor, style.OutlineColor, bold, style.OutlineWidth, style.Alignment, style.MarginV)
+	out.WriteString("[Events]\n")
+	out.WriteString("Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
+
+	lineWords := alignReferenceLinesToWords(lines, cleanWords)
+	for _, lw := range lineWords {
+		if len(lw.words) == 0 || strings.TrimSpace(lw.text) == "" {
+			continue
+		}
+		start := lw.words[0].Start
+		end := lw.words[len(lw.words)-1].End
+		if end <= start {
+			end = start + 0.5
+		}
+		karaokeText := buildASSKaraokeText(lw.text, lw.words)
+		fmt.Fprintf(&out, "Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", assTimestamp(start), assTimestamp(end), karaokeText)
+	}
+	return out.String()
+}
+
+type karaokeLine struct {
+	text  string
+	words []whisperClient.Word
+}
+
+func alignReferenceLinesToWords(lines []string, words []whisperClient.Word) []karaokeLine {
+	if len(lines) == 0 || len(words) == 0 {
+		return nil
+	}
+	result := make([]karaokeLine, 0, len(lines))
+	cursor := 0
+	remainingLines := len(lines)
+	remainingWords := len(words)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			remainingLines--
+			continue
+		}
+		if remainingLines <= 0 {
+			remainingLines = 1
+		}
+		assign := 1
+		if remainingLines == 1 {
+			assign = remainingWords
+		} else {
+			weight := utf8.RuneCountInString(removeSubtitleSeparators(line))
+			totalWeight := 0
+			for _, rest := range lines[len(result):] {
+				totalWeight += maxInt(utf8.RuneCountInString(removeSubtitleSeparators(strings.TrimSpace(rest))), 1)
+			}
+			if totalWeight <= 0 {
+				totalWeight = remainingLines
+			}
+			assign = int(float64(remainingWords) * float64(maxInt(weight, 1)) / float64(totalWeight))
+			if assign < 1 {
+				assign = 1
+			}
+			maxAllowed := remainingWords - (remainingLines - 1)
+			if assign > maxAllowed {
+				assign = maxAllowed
+			}
+		}
+		end := cursor + assign
+		if end > len(words) {
+			end = len(words)
+		}
+		result = append(result, karaokeLine{text: line, words: words[cursor:end]})
+		remainingWords -= end - cursor
+		remainingLines--
+		cursor = end
+		if cursor >= len(words) {
+			break
+		}
+	}
+	if cursor < len(words) && len(result) > 0 {
+		result[len(result)-1].words = append(result[len(result)-1].words, words[cursor:]...)
+	}
+	return result
+}
+
+func buildASSKaraokeText(referenceLine string, words []whisperClient.Word) string {
+	tokens := splitSubtitleDisplayTokens(referenceLine)
+	if len(tokens) == 0 {
+		tokens = []string{strings.TrimSpace(referenceLine)}
+	}
+	assignments := alignTokensToWords(tokens, words)
+	var out strings.Builder
+	for i, token := range tokens {
+		d := 35
+		if i < len(assignments) && len(assignments[i]) > 0 {
+			start := assignments[i][0].Start
+			end := assignments[i][len(assignments[i])-1].End
+			centis := int((end-start)*100 + 0.5)
+			if centis < 20 {
+				centis = 20
+			}
+			d = centis
+		}
+		out.WriteString(fmt.Sprintf("{\\k%d}%s", d, escapeASSText(token)))
+	}
+	return out.String()
+}
+
+func alignTokensToWords(tokens []string, words []whisperClient.Word) [][]whisperClient.Word {
+	result := make([][]whisperClient.Word, 0, len(tokens))
+	cursor := 0
+	remainingTokens := len(tokens)
+	remainingWords := len(words)
+	for _, token := range tokens {
+		clean := removeSubtitleSeparators(token)
+		weight := utf8.RuneCountInString(clean)
+		if weight <= 0 {
+			result = append(result, nil)
+			remainingTokens--
+			continue
+		}
+		assign := 1
+		if remainingTokens == 1 {
+			assign = remainingWords
+		} else {
+			totalWeight := 0
+			for _, rest := range tokens[len(result):] {
+				totalWeight += maxInt(utf8.RuneCountInString(removeSubtitleSeparators(rest)), 1)
+			}
+			if totalWeight <= 0 {
+				totalWeight = remainingTokens
+			}
+			assign = int(float64(remainingWords) * float64(maxInt(weight, 1)) / float64(totalWeight))
+			if assign < 1 {
+				assign = 1
+			}
+			maxAllowed := remainingWords - (remainingTokens - 1)
+			if assign > maxAllowed {
+				assign = maxAllowed
+			}
+		}
+		end := cursor + assign
+		if end > len(words) {
+			end = len(words)
+		}
+		result = append(result, words[cursor:end])
+		remainingWords -= end - cursor
+		remainingTokens--
+		cursor = end
+	}
+	if cursor < len(words) && len(result) > 0 {
+		result[len(result)-1] = append(result[len(result)-1], words[cursor:]...)
+	}
+	return result
+}
+
+func splitSubtitleDisplayTokens(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var tokens []string
+	var current []rune
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		tokens = append(tokens, strings.TrimSpace(string(current)))
+		current = current[:0]
+	}
+	for _, r := range []rune(text) {
+		switch {
+		case unicode.IsSpace(r):
+			flush()
+		case strings.ContainsRune("，。、！？；：,.!?;:()（）", r):
+			flush()
+		default:
+			current = append(current, r)
+		}
+	}
+	flush()
+	filtered := tokens[:0]
+	for _, t := range tokens {
+		if strings.TrimSpace(t) != "" {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+func removeSubtitleSeparators(text string) string {
+	text = strings.TrimSpace(text)
+	var b strings.Builder
+	for _, r := range []rune(text) {
+		if unicode.IsSpace(r) || strings.ContainsRune("，。、！？；：,.!?;:()（）", r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func escapeASSText(text string) string {
+	text = strings.ReplaceAll(text, `\\`, `\\\\`)
+	text = strings.ReplaceAll(text, `{`, `\\{`)
+	text = strings.ReplaceAll(text, `}`, `\\}`)
+	text = strings.ReplaceAll(text, "\n", `\\N`)
+	return text
 }
 
 func buildWindowedSRT(seqStart int, start, end float64, parts []string) (string, int) {
