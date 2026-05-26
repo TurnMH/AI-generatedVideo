@@ -50,10 +50,15 @@ type TranscribeResponse struct {
 
 // Transcribe calls the sidecar to transcribe the given audio URL.
 func (c *Client) Transcribe(ctx context.Context, audioURL, language string) (*TranscribeResponse, error) {
+	return c.TranscribeWithReference(ctx, audioURL, language, "")
+}
+
+// TranscribeWithReference calls the sidecar with optional reference text to improve alignment.
+func (c *Client) TranscribeWithReference(ctx context.Context, audioURL, language, referenceText string) (*TranscribeResponse, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("whisper sidecar URL not configured")
 	}
-	body, err := json.Marshal(TranscribeRequest{AudioURL: audioURL, Language: language})
+	body, err := json.Marshal(TranscribeRequest{AudioURL: audioURL, Language: language, ReferenceText: referenceText})
 	if err != nil {
 		return nil, fmt.Errorf("whisper: marshal request: %w", err)
 	}

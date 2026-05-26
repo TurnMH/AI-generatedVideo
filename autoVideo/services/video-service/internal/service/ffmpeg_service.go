@@ -15,6 +15,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	whisperClient "github.com/autovideo/video-service/pkg/whisper"
 )
 
 // FFmpegService provides video processing operations backed by the ffmpeg binary.
@@ -383,6 +385,19 @@ func (f *FFmpegService) AddSubtitleFromVTTWithStyle(ctx context.Context, videoPa
 		return "", fmt.Errorf("convert vtt to srt: %w", err)
 	}
 
+	return f.addSubtitleFromSRTContent(ctx, videoPath, srtContent, style)
+}
+
+func (f *FFmpegService) AddSubtitleFromSegmentsWithStyle(ctx context.Context, videoPath string, segments []whisperClient.Segment, style SubtitleStyle) (string, error) {
+	srtContent := buildSRTFromSegments(segments)
+	if strings.TrimSpace(srtContent) == "" {
+		return "", fmt.Errorf("empty subtitle segments")
+	}
+	return f.addSubtitleFromSRTContent(ctx, videoPath, srtContent, style)
+}
+
+func (f *FFmpegService) addSubtitleFromSRTContent(ctx context.Context, videoPath, srtContent string, style SubtitleStyle) (string, error) {
+	workDir := filepath.Dir(videoPath)
 	srtPath := filepath.Join(workDir, "sub.srt")
 	if err := os.WriteFile(srtPath, []byte(srtContent), 0o644); err != nil {
 		return "", fmt.Errorf("write srt: %w", err)
@@ -858,6 +873,25 @@ func secondsToSRTTimestamp(seconds float64) string {
 	secs := totalMs / 1000
 	millis := totalMs % 1000
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, secs, millis)
+}
+
+func buildSRTFromSegments(segments []whisperClient.Segment) string {
+	var out strings.Builder
+	seq := 1
+	for _, seg := range segments {
+		text := strings.TrimSpace(seg.Text)
+		if text == "" {
+			continue
+		}
+		start := seg.Start
+		end := seg.End
+		if end <= start {
+			end = start + 0.5
+		}
+		fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", seq, secondsToSRTTimestamp(start), secondsToSRTTimestamp(end), text)
+		seq++
+	}
+	return out.String()
 }
 
 // vttTimestampToSRT converts a VTT timestamp (00:00:00.000) to SRT format (00:00:00,000).

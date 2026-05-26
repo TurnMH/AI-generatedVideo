@@ -1013,10 +1013,25 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	composeNativeAudio := composeGen != nil && composeGen.SupportsNativeAudio()
 
 	subtitleURL2 := ""
+	var whisperSegments []whisperClient.Segment
 	if composeNativeAudio && !composeAttachDubbing {
 		s.logger.Info("compose: skipping dubbing attachment: model supports native audio (set render_config.attach_dubbing=true to override)",
 			zap.Int64("task_id", taskID),
 			zap.String("model", composeGen.Name()))
+		if s.whisperURL != "" {
+			transcriptSourceURL := firstNonEmpty(
+				renderConfigString(task.RenderConfig, "original_result_url"),
+				strings.TrimSpace(task.ResultURL),
+			)
+			if transcriptSourceURL != "" {
+				wc := whisperClient.NewClient(s.whisperURL)
+				if transResp, transErr := wc.TranscribeWithReference(ctx, transcriptSourceURL, "zh", subtitleText); transErr != nil {
+					s.logger.Warn("compose: whisper transcription for subtitle timing failed", zap.Int64("task_id", taskID), zap.String("source_url", transcriptSourceURL), zap.Error(transErr))
+				} else if len(transResp.Segments) > 0 {
+					whisperSegments = transResp.Segments
+				}
+			}
+		}
 	} else {
 		if audioURL == "" {
 			if dubAudio, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubAudio != "" {
@@ -1054,7 +1069,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	// Burn subtitles: prefer timed VTT URL over plain text
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageSubtitle)
 	subtitleStyle2 := parseSubtitleStyle(task.RenderConfig)
-	subtitleRequested := subtitleURL2 != "" || subtitleText != ""
+	subtitleRequested := subtitleURL2 != "" || subtitleText != "" || len(whisperSegments) > 0
 	subtitleApplied := false
 	subtitleStatus := "not_requested"
 	subtitleError := ""
@@ -1065,6 +1080,16 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 			s.logger.Warn("compose: subtitle burn unavailable",
 				zap.Int64("task_id", taskID),
 				zap.String("reason", reason))
+		} else if len(whisperSegments) > 0 {
+			if p, err := s.ffmpeg.AddSubtitleFromSegmentsWithStyle(ctx, finalPath, whisperSegments, subtitleStyle2); err == nil {
+				finalPath = p
+				subtitleApplied = true
+				subtitleStatus = "applied"
+			} else {
+				subtitleStatus = "failed"
+				subtitleError = err.Error()
+				s.logger.Warn("compose: add whisper-timed subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
+			}
 		} else if subtitleURL2 != "" {
 			if p, err := s.ffmpeg.AddSubtitleFromVTTWithStyle(ctx, finalPath, subtitleURL2, subtitleStyle2); err == nil {
 				finalPath = p
