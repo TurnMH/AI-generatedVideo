@@ -1083,7 +1083,7 @@ func buildASSKaraokeFromWords(words []whisperClient.Word, style SubtitleStyle, r
 	out.WriteString("[V4+ Styles]\n")
 	fmt.Fprintf(&out, "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n")
 	fmt.Fprintf(&out, "Style: Default,%s,%d,%s,%s,%s,&H00000000,%d,0,0,0,100,100,0,0,1,%d,0,%d,24,24,%d,1\n\n",
-		style.FontName, style.FontSize, style.FontColor, style.HighlightColor, style.OutlineColor, bold, style.OutlineWidth, style.Alignment, style.MarginV)
+		style.FontName, style.FontSize, style.HighlightColor, style.FontColor, style.OutlineColor, bold, style.OutlineWidth, style.Alignment, style.MarginV)
 	out.WriteString("[Events]\n")
 	out.WriteString("Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n")
 
