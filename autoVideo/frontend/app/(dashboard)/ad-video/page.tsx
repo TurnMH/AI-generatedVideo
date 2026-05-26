@@ -6,8 +6,10 @@ import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/toast'
-import { videoAPI, type VideoTaskDetailResponse } from '@/lib/api'
+import { projectAPI, videoAPI, type Episode, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
 
@@ -32,6 +34,21 @@ type ComposeAdResponse = {
   }
 }
 
+type ProjectPayload = {
+  code?: number
+  data?: Project
+}
+
+type EpisodesPayload = {
+  code?: number
+  data?: Episode[]
+}
+
+type ProgressPayload = {
+  code?: number
+  data?: Project['progress']
+}
+
 const parseIds = (raw: string) =>
   raw
     .split(/[\s,]+/)
@@ -49,8 +66,30 @@ const getResultUrl = (task?: Task) => {
   return String(task.result_url || subtitled || original || '').trim()
 }
 
+const unwrap = <T,>(payload: unknown): T | null => {
+  if (!payload || typeof payload !== 'object') return null
+  const maybe = payload as { data?: T }
+  return maybe.data ?? (payload as T)
+}
+
 export default function AdVideoWorkbenchPage() {
   const { toast } = useToast()
+
+  const [workflowForm, setWorkflowForm] = useState({
+    title: '口播广告工作台项目',
+    description: '在广告工作台内独立创建、生成、后处理，不再依赖单个项目页。',
+    targetEpisodes: '9',
+    stylePreset: 'realistic',
+    aspectRatio: '16:9',
+    resolution: '1080p',
+    duration: '10',
+    scriptText: '',
+  })
+  const [workflowProjectId, setWorkflowProjectId] = useState<number | null>(null)
+  const [creatingProject, setCreatingProject] = useState(false)
+  const [uploadingScript, setUploadingScript] = useState(false)
+  const [startingFlow, setStartingFlow] = useState(false)
+
   const [idsText, setIdsText] = useState(DEFAULT_IDS)
   const [orderedIds, setOrderedIds] = useState<number[]>(parseIds(DEFAULT_IDS))
   const [busy, setBusy] = useState(false)
@@ -58,6 +97,35 @@ export default function AdVideoWorkbenchPage() {
   const [resultUrl, setResultUrl] = useState('')
   const [resultTaskId, setResultTaskId] = useState<number | null>(null)
   const idsKey = useMemo(() => orderedIds.join(','), [orderedIds])
+
+  const { data: workflowProjectData, mutate: mutateProject } = useSWR(
+    workflowProjectId ? ['ad-video-project', workflowProjectId] : null,
+    async () => {
+      const res = await projectAPI.get(workflowProjectId as number)
+      return unwrap<Project>((res as { data?: ProjectPayload }).data)
+    },
+    { revalidateOnFocus: true },
+  )
+
+  const { data: workflowEpisodesData, mutate: mutateEpisodes } = useSWR(
+    workflowProjectId ? ['ad-video-episodes', workflowProjectId] : null,
+    async () => {
+      const res = await projectAPI.listEpisodes(workflowProjectId as number)
+      const payload = (res as { data?: EpisodesPayload }).data
+      return unwrap<Episode[]>(payload) ?? []
+    },
+    { refreshInterval: 5000, revalidateOnFocus: true },
+  )
+
+  const { data: workflowProgressData, mutate: mutateProgress } = useSWR(
+    workflowProjectId ? ['ad-video-progress', workflowProjectId] : null,
+    async () => {
+      const res = await projectAPI.getProgress(workflowProjectId as number)
+      const payload = (res as { data?: ProgressPayload }).data
+      return unwrap<Project['progress']>(payload)
+    },
+    { refreshInterval: 5000, revalidateOnFocus: true },
+  )
 
   const { data, mutate, isLoading } = useSWR(
     idsKey ? ['ad-video-tasks', idsKey] : null,
@@ -79,6 +147,93 @@ export default function AdVideoWorkbenchPage() {
   )
 
   const tasks = data || []
+  const workflowEpisodes = workflowEpisodesData || []
+  const workflowProgress = workflowProgressData || null
+  const workflowProject = workflowProjectData || null
+
+  const createWorkflowProject = async () => {
+    if (!workflowForm.title.trim()) {
+      toast({ title: '请先填写广告工作项目标题', variant: 'destructive' })
+      return
+    }
+    setCreatingProject(true)
+    try {
+      const res = await projectAPI.create({
+        title: workflowForm.title.trim(),
+        description: workflowForm.description.trim(),
+        project_type: 'video',
+        target_episodes: Math.max(1, Number(workflowForm.targetEpisodes) || 1),
+        enable_subtitle: true,
+        enable_dubbing: true,
+        video_mode: 'api_generation',
+        mode: 'script',
+        style_tags: ['ad-workbench'],
+        storyboard_config: {
+          aspect_ratio: workflowForm.aspectRatio,
+          resolution: workflowForm.resolution,
+          duration: Math.max(1, Number(workflowForm.duration) || 10),
+          video_mode: 'api_generation',
+          style_preset: workflowForm.stylePreset,
+          motion_mode: 'gentle',
+        },
+      })
+      const project = unwrap<Project>((res as { data?: ProjectPayload }).data)
+      if (!project?.id) {
+        throw new Error('创建广告工作项目失败：未拿到 project id')
+      }
+      setWorkflowProjectId(project.id)
+      toast({ title: `广告工作项目已创建 #${project.id}`, variant: 'success' })
+      await mutateProject()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '创建广告工作项目失败', variant: 'destructive' })
+    } finally {
+      setCreatingProject(false)
+    }
+  }
+
+  const uploadWorkflowScript = async () => {
+    if (!workflowProjectId) {
+      toast({ title: '请先创建广告工作项目', variant: 'destructive' })
+      return
+    }
+    const text = workflowForm.scriptText.trim()
+    if (!text) {
+      toast({ title: '请先粘贴广告脚本文案', variant: 'destructive' })
+      return
+    }
+    setUploadingScript(true)
+    try {
+      const filenameBase = workflowForm.title.trim() || `ad-project-${workflowProjectId}`
+      const file = new File([text], `${filenameBase}.txt`, { type: 'text/plain' })
+      await projectAPI.uploadScript(workflowProjectId, file)
+      toast({ title: '广告脚本已上传到当前工作项目', variant: 'success' })
+      await mutateProject()
+      await mutateProgress()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '上传广告脚本失败', variant: 'destructive' })
+    } finally {
+      setUploadingScript(false)
+    }
+  }
+
+  const startWorkflowGeneration = async () => {
+    if (!workflowProjectId) {
+      toast({ title: '请先创建广告工作项目', variant: 'destructive' })
+      return
+    }
+    setStartingFlow(true)
+    try {
+      await projectAPI.generateEpisodes(workflowProjectId, undefined, { force: true, autoStoryboard: true })
+      toast({ title: '已启动广告工作流基础生成（分集 + 自动分镜）', variant: 'success' })
+      await mutateEpisodes()
+      await mutateProgress()
+      await mutateProject()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '启动广告工作流失败', variant: 'destructive' })
+    } finally {
+      setStartingFlow(false)
+    }
+  }
 
   const loadIds = () => {
     const next = parseIds(idsText)
@@ -141,7 +296,9 @@ export default function AdVideoWorkbenchPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-white">口播广告工作台</h1>
-          <p className="mt-2 text-sm text-slate-300">把现有 video task 按顺序合成一个广告成片，并支持单条继续处理。</p>
+          <p className="mt-2 text-sm text-slate-300">
+            从这里独立完成广告创建、基础生成、后处理与整片合成。单个项目页后续只作为底层流程测试入口。
+          </p>
         </div>
         <div className="flex gap-2">
           <Button asChild variant="outline">
@@ -155,12 +312,160 @@ export default function AdVideoWorkbenchPage() {
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
-          <CardTitle>任务 ID 与整片合成</CardTitle>
+          <CardTitle className="text-white">一、广告工作流主入口（第一阶段骨架）</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-slate-200">广告工作项目标题</Label>
+              <Input
+                value={workflowForm.title}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="例如：李恩泽口播广告 0527"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">目标片段数 / 分集数</Label>
+              <Input
+                type="number"
+                min={1}
+                value={workflowForm.targetEpisodes}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, targetEpisodes: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-slate-200">项目说明</Label>
+              <Textarea
+                value={workflowForm.description}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, description: e.target.value }))}
+                className="min-h-[88px]"
+                placeholder="说明这次广告工作台的目标、风格、产品或人物设定。"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">画面风格</Label>
+              <select
+                value={workflowForm.stylePreset}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, stylePreset: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="realistic">真实环境 / 写实风格</option>
+                <option value="anime">动漫风格</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">画幅比例</Label>
+              <select
+                value={workflowForm.aspectRatio}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, aspectRatio: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="16:9">16:9 横屏</option>
+                <option value="9:16">9:16 竖屏</option>
+                <option value="1:1">1:1 方图</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">分辨率</Label>
+              <select
+                value={workflowForm.resolution}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, resolution: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">默认片段时长（秒）</Label>
+              <Input
+                type="number"
+                min={1}
+                value={workflowForm.duration}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-slate-200">广告脚本 / 口播文案</Label>
+              <Textarea
+                value={workflowForm.scriptText}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, scriptText: e.target.value }))}
+                className="min-h-[220px]"
+                placeholder="把整套广告脚本直接贴在这里。第一阶段先复用项目脚本上传 + 分集生成链，让广告工作台不再依赖先去单个项目页手工起流程。"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={creatingProject} onClick={createWorkflowProject}>
+              {creatingProject ? '创建中…' : '1）创建广告工作项目'}
+            </Button>
+            <Button variant="outline" disabled={!workflowProjectId || uploadingScript} onClick={uploadWorkflowScript}>
+              {uploadingScript ? '上传中…' : '2）上传当前脚本'}
+            </Button>
+            <Button variant="outline" disabled={!workflowProjectId || startingFlow} onClick={startWorkflowGeneration}>
+              {startingFlow ? '启动中…' : '3）启动基础生成（分集 + 自动分镜）'}
+            </Button>
+            {workflowProjectId && (
+              <Button variant="outline" asChild>
+                <Link href={`/projects/${workflowProjectId}`}>打开工作项目</Link>
+              </Button>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">
+            <div>当前第一阶段先复用已有项目链做底座，但入口已经前置到广告工作台内部：</div>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">
+              <li>在这里直接创建广告项目载体，而不是先去项目页手工新建。</li>
+              <li>在这里直接粘贴脚本并上传到该广告项目。</li>
+              <li>在这里直接启动分集 + 自动分镜基础流程。</li>
+              <li>后续再继续把资产生成、视频生成、排序、合成彻底前移到本页。</li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+        <CardHeader>
+          <CardTitle className="text-white">当前广告工作项目状态</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-slate-300">
+          {workflowProject ? (
+            <>
+              <div>项目：#{workflowProject.id} · {workflowProject.title}</div>
+              <div>状态：{workflowProject.status || '-'} · 目标片段数：{workflowProject.target_episodes ?? '-'}</div>
+              <div>
+                当前进度：
+                {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
+              </div>
+              {workflowEpisodes.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-slate-200">已生成的分集 / 片段载体</div>
+                  {workflowEpisodes.map((episode) => (
+                    <div key={episode.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
+                      <div className="mt-1 text-xs text-slate-400 line-clamp-2">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-400">当前还没有分集记录；启动基础生成后这里会开始出现内容。</div>
+              )}
+            </>
+          ) : (
+            <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建项目 → 上传脚本 → 启动基础生成”。</div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+        <CardHeader>
+          <CardTitle className="text-white">二、广告后处理与整片合成</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <Input value={idsText} onChange={(e) => setIdsText(e.target.value)} placeholder="150,151,152..." />
           <div className="flex flex-wrap gap-2">
-            <Button onClick={loadIds}>加载</Button>
+            <Button onClick={loadIds}>加载任务</Button>
             <Button variant="outline" disabled={busy || orderedIds.length === 0} onClick={compose}>
               {busy ? '合成中…' : '合成一个广告视频'}
             </Button>
@@ -233,7 +538,7 @@ export default function AdVideoWorkbenchPage() {
       {resultUrl && (
         <Card className="border-white/10 bg-slate-900/60 text-slate-100">
           <CardHeader>
-            <CardTitle>合成结果</CardTitle>
+            <CardTitle className="text-white">合成结果</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="break-all text-sm text-slate-300">{resultUrl}</div>
