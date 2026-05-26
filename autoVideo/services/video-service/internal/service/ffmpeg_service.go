@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // FFmpegService provides video processing operations backed by the ffmpeg binary.
@@ -343,7 +344,8 @@ func (f *FFmpegService) AddSubtitleWithStyle(ctx context.Context, videoPath, sub
 	workDir := filepath.Dir(videoPath)
 
 	srtPath := filepath.Join(workDir, "sub.srt")
-	srt := buildSRT(subtitleText)
+	duration, _ := f.ProbeDuration(ctx, videoPath)
+	srt := buildTimedSRT(subtitleText, duration)
 	if err := os.WriteFile(srtPath, []byte(srt), 0o644); err != nil {
 		return "", fmt.Errorf("write srt: %w", err)
 	}
@@ -746,8 +748,116 @@ func formatFFmpegDuration(seconds float64) string {
 // buildSRT —— 将纯文本转换为单条目 SRT 字幕格式
 // buildSRT converts plain text into a minimal single-entry SRT file.
 func buildSRT(text string) string {
-	return fmt.Sprintf("1\n00:00:00,000 --> %s\n%s\n",
-		"99:59:59,999", text)
+	return buildTimedSRT(text, 0)
+}
+
+func buildTimedSRT(text string, totalDuration float64) string {
+	lines := splitSubtitleLines(text)
+	if len(lines) == 0 {
+		return fmt.Sprintf("1\n00:00:00,000 --> %s\n%s\n",
+			"99:59:59,999", strings.TrimSpace(text))
+	}
+	if totalDuration <= 0 {
+		return fmt.Sprintf("1\n00:00:00,000 --> %s\n%s\n",
+			"99:59:59,999", strings.Join(lines, "\n"))
+	}
+
+	weights := make([]int, len(lines))
+	totalWeight := 0
+	for i, line := range lines {
+		w := utf8.RuneCountInString(strings.TrimSpace(line))
+		if w <= 0 {
+			w = 1
+		}
+		weights[i] = w
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		totalWeight = len(lines)
+	}
+
+	var out strings.Builder
+	elapsed := 0.0
+	for i, line := range lines {
+		remainingDuration := totalDuration - elapsed
+		remainingWeight := 0
+		for _, w := range weights[i:] {
+			remainingWeight += w
+		}
+		segment := remainingDuration
+		if i < len(lines)-1 && remainingWeight > 0 {
+			segment = totalDuration * float64(weights[i]) / float64(totalWeight)
+			if segment < 0.8 {
+				segment = 0.8
+			}
+			maxAllowed := totalDuration - elapsed - 0.2*float64(len(lines)-i-1)
+			if maxAllowed > 0 && segment > maxAllowed {
+				segment = maxAllowed
+			}
+		}
+		if segment <= 0 {
+			segment = 0.8
+		}
+		start := elapsed
+		end := elapsed + segment
+		if i == len(lines)-1 || end > totalDuration {
+			end = totalDuration
+		}
+		if end <= start {
+			end = start + 0.5
+		}
+		fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", i+1, secondsToSRTTimestamp(start), secondsToSRTTimestamp(end), line)
+		elapsed = end
+	}
+	return out.String()
+}
+
+func splitSubtitleLines(text string) []string {
+	normalized := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\r", "\n")
+	if normalized == "" {
+		return nil
+	}
+	chunks := strings.Split(normalized, "\n")
+	lines := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		parts := strings.FieldsFunc(chunk, func(r rune) bool {
+			switch r {
+			case '。', '！', '？', '；', ';':
+				return true
+			default:
+				return false
+			}
+		})
+		if len(parts) == 0 {
+			parts = []string{chunk}
+		}
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			lines = append(lines, part)
+		}
+	}
+	return lines
+}
+
+func secondsToSRTTimestamp(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	totalMs := int(seconds*1000 + 0.5)
+	hours := totalMs / 3600000
+	totalMs %= 3600000
+	minutes := totalMs / 60000
+	totalMs %= 60000
+	secs := totalMs / 1000
+	millis := totalMs % 1000
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", hours, minutes, secs, millis)
 }
 
 // vttTimestampToSRT converts a VTT timestamp (00:00:00.000) to SRT format (00:00:00,000).
