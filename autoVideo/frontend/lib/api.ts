@@ -573,7 +573,16 @@ export const videoAPI = {
   compose: (taskId: number) =>
     api.post(`/api/v1/videos/tasks/${taskId}/compose`),
   composeAdVideo: (taskIds: number[]) =>
-    api.post('/api/v1/videos/ad-compose', { task_ids: taskIds }),
+    api.post<{
+      code?: number
+      data?: {
+        task_ids?: number[]
+        task_id?: number
+        result_url?: string
+        task?: unknown
+        meta?: Record<string, unknown>
+      }
+    }>('/api/v1/videos/ad-compose', { task_ids: taskIds }),
   modelStatus: () =>
     api.get<{ models: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] }>('/api/v1/videos/model-status'),
   getShotsMetadata: (projectId: number, episodeId: number) =>

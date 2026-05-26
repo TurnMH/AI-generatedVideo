@@ -25,7 +25,9 @@ type ComposeAdResponse = {
   code?: number
   data?: {
     task_ids?: number[]
+    task_id?: number
     result_url?: string
+    task?: Task
     meta?: Record<string, unknown>
   }
 }
@@ -54,6 +56,7 @@ export default function AdVideoWorkbenchPage() {
   const [busy, setBusy] = useState(false)
   const [busyTaskId, setBusyTaskId] = useState<number | null>(null)
   const [resultUrl, setResultUrl] = useState('')
+  const [resultTaskId, setResultTaskId] = useState<number | null>(null)
   const idsKey = useMemo(() => orderedIds.join(','), [orderedIds])
 
   const { data, mutate, isLoading } = useSWR(
@@ -81,6 +84,7 @@ export default function AdVideoWorkbenchPage() {
     const next = parseIds(idsText)
     setOrderedIds(next)
     setResultUrl('')
+    setResultTaskId(null)
   }
 
   const move = (idx: number, delta: number) => {
@@ -91,6 +95,7 @@ export default function AdVideoWorkbenchPage() {
     setOrderedIds(next)
     setIdsText(next.join(','))
     setResultUrl('')
+    setResultTaskId(null)
   }
 
   const compose = async () => {
@@ -103,11 +108,13 @@ export default function AdVideoWorkbenchPage() {
       const res = await videoAPI.composeAdVideo(orderedIds)
       const payload = res.data as ComposeAdResponse
       const url = String(payload?.data?.result_url || '').trim()
+      const taskId = Number(payload?.data?.task_id || 0)
       if (!url) {
         throw new Error('广告合成接口已返回，但 result_url 为空')
       }
       setResultUrl(url)
-      toast({ title: '广告合成完成', variant: 'success' })
+      setResultTaskId(Number.isFinite(taskId) && taskId > 0 ? taskId : null)
+      toast({ title: taskId > 0 ? `广告合成完成，已落为 task #${taskId}` : '广告合成完成', variant: 'success' })
       await mutate()
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '广告合成失败', variant: 'destructive' })
@@ -163,6 +170,7 @@ export default function AdVideoWorkbenchPage() {
                 setIdsText(DEFAULT_IDS)
                 setOrderedIds(parseIds(DEFAULT_IDS))
                 setResultUrl('')
+                setResultTaskId(null)
               }}
             >
               恢复默认
@@ -229,10 +237,15 @@ export default function AdVideoWorkbenchPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="break-all text-sm text-slate-300">{resultUrl}</div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button variant="outline" asChild>
                 <a href={resultUrl} target="_blank" rel="noreferrer">打开合成结果</a>
               </Button>
+              {resultTaskId && (
+                <Button variant="outline" asChild>
+                  <Link href={`/video/history/${resultTaskId}`}>查看合成任务详情</Link>
+                </Button>
+              )}
             </div>
             <video className="w-full rounded-lg bg-black" controls src={resultUrl} />
           </CardContent>

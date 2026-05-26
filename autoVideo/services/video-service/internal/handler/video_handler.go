@@ -670,16 +670,18 @@ func (h *VideoHandler) ComposeAdVideo(c *gin.Context) {
 		response.BadRequest(c, "task_ids is required")
 		return
 	}
-	resultURL, meta, err := h.svc.ComposeAdVideo(c.Request.Context(), req.TaskIDs)
+	resultTask, meta, err := h.svc.ComposeAdVideo(c.Request.Context(), mustUserID(c), req.TaskIDs)
 	if err != nil {
 		h.logger.Error("compose ad video", zap.Int64s("task_ids", req.TaskIDs), zap.Error(err))
 		response.InternalError(c, err.Error())
 		return
 	}
 	response.OK(c, gin.H{
-		"task_ids": req.TaskIDs,
-		"result_url": resultURL,
-		"meta": meta,
+		"task_ids":   req.TaskIDs,
+		"task_id":    resultTask.ID,
+		"task":       resultTask,
+		"result_url": resultTask.ResultURL,
+		"meta":       meta,
 	})
 }
 

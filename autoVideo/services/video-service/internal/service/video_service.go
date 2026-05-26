@@ -1465,36 +1465,87 @@ func pickCompositeTaskResultURL(task *model.VideoTask) string {
 	return ""
 }
 
-func (s *VideoService) ComposeAdVideo(ctx context.Context, taskIDs []int64) (string, map[string]any, error) {
+func (s *VideoService) ComposeAdVideo(ctx context.Context, userID int64, taskIDs []int64) (*model.VideoTask, map[string]any, error) {
 	if len(taskIDs) == 0 {
-		return "", nil, fmt.Errorf("task_ids is empty")
+		return nil, nil, fmt.Errorf("task_ids is empty")
 	}
 	items := make([]*model.VideoTask, 0, len(taskIDs))
 	urls := make([]string, 0, len(taskIDs))
 	meta := make([]map[string]any, 0, len(taskIDs))
+	var totalDuration float64
 	for idx, id := range taskIDs {
 		task, err := s.repo.GetTask(ctx, id)
 		if err != nil {
-			return "", nil, fmt.Errorf("get task %d: %w", id, err)
+			return nil, nil, fmt.Errorf("get task %d: %w", id, err)
 		}
 		url := pickCompositeTaskResultURL(task)
 		if url == "" {
-			return "", nil, fmt.Errorf("task %d has no usable result url", id)
+			return nil, nil, fmt.Errorf("task %d has no usable result url", id)
 		}
 		items = append(items, task)
 		urls = append(urls, url)
-		meta = append(meta, map[string]any{"task_id": id, "order": idx, "result_url": url, "status": task.Status})
+		totalDuration += task.DurationSec
+		meta = append(meta, map[string]any{
+			"task_id":      id,
+			"order":        idx,
+			"project_id":   task.ProjectID,
+			"result_url":   url,
+			"status":       task.Status,
+			"duration_sec": task.DurationSec,
+		})
 	}
 	mergedPath, err := s.ffmpeg.ConcatClips(ctx, urls, "16:9")
 	if err != nil {
-		return "", nil, fmt.Errorf("concat ad video: %w", err)
+		return nil, nil, fmt.Errorf("concat ad video: %w", err)
 	}
 	defer os.RemoveAll(filepath.Dir(mergedPath))
-	resultURL, err := s.uploadVideo(ctx, 0, items[0].ProjectID, mergedPath)
+	resultURL, err := s.uploadVideo(ctx, 0, 0, mergedPath)
 	if err != nil {
-		return "", nil, fmt.Errorf("upload ad video: %w", err)
+		return nil, nil, fmt.Errorf("upload ad video: %w", err)
 	}
-	return resultURL, map[string]any{"source_task_ids": taskIDs, "source_items": meta}, nil
+
+	renderConfig := model.RenderConfig{
+		"ad_compose":            true,
+		"source_task_ids":       taskIDs,
+		"source_items":          meta,
+		"active_result_variant": "current",
+	}
+	adTask := &model.VideoTask{
+		ProjectID:        0,
+		EpisodeID:        nil,
+		UserID:           userID,
+		ImageURLs:        model.StringArray{},
+		StylePreset:      "realistic",
+		MotionMode:       "gentle",
+		AudioURL:         "",
+		SubtitleText:     "",
+		ModelName:        "ad-compose",
+		RequestedModel:   "ad-compose",
+		RoutedGenerator:  "ad-compose",
+		RuntimeProvider:  "runtime.video.ad-compose",
+		EffectiveModel:   "ad-compose",
+		RouteReason:      "manual-ad-compose",
+		Status:           model.StatusSucceeded,
+		ResultURL:        resultURL,
+		DurationSec:      totalDuration,
+		ErrorMsg:         "",
+		VideoMode:        "ad_compose",
+		RenderConfig:     renderConfig,
+		ExportFormat:     "mp4",
+		ComposeStage:     model.ComposeStageDone,
+		SceneDescription: "ad compose result",
+		SerialScene:      false,
+		SceneGroupKeys:   model.StringArray{},
+	}
+	if err := s.repo.CreateTask(ctx, adTask); err != nil {
+		return nil, nil, fmt.Errorf("create ad compose task: %w", err)
+	}
+	metaPayload := map[string]any{
+		"source_task_ids": taskIDs,
+		"source_items":    meta,
+		"ad_task_id":      adTask.ID,
+	}
+	return adTask, metaPayload, nil
 }
 
 func (s *VideoService) uploadVideo(ctx context.Context, taskID, projectID int64, filePath string) (string, error) {
