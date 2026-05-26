@@ -79,6 +79,7 @@ export default function ManualVideoHistoryDetailPage() {
     : String(task?.render_config?.scene_description || task?.['scene_description'] || '')
   const subtitleText = String(task?.subtitle_text || task?.render_config?.subtitle_text || '')
   const nativeAudioEnabled = Boolean(task?.render_config?.generate_audio)
+  const audioSummary = dialoguesText || subtitleText
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successText: string) => {
     try {
@@ -142,6 +143,15 @@ export default function ManualVideoHistoryDetailPage() {
                 <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('compose', () => videoAPI.compose(task.id), '已触发重新合成')}>
                   {busyAction === 'compose' ? '处理中…' : '重新合成'}
                 </Button>
+                {task.result_url && audioSummary && (
+                  <Button
+                    variant="outline"
+                    disabled={busyAction !== ''}
+                    onClick={() => runAction('subtitle', () => videoAPI.compose(task.id), '已触发重新合成（将尝试烧录字幕）')}
+                  >
+                    {busyAction === 'subtitle' ? '处理中…' : '添加字幕'}
+                  </Button>
+                )}
                 {task.project_id > 0 && (
                   <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('export', () => videoAPI.export(task.project_id, task.id), '已请求导出接口')}>
                     {busyAction === 'export' ? '处理中…' : '请求导出'}
