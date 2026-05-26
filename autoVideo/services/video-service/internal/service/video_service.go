@@ -1081,7 +1081,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 				zap.Int64("task_id", taskID),
 				zap.String("reason", reason))
 		} else if len(whisperSegments) > 0 {
-			if p, err := s.ffmpeg.AddSubtitleFromSegmentsWithStyle(ctx, finalPath, whisperSegments, subtitleStyle2); err == nil {
+			if p, err := s.ffmpeg.AddSubtitleFromSegmentsWithStyle(ctx, finalPath, whisperSegments, subtitleStyle2, subtitleText); err == nil {
 				finalPath = p
 				subtitleApplied = true
 				subtitleStatus = "applied"

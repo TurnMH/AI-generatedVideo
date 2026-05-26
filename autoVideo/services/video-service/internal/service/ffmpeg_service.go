@@ -388,8 +388,8 @@ func (f *FFmpegService) AddSubtitleFromVTTWithStyle(ctx context.Context, videoPa
 	return f.addSubtitleFromSRTContent(ctx, videoPath, srtContent, style)
 }
 
-func (f *FFmpegService) AddSubtitleFromSegmentsWithStyle(ctx context.Context, videoPath string, segments []whisperClient.Segment, style SubtitleStyle) (string, error) {
-	srtContent := buildSRTFromSegments(segments)
+func (f *FFmpegService) AddSubtitleFromSegmentsWithStyle(ctx context.Context, videoPath string, segments []whisperClient.Segment, style SubtitleStyle, referenceText string) (string, error) {
+	srtContent := buildSRTFromSegmentsWithReference(segments, referenceText)
 	if strings.TrimSpace(srtContent) == "" {
 		return "", fmt.Errorf("empty subtitle segments")
 	}
@@ -927,69 +927,111 @@ func buildSRTFromSegments(segments []whisperClient.Segment) string {
 	var out strings.Builder
 	seq := 1
 	for _, seg := range segments {
-		parts := splitSubtitleLines(seg.Text)
-		if len(parts) == 0 {
+		segmentSRT, nextSeq := buildWindowedSRT(seq, seg.Start, seg.End, splitSubtitleLines(seg.Text))
+		if strings.TrimSpace(segmentSRT) == "" {
 			text := strings.TrimSpace(seg.Text)
-			if text != "" {
-				parts = []string{text}
+			if text == "" {
+				continue
 			}
+			segmentSRT, nextSeq = buildWindowedSRT(seq, seg.Start, seg.End, []string{text})
 		}
-		if len(parts) == 0 {
-			continue
-		}
-		start := seg.Start
-		end := seg.End
-		if end <= start {
-			end = start + 0.5
-		}
-		duration := end - start
-		weights := make([]int, len(parts))
-		totalWeight := 0
-		for i, part := range parts {
-			w := utf8.RuneCountInString(strings.TrimSpace(part))
-			if w <= 0 {
-				w = 1
-			}
-			weights[i] = w
-			totalWeight += w
-		}
-		if totalWeight <= 0 {
-			totalWeight = len(parts)
-		}
-		elapsed := start
-		for i, part := range parts {
-			remainingWeight := 0
-			for _, w := range weights[i:] {
-				remainingWeight += w
-			}
-			piece := end - elapsed
-			if i < len(parts)-1 && remainingWeight > 0 {
-				piece = duration * float64(weights[i]) / float64(totalWeight)
-				if piece < 0.35 {
-					piece = 0.35
-				}
-				maxAllowed := end - elapsed - 0.15*float64(len(parts)-i-1)
-				if maxAllowed > 0 && piece > maxAllowed {
-					piece = maxAllowed
-				}
-			}
-			if piece <= 0 {
-				piece = 0.35
-			}
-			cueStart := elapsed
-			cueEnd := elapsed + piece
-			if i == len(parts)-1 || cueEnd > end {
-				cueEnd = end
-			}
-			if cueEnd <= cueStart {
-				cueEnd = cueStart + 0.25
-			}
-			fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", seq, secondsToSRTTimestamp(cueStart), secondsToSRTTimestamp(cueEnd), strings.TrimSpace(part))
-			seq++
-			elapsed = cueEnd
-		}
+		out.WriteString(segmentSRT)
+		seq = nextSeq
 	}
 	return out.String()
+}
+
+func buildSRTFromSegmentsWithReference(segments []whisperClient.Segment, referenceText string) string {
+	referenceLines := splitSubtitleLines(referenceText)
+	if len(referenceLines) == 0 {
+		return buildSRTFromSegments(segments)
+	}
+	var start, end float64
+	found := false
+	for _, seg := range segments {
+		if !found {
+			start = seg.Start
+			end = seg.End
+			found = true
+			continue
+		}
+		if seg.Start < start {
+			start = seg.Start
+		}
+		if seg.End > end {
+			end = seg.End
+		}
+	}
+	if !found {
+		return ""
+	}
+	srt, _ := buildWindowedSRT(1, start, end, referenceLines)
+	return srt
+}
+
+func buildWindowedSRT(seqStart int, start, end float64, parts []string) (string, int) {
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	if len(cleaned) == 0 {
+		return "", seqStart
+	}
+	if end <= start {
+		end = start + 0.5
+	}
+	duration := end - start
+	weights := make([]int, len(cleaned))
+	totalWeight := 0
+	for i, part := range cleaned {
+		w := utf8.RuneCountInString(part)
+		if w <= 0 {
+			w = 1
+		}
+		weights[i] = w
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		totalWeight = len(cleaned)
+	}
+	var out strings.Builder
+	elapsed := start
+	seq := seqStart
+	for i, part := range cleaned {
+		remainingWeight := 0
+		for _, w := range weights[i:] {
+			remainingWeight += w
+		}
+		piece := end - elapsed
+		if i < len(cleaned)-1 && remainingWeight > 0 {
+			piece = duration * float64(weights[i]) / float64(totalWeight)
+			if piece < 0.35 {
+				piece = 0.35
+			}
+			maxAllowed := end - elapsed - 0.15*float64(len(cleaned)-i-1)
+			if maxAllowed > 0 && piece > maxAllowed {
+				piece = maxAllowed
+			}
+		}
+		if piece <= 0 {
+			piece = 0.35
+		}
+		cueStart := elapsed
+		cueEnd := elapsed + piece
+		if i == len(cleaned)-1 || cueEnd > end {
+			cueEnd = end
+		}
+		if cueEnd <= cueStart {
+			cueEnd = cueStart + 0.25
+		}
+		fmt.Fprintf(&out, "%d\n%s --> %s\n%s\n\n", seq, secondsToSRTTimestamp(cueStart), secondsToSRTTimestamp(cueEnd), part)
+		seq++
+		elapsed = cueEnd
+	}
+	return out.String(), seq
 }
 
 // vttTimestampToSRT converts a VTT timestamp (00:00:00.000) to SRT format (00:00:00,000).
