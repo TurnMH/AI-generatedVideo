@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -109,7 +108,6 @@ const extractParamOptionValues = (status: VideoModelStatus | null | undefined, k
 
 export default function AdVideoWorkbenchPage() {
   const { toast } = useToast()
-  const router = useRouter()
 
   const [workflowForm, setWorkflowForm] = useState({
     title: '口播广告工作台项目',
@@ -441,18 +439,6 @@ export default function AdVideoWorkbenchPage() {
     }
   }
 
-  const openAdHistory = () => {
-    router.push('/ad-video/history')
-  }
-
-  const openCurrentProgress = () => {
-    if (!workflowProjectId) {
-      toast({ title: '请先创建广告项目，才能查看当前进度详情', variant: 'destructive' })
-      return
-    }
-    router.push(`/ad-video/history/${workflowProjectId}`)
-  }
-
   const loadIds = () => {
     const next = parseIds(idsText)
     setOrderedIds(next)
@@ -511,17 +497,11 @@ export default function AdVideoWorkbenchPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-white">口播广告工作台</h1>
-          <p className="mt-2 text-sm text-slate-300">
-            从这里独立完成广告创建、基础生成、后处理与整片合成。单个项目页后续只作为底层流程测试入口。
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={openAdHistory}>创建历史</Button>
-          <Button variant="outline" onClick={openCurrentProgress} disabled={!workflowProjectId}>历史详情 / 进度</Button>
-        </div>
+      <div>
+        <h1 className="text-2xl font-semibold text-white">口播广告工作台</h1>
+        <p className="mt-2 text-sm text-slate-300">
+          从这里新建广告项目。后续生成与处理统一在项目详情页完成。
+        </p>
       </div>
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
@@ -757,23 +737,12 @@ export default function AdVideoWorkbenchPage() {
 
           <div className="flex flex-wrap gap-2">
             <Button disabled={creatingProject} onClick={createWorkflowProject}>
-              {creatingProject ? '创建中…' : '1）新建广告项目'}
+              {creatingProject ? '创建中…' : '新建项目'}
             </Button>
-            <Button variant="outline" onClick={openAdHistory}>
-              2）查看历史
-            </Button>
-            <Button variant="outline" disabled={!workflowProjectId} onClick={openCurrentProgress}>
-              3）当前项目详情
-            </Button>
-            {workflowProjectId && (
-              <Button variant="outline" asChild>
-                <Link href={`/projects/${workflowProjectId}`}>打开底层项目</Link>
-              </Button>
-            )}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">
-            新建后会自动执行：文案优化、自动分集、自动分镜。后续的人物图、分镜图、视频生成请进入“当前项目详情”。
+            新建后会自动执行：文案优化、自动分集、自动分镜。
           </div>
         </CardContent>
       </Card>
@@ -833,53 +802,30 @@ export default function AdVideoWorkbenchPage() {
                 )}
                 {autoSplitInfo?.optimized_script && (
                   <div className="space-y-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
-                        <div className="mt-1 text-xs text-emerald-200/80">
-                          首页只展示当前结果，不再承担继续生成 / 重跑。后续一律进入该项目详情页按流水线继续执行。
-                        </div>
+                    <div>
+                      <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
+                      <div className="mt-1 text-xs text-emerald-200/80">
+                        首页只展示当前结果。后续动作统一在项目详情页执行。
                       </div>
-                      <Button size="sm" onClick={openCurrentProgress} disabled={!workflowProjectId}>
-                        去详情页继续
-                      </Button>
                     </div>
                     <div className="max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-3 text-slate-100">
                       {autoSplitInfo.optimized_script}
-                    </div>
-                    <div className="text-[11px] text-emerald-200/75">
-                      说明：重跑文案拆分、上传人物图、刷新分镜图、启动视频生成，现已统一收口到 `/ad-video/history/[projectId]`。
                     </div>
                   </div>
                 )}
                 {autoSplitInfo?.consistency_premise && (
                   <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
-                      <Button size="sm" variant="outline" disabled={!workflowProjectId} onClick={openCurrentProgress}>
-                        在详情页继续执行
-                      </Button>
-                    </div>
+                    <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
                     <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
                       {autoSplitInfo.consistency_premise}
                     </div>
                   </div>
                 )}
                 <div className="space-y-3 rounded-xl border border-sky-500/20 bg-sky-500/10 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-sky-100">后续生成已迁入项目详情页</div>
-                      <div className="mt-1 text-xs text-sky-200/80">
-                        首页现在只负责创建广告项目、查看本轮结果与跳转。真正的后续生产动作，请进入详情页按“文本拆分 → 人物图上传 → 视频生成”的流水线继续。
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" disabled={!workflowProjectId} onClick={() => void mutateProgress()}>
-                        刷新当前进度
-                      </Button>
-                      <Button size="sm" disabled={!workflowProjectId} onClick={openCurrentProgress}>
-                        打开项目详情工作台
-                      </Button>
+                  <div>
+                    <div className="text-sm font-medium text-sky-100">后续生成已迁入项目详情页</div>
+                    <div className="mt-1 text-xs text-sky-200/80">
+                      首页只负责新建项目和查看当前结果。真正的后续生产动作，请进入项目详情页继续。
                     </div>
                   </div>
                 </div>
