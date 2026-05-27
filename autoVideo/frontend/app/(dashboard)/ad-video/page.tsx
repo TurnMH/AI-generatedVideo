@@ -128,6 +128,7 @@ export default function AdVideoWorkbenchPage() {
   const [creatingProject, setCreatingProject] = useState(false)
   const [startingFlow, setStartingFlow] = useState(false)
   const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
+  const [savingAllStoryboards, setSavingAllStoryboards] = useState(false)
   const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
 
   const [idsText, setIdsText] = useState(DEFAULT_IDS)
@@ -320,7 +321,7 @@ export default function AdVideoWorkbenchPage() {
     }))
   }
 
-  const saveStoryboardDraft = async (storyboardId: number) => {
+  const saveStoryboardDraft = async (storyboardId: number, silent = false) => {
     if (!workflowProjectId) return
     const draft = storyboardDrafts[storyboardId]
     if (!draft) return
@@ -330,12 +331,29 @@ export default function AdVideoWorkbenchPage() {
         scene_description: draft.scene_description,
         dialogue: draft.dialogue,
       })
-      toast({ title: `分镜 #${storyboardId} 已保存确认`, variant: 'success' })
-      await mutateStoryboards()
+      if (!silent) {
+        toast({ title: `分镜 #${storyboardId} 已保存确认`, variant: 'success' })
+      }
     } catch (error) {
-      toast({ title: error instanceof Error ? error.message : `分镜 #${storyboardId} 保存失败`, variant: 'destructive' })
+      throw error instanceof Error ? error : new Error(`分镜 #${storyboardId} 保存失败`)
     } finally {
       setSavingStoryboardId(null)
+    }
+  }
+
+  const saveAllStoryboardDrafts = async () => {
+    if (!workflowProjectId || workflowStoryboards.length === 0) return
+    setSavingAllStoryboards(true)
+    try {
+      for (const storyboard of workflowStoryboards) {
+        await saveStoryboardDraft(storyboard.id, true)
+      }
+      await mutateStoryboards()
+      toast({ title: `已批量保存 ${workflowStoryboards.length} 条分镜修改`, variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '批量保存分镜失败', variant: 'destructive' })
+    } finally {
+      setSavingAllStoryboards(false)
     }
   }
 
@@ -844,7 +862,17 @@ export default function AdVideoWorkbenchPage() {
               <TabsContent value="storyboards" className="space-y-3">
                 {workflowStoryboards.length > 0 ? (
                   <div className="space-y-3">
-                    <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={savingAllStoryboards || savingStoryboardId !== null}
+                        onClick={saveAllStoryboardDrafts}
+                      >
+                        {savingAllStoryboards ? '批量保存中…' : '保存全部分镜修改'}
+                      </Button>
+                    </div>
                     {workflowStoryboards.map((storyboard) => {
                       const draft = storyboardDrafts[storyboard.id] || {
                         scene_description: storyboard.scene_description || '',
@@ -1017,7 +1045,7 @@ export default function AdVideoWorkbenchPage() {
               </TabsContent>
             </Tabs>
           ) : (
-            <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建项目 → 上传脚本 → 启动基础生成”。</div>
+            <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建广告项目并开始文案优化”，系统会自动继续文案优化、自动分集与自动分镜。</div>
           )}
         </CardContent>
       </Card>

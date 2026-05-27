@@ -1236,7 +1236,7 @@ func (s *EpisodeService) fetchScriptPrepSkillHints(ctx context.Context, projectI
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "storyboard_prep")
 }
 
-func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string) string {
+func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string, adDirective string) string {
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
@@ -1289,6 +1289,9 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 
 	if prepSkillHints != "" {
 		systemPrompt += "\n\n本项目专属分镜预处理指引：\n" + prepSkillHints
+	}
+	if strings.TrimSpace(adDirective) != "" {
+		systemPrompt += "\n\n广告工作台分镜节奏规则（必须同步体现在场景拆分结果里）：\n" + strings.TrimSpace(adDirective)
 	}
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n" + bible + "\n所有标注中的人物姓名和场景描述必须与以上一致性词库保持一致。"
@@ -2370,12 +2373,19 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 	// The template is used to produce PromptUsed for each storyboard at creation time.
 	var storyboardPromptTemplate string
 	projectVisualEra := ""
+	adDirective := ""
 	serialSceneEnabled := strings.TrimSpace(projectType) == "video_serial"
 	assetRefs := s.fetchAssetReferences(ctx, projectID, nil)
 	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil {
 		serialSceneEnabled = shouldEnableSceneSerial(projectType)
 		sk := storyboardStyleKey(storyboardStylePreset(project))
 		storyboardPromptTemplate = s.fetchStoryboardPromptTemplate(ctx, sk)
+		if isAdWorkbenchProject(project) {
+			adDirective = adWorkbenchPromptDirective()
+			if strings.TrimSpace(storyboardPromptTemplate) != "" {
+				storyboardPromptTemplate = strings.TrimSpace(storyboardPromptTemplate) + "\n\n广告工作台追加约束：\n" + adDirective
+			}
+		}
 		projectVisualEra = inferVisualEra(strings.TrimSpace(project.ScriptText))
 		if s.logger != nil {
 			if storyboardPromptTemplate != "" {
@@ -2448,7 +2458,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			// Pre-optimization: run a professional storyboard-prep pass before scene splitting
 			// to add explicit visual markers, camera suggestions and pacing cues.
 			_ = s.episodeRepo.UpdateStatus(epID, "script_prepping")
-			optimized := s.prepareScriptForStoryboard(ctx, epContent, epNum, kwLib, projectType, prepSkillHints)
+			optimized := s.prepareScriptForStoryboard(ctx, epContent, epNum, kwLib, projectType, prepSkillHints, adDirective)
 			if s.logger != nil && optimized != epContent {
 				s.logger.Info("script prep optimization applied",
 					zap.Int("episode", epNum),
