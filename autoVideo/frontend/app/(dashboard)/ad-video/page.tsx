@@ -485,8 +485,13 @@ export default function AdVideoWorkbenchPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={creatingProject} onClick={createWorkflowProject}>
+          <div className="flex justify-center">
+            <Button
+              size="lg"
+              className="min-w-[220px] px-10 py-6 text-base font-medium"
+              disabled={creatingProject}
+              onClick={createWorkflowProject}
+            >
               {creatingProject ? '创建中…' : '新建项目'}
             </Button>
           </div>
