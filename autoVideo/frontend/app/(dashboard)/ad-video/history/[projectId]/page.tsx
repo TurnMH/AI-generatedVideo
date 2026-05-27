@@ -679,32 +679,45 @@ export default function AdVideoHistoryDetailPage() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <div className="text-sm font-medium text-white">优化后的文案</div>
-                        <div className="mt-1 text-xs text-slate-400">这里保留当前用于步骤 1 重拆分的最终广告文案，可直接编辑。</div>
+                        <div className="mt-1 text-xs text-slate-400">支持和原文对照查看；这里保留当前用于步骤 1 重拆分的最终广告文案，可继续编辑。</div>
                       </div>
                       <div className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-200">
                         {editableOptimizedScript.trim().length} 字
                       </div>
                     </div>
 
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                      <div className="mb-2 text-xs font-medium text-slate-400">优化前全文</div>
-                      <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.original_script || project.script_text || '暂无'}</div>
-                    </div>
-
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <div className="mb-2 text-xs font-medium text-emerald-200">优化后的文案（当前用于拆分）</div>
-                          <div className="text-[11px] text-emerald-200/75">你可以先在这里修正文案，再按下方步骤 1 的视频配置重新拆分。</div>
+                          <div className="text-[11px] text-emerald-200/75">先在这里快速修正文案，再按上方步骤 1 的视频配置重新拆分。</div>
                         </div>
                         <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
                       </div>
                       <Textarea
                         value={editableOptimizedScript}
                         onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                        className="min-h-[240px] border-emerald-500/20 bg-black/20 text-slate-100"
+                        className="min-h-[140px] max-h-[220px] border-emerald-500/20 bg-black/20 text-slate-100"
                         placeholder="这里保留当前要进入流水线的广告文案。"
                       />
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="text-xs font-medium text-slate-300">原文对照</div>
+                          <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || project.script_text || '').trim().length} 字</div>
+                        </div>
+                        <div className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-slate-100">{autoSplit?.original_script || project.script_text || '暂无'}</div>
+                      </div>
+
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="text-xs font-medium text-emerald-200">优化后对照</div>
+                          <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
+                        </div>
+                        <div className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-slate-100">{editableOptimizedScript.trim() || '暂无'}</div>
+                      </div>
                     </div>
 
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
