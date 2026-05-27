@@ -214,6 +214,14 @@ export default function AdVideoHistoryDetailPage() {
   const availableModels = (videoModelStatus || []).filter((item) => item.available)
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
   const autoSplit = project?.progress?.auto_split || null
+  const resolvedOptimizedScript = useMemo(() => {
+    const candidate = [
+      typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script : '',
+      typeof project?.script_text === 'string' ? project.script_text : '',
+      typeof autoSplit?.original_script === 'string' ? autoSplit.original_script : '',
+    ].map((item) => item.trim()).find(Boolean)
+    return candidate || ''
+  }, [autoSplit?.optimized_script, autoSplit?.original_script, project?.script_text])
   const resultUrl = taskResultUrl(latestTask)
 
   const selectedEpisodeNumber = useMemo(() => {
@@ -337,14 +345,13 @@ export default function AdVideoHistoryDetailPage() {
           : '当前可以提交视频生成。'
 
   useEffect(() => {
-    const next = typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script : ''
     setEditableOptimizedScript((prev) => {
-      if (!prev.trim()) return next
-      if (prev.trim() === next.trim()) return prev
-      if (!next.trim()) return prev
+      if (!prev.trim()) return resolvedOptimizedScript
+      if (prev.trim() === resolvedOptimizedScript.trim()) return prev
+      if (!resolvedOptimizedScript.trim()) return prev
       return prev
     })
-  }, [autoSplit?.optimized_script])
+  }, [resolvedOptimizedScript])
 
   useEffect(() => {
     if (!availableModels.length) return
@@ -660,7 +667,7 @@ export default function AdVideoHistoryDetailPage() {
                     <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                       <div className="mb-3 flex items-center justify-between gap-2">
                         <div className="text-sm font-medium text-white">原文</div>
-                        <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || project.script_text || '').trim().length} 字</div>
+                        <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || '').trim().length || String(project.script_text || '').trim().length} 字</div>
                       </div>
                       <div className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words text-sm text-slate-100">
                         {autoSplit?.original_script || project.script_text || '暂无'}
