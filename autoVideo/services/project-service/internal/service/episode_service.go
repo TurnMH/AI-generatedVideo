@@ -496,6 +496,8 @@ type AutoSplitMeta struct {
 	ScriptLength          int    `json:"script_length,omitempty"`
 	EstimatedEpisodes     int    `json:"estimated_episodes,omitempty"`
 	TargetCharsPerEpisode int    `json:"target_chars_per_episode,omitempty"`
+	OriginalScript        string `json:"original_script,omitempty"`
+	OptimizedScript       string `json:"optimized_script,omitempty"`
 }
 
 type ProgressInfo struct {
@@ -2093,16 +2095,18 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	autoSplitAfterOptimization := runtimeCfg.AutoSplitAfterOptimization || strings.EqualFold(project.Mode, "script")
 	optimizedScriptText := strings.TrimSpace(scriptText)
 	if autoSplitAfterOptimization {
+		autoSplitProgress := AutoSplitMeta{
+			Enabled:        true,
+			Duration:       runtimeCfg.Duration,
+			VideoModel:     runtimeCfg.VideoModel,
+			StylePreset:    stylepreset.Canonical(runtimeCfg.StylePreset),
+			OriginalScript: strings.TrimSpace(scriptText),
+		}
 		s.updateProgress(projectID, ProgressInfo{
 			Stage:        "episode_splitting",
 			Message:      "正在按所选风格优化广告文案，为自动切分做准备…",
 			EpisodeSplit: &StageProgress{Status: "running"},
-			AutoSplit: &AutoSplitMeta{
-				Enabled:     true,
-				Duration:    runtimeCfg.Duration,
-				VideoModel:  runtimeCfg.VideoModel,
-				StylePreset: stylepreset.Canonical(runtimeCfg.StylePreset),
-			},
+			AutoSplit:    &autoSplitProgress,
 		})
 		if improved, err := s.optimizeProjectScriptForAutoSplit(ctx, project, scriptText); err != nil {
 			if s.logger != nil {
@@ -2115,6 +2119,14 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			optimizedScriptText = strings.TrimSpace(improved)
 			project.ScriptText = optimizedScriptText
 			_ = s.projectRepo.Update(project)
+			autoSplitProgress.OptimizedScript = optimizedScriptText
+			autoSplitProgress.ScriptLength = utf8.RuneCountInString(optimizedScriptText)
+			s.updateProgress(projectID, ProgressInfo{
+				Stage:        "episode_splitting",
+				Message:      "广告文案优化完成，正在根据时长自动计算分集数…",
+				EpisodeSplit: &StageProgress{Status: "running"},
+				AutoSplit:    &autoSplitProgress,
+			})
 		}
 	}
 
@@ -2153,6 +2165,8 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	}
 
 	autoSplitMeta := buildAutoSplitMeta(optimizedScriptText, runtimeCfg)
+	autoSplitMeta.OriginalScript = strings.TrimSpace(scriptText)
+	autoSplitMeta.OptimizedScript = strings.TrimSpace(optimizedScriptText)
 	if !chapterSplit {
 		targetEpisodes := autoSplitMeta.EstimatedEpisodes
 		if project.TargetEpisodes > 0 {

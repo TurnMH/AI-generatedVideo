@@ -725,18 +725,36 @@ export default function AdVideoWorkbenchPage() {
                 {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
               </div>
               {autoSplitInfo?.enabled && (
-                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-xs text-cyan-100">
-                  <div className="font-medium text-cyan-50">本次自动切分依据</div>
-                  <div className="mt-1 break-all">
-                    模型：{autoSplitInfo.video_model || selectedVideoModel?.model_key || '未记录'}
-                    {' · '}时长：{autoSplitInfo.duration || workflowForm.duration || '-'} 秒
-                    {' · '}风格：{autoSplitInfo.style_preset || workflowForm.stylePreset || '-'}
+                <div className="space-y-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-xs text-cyan-100">
+                  <div>
+                    <div className="font-medium text-cyan-50">本次自动切分依据</div>
+                    <div className="mt-1 break-all">
+                      模型：{autoSplitInfo.video_model || selectedVideoModel?.model_key || '未记录'}
+                      {' · '}时长：{autoSplitInfo.duration || workflowForm.duration || '-'} 秒
+                      {' · '}风格：{autoSplitInfo.style_preset || workflowForm.stylePreset || '-'}
+                    </div>
+                    <div className="mt-1 break-all text-cyan-200/90">
+                      文案长度：{autoSplitInfo.script_length || '-'} 字
+                      {' · '}目标每集承载：{autoSplitInfo.target_chars_per_episode || '-'} 字
+                      {' · '}最终分集数：{autoSplitInfo.estimated_episodes || workflowEpisodes.length || '-'}
+                    </div>
                   </div>
-                  <div className="mt-1 break-all text-cyan-200/90">
-                    文案长度：{autoSplitInfo.script_length || '-'} 字
-                    {' · '}目标每集承载：{autoSplitInfo.target_chars_per_episode || '-'} 字
-                    {' · '}最终分集数：{autoSplitInfo.estimated_episodes || workflowEpisodes.length || '-'}
-                  </div>
+                  {autoSplitInfo.original_script && (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="font-medium text-cyan-50">优化前全文</div>
+                      <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-slate-200">
+                        {autoSplitInfo.original_script}
+                      </div>
+                    </div>
+                  )}
+                  {autoSplitInfo.optimized_script && (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                      <div className="font-medium text-cyan-50">优化后全文</div>
+                      <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-slate-100">
+                        {autoSplitInfo.optimized_script}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               {workflowEpisodes.length > 0 ? (

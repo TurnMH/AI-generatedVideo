@@ -74,6 +74,8 @@ export interface AutoSplitMeta {
   script_length?: number
   estimated_episodes?: number
   target_chars_per_episode?: number
+  original_script?: string
+  optimized_script?: string
 }
 
 export interface ProjectProgress {
