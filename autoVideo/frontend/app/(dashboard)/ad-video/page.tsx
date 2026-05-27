@@ -12,8 +12,6 @@ import { useToast } from '@/components/ui/toast'
 import { modelAPI, projectAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
-const DEFAULT_ASPECT_RATIOS = ['16:9', '9:16', '1:1']
-const DEFAULT_RESOLUTIONS = ['1080p', '720p']
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
@@ -96,6 +94,11 @@ const extractStringArray = (config: Record<string, unknown> | undefined, keys: s
   return []
 }
 
+const extractParamOptionValues = (status: VideoModelStatus | null | undefined, key: string) => {
+  const values = status?.params?.find((item) => item.key === key)?.values || []
+  return uniqueStrings(values.map((item) => String(item.value || '').trim()).filter(Boolean))
+}
+
 export default function AdVideoWorkbenchPage() {
   const { toast } = useToast()
 
@@ -104,9 +107,9 @@ export default function AdVideoWorkbenchPage() {
     description: '在广告工作台内独立创建、生成、后处理，不再依赖单个项目页。',
     targetEpisodes: '9',
     stylePreset: 'realistic',
-    aspectRatio: '16:9',
-    resolution: '1080p',
-    duration: '10',
+    aspectRatio: '',
+    resolution: '',
+    duration: '',
     generateAudio: true,
     textModelId: 'default',
     imageModelId: 'default',
@@ -232,47 +235,31 @@ export default function AdVideoWorkbenchPage() {
   const selectedVideoConfig = (selectedVideoModel?.config && typeof selectedVideoModel.config === 'object'
     ? selectedVideoModel.config
     : undefined) as Record<string, unknown> | undefined
-  const aspectRatioOptions = useMemo(() => {
-    const modelRatios = uniqueStrings(selectedVideoModel?.supported_ratios || [])
-    return modelRatios.length > 0 ? modelRatios : DEFAULT_ASPECT_RATIOS
-  }, [selectedVideoModel])
-  const resolutionOptions = useMemo(() => {
-    const fromConfig = extractStringArray(selectedVideoConfig, ['resolution_options', 'resolutions', 'supported_resolutions', 'resolutions_supported'])
-    if (fromConfig.length > 0) return fromConfig
-    const maxResolution = String(selectedVideoModel?.max_resolution || '').trim()
-    if (maxResolution) {
-      const normalized = maxResolution.toLowerCase()
-      if (normalized === '1080p') return ['1080p', '720p']
-      if (normalized === '720p') return ['720p']
-      if (normalized === '480p') return ['480p']
-      return [maxResolution]
-    }
-    return DEFAULT_RESOLUTIONS
-  }, [selectedVideoConfig, selectedVideoModel])
-  const durationOptions = useMemo(() => {
-    const values = selectedVideoStatus?.params?.find((item) => item.key === 'duration')?.values || []
-    const normalized = uniqueStrings(values.map((item) => String(item.value || '').trim()).filter(Boolean))
-    return normalized
-  }, [selectedVideoStatus])
+  const aspectRatioOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'aspect_ratio'), [selectedVideoStatus])
+  const resolutionOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'resolution'), [selectedVideoStatus])
+  const durationOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'duration'), [selectedVideoStatus])
   const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
 
   useEffect(() => {
+    if (!selectedVideoModel) return
     if (!aspectRatioOptions.includes(workflowForm.aspectRatio)) {
-      setWorkflowForm((prev) => ({ ...prev, aspectRatio: aspectRatioOptions[0] || '16:9' }))
+      setWorkflowForm((prev) => ({ ...prev, aspectRatio: aspectRatioOptions[0] || '' }))
     }
-  }, [aspectRatioOptions, workflowForm.aspectRatio])
+  }, [selectedVideoModel, aspectRatioOptions, workflowForm.aspectRatio])
 
   useEffect(() => {
+    if (!selectedVideoModel) return
     if (!resolutionOptions.includes(workflowForm.resolution)) {
-      setWorkflowForm((prev) => ({ ...prev, resolution: resolutionOptions[0] || '1080p' }))
+      setWorkflowForm((prev) => ({ ...prev, resolution: resolutionOptions[0] || '' }))
     }
-  }, [resolutionOptions, workflowForm.resolution])
+  }, [selectedVideoModel, resolutionOptions, workflowForm.resolution])
 
   useEffect(() => {
-    if (durationOptions.length > 0 && !durationOptions.includes(workflowForm.duration)) {
-      setWorkflowForm((prev) => ({ ...prev, duration: durationOptions[0] || '10' }))
+    if (!selectedVideoModel) return
+    if (!durationOptions.includes(workflowForm.duration)) {
+      setWorkflowForm((prev) => ({ ...prev, duration: durationOptions[0] || '' }))
     }
-  }, [durationOptions, workflowForm.duration])
+  }, [selectedVideoModel, durationOptions, workflowForm.duration])
 
   useEffect(() => {
     if (!nativeAudioSupported && workflowForm.generateAudio) {
@@ -283,6 +270,22 @@ export default function AdVideoWorkbenchPage() {
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
       toast({ title: '请先填写广告工作项目标题', variant: 'destructive' })
+      return
+    }
+    if (!selectedVideoModel) {
+      toast({ title: '请先选择视频模型', variant: 'destructive' })
+      return
+    }
+    if (!workflowForm.aspectRatio || !aspectRatioOptions.includes(workflowForm.aspectRatio)) {
+      toast({ title: '当前模型没有可用的画幅比例参数，请先切换模型', variant: 'destructive' })
+      return
+    }
+    if (!workflowForm.resolution || !resolutionOptions.includes(workflowForm.resolution)) {
+      toast({ title: '当前模型没有可用的分辨率参数，请先切换模型', variant: 'destructive' })
+      return
+    }
+    if (!workflowForm.duration || !durationOptions.includes(workflowForm.duration)) {
+      toast({ title: '当前模型没有可用的时长参数，请先切换模型', variant: 'destructive' })
       return
     }
     setCreatingProject(true)
@@ -307,7 +310,7 @@ export default function AdVideoWorkbenchPage() {
         storyboard_config: {
           aspect_ratio: workflowForm.aspectRatio,
           resolution: workflowForm.resolution,
-          duration: Math.max(1, Number(workflowForm.duration) || 10),
+          duration: Number(workflowForm.duration),
           video_mode: 'api_generation',
           style_preset: workflowForm.stylePreset,
           motion_mode: 'gentle',
@@ -551,13 +554,18 @@ export default function AdVideoWorkbenchPage() {
                       <select
                         value={workflowForm.aspectRatio}
                         onChange={(e) => setWorkflowForm((prev) => ({ ...prev, aspectRatio: e.target.value }))}
-                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                        disabled={aspectRatioOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:bg-slate-100"
                       >
-                        {aspectRatioOptions.map((ratio) => (
-                          <option key={ratio} value={ratio}>{ratio}</option>
-                        ))}
+                        {aspectRatioOptions.length > 0 ? (
+                          aspectRatioOptions.map((ratio) => (
+                            <option key={ratio} value={ratio}>{ratio}</option>
+                          ))
+                        ) : (
+                          <option value="">当前模型未声明画幅比例</option>
+                        )}
                       </select>
-                      <div className="text-[11px] text-slate-500">按当前模型真实支持比例展示；不支持时回退默认比例。</div>
+                      <div className="text-[11px] text-slate-500">只展示当前模型在 model-status 中真实声明的画幅比例；未声明就不允许乱填。</div>
                     </div>
 
                     <div className="space-y-2">
@@ -565,41 +573,37 @@ export default function AdVideoWorkbenchPage() {
                       <select
                         value={workflowForm.resolution}
                         onChange={(e) => setWorkflowForm((prev) => ({ ...prev, resolution: e.target.value }))}
-                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                        disabled={resolutionOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:bg-slate-100"
                       >
-                        {resolutionOptions.map((resolution) => (
-                          <option key={resolution} value={resolution}>{resolution}</option>
-                        ))}
+                        {resolutionOptions.length > 0 ? (
+                          resolutionOptions.map((resolution) => (
+                            <option key={resolution} value={resolution}>{resolution}</option>
+                          ))
+                        ) : (
+                          <option value="">当前模型未声明分辨率</option>
+                        )}
                       </select>
-                      <div className="text-[11px] text-slate-500">优先读取模型配置里的分辨率选项；拿不到时按 `max_resolution` 兜底。</div>
+                      <div className="text-[11px] text-slate-500">只展示当前模型在 model-status 中真实声明的分辨率；未声明就不允许乱填。</div>
                     </div>
 
                     <div className="space-y-2">
                       <Label className="text-slate-200">默认片段时长（秒）</Label>
-                      {durationOptions.length > 0 ? (
-                        <select
-                          value={workflowForm.duration}
-                          onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
-                          className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-                        >
-                          {durationOptions.map((duration) => (
+                      <select
+                        value={workflowForm.duration}
+                        onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
+                        disabled={durationOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:bg-slate-100"
+                      >
+                        {durationOptions.length > 0 ? (
+                          durationOptions.map((duration) => (
                             <option key={duration} value={duration}>{duration} 秒</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <Input
-                          type="number"
-                          min={1}
-                          max={60}
-                          value={workflowForm.duration}
-                          onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
-                        />
-                      )}
-                      <div className="text-[11px] text-slate-500">
-                        {durationOptions.length > 0
-                          ? '按当前模型在 model-status 中声明的时长能力展示；创建项目时会真实写入 storyboard_config.duration。'
-                          : '当前模型未声明离散时长能力，先允许手动填写；创建项目时会真实写入 storyboard_config.duration。'}
-                      </div>
+                          ))
+                        ) : (
+                          <option value="">当前模型未声明时长</option>
+                        )}
+                      </select>
+                      <div className="text-[11px] text-slate-500">只展示当前模型在 model-status 中真实声明的时长；未声明就不允许乱填，并且不会提交。</div>
                     </div>
 
                     <div className="space-y-2">
@@ -639,7 +643,7 @@ export default function AdVideoWorkbenchPage() {
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-2">
                       <div className="text-[11px] text-slate-500">支持时长</div>
-                      <div className="mt-1 text-white">{durationOptions.length > 0 ? durationOptions.map((item) => `${item} 秒`).join(' / ') : '未声明离散时长'}</div>
+                      <div className="mt-1 text-white">{durationOptions.length > 0 ? durationOptions.map((item) => `${item} 秒`).join(' / ') : '未声明，不可手填'}</div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
                       <div className="text-[11px] text-slate-500">能力标签</div>
