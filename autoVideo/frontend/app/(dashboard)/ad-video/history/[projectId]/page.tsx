@@ -214,14 +214,10 @@ export default function AdVideoHistoryDetailPage() {
   const availableModels = (videoModelStatus || []).filter((item) => item.available)
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
   const autoSplit = project?.progress?.auto_split || null
-  const resolvedOptimizedScript = useMemo(() => {
-    const candidate = [
-      typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script : '',
-      typeof project?.script_text === 'string' ? project.script_text : '',
-      typeof autoSplit?.original_script === 'string' ? autoSplit.original_script : '',
-    ].map((item) => item.trim()).find(Boolean)
-    return candidate || ''
-  }, [autoSplit?.optimized_script, autoSplit?.original_script, project?.script_text])
+  const realOptimizedScript = useMemo(
+    () => (typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script.trim() : ''),
+    [autoSplit?.optimized_script],
+  )
   const resultUrl = taskResultUrl(latestTask)
 
   const selectedEpisodeNumber = useMemo(() => {
@@ -346,12 +342,12 @@ export default function AdVideoHistoryDetailPage() {
 
   useEffect(() => {
     setEditableOptimizedScript((prev) => {
-      if (!prev.trim()) return resolvedOptimizedScript
-      if (prev.trim() === resolvedOptimizedScript.trim()) return prev
-      if (!resolvedOptimizedScript.trim()) return prev
-      return prev
+      if (!prev.trim()) return realOptimizedScript
+      if (prev.trim() === realOptimizedScript) return prev
+      if (!realOptimizedScript) return prev
+      return realOptimizedScript
     })
-  }, [resolvedOptimizedScript])
+  }, [realOptimizedScript])
 
   useEffect(() => {
     if (!availableModels.length) return
@@ -657,7 +653,7 @@ export default function AdVideoHistoryDetailPage() {
             <CardContent>
               <Tabs defaultValue="copy" className="space-y-4">
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
-                  <TabsTrigger value="copy">文案 · {editableOptimizedScript.trim().length} 字 / {episodes.length} 集</TabsTrigger>
+                  <TabsTrigger value="copy">文案 · {realOptimizedScript.length} 字 / {episodes.length} 集</TabsTrigger>
                   <TabsTrigger value="storyboard">分镜 · {scopeStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
                   <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
@@ -678,16 +674,22 @@ export default function AdVideoHistoryDetailPage() {
                       <div className="mb-3 flex items-center justify-between gap-2">
                         <div>
                           <div className="text-sm font-medium text-white">优化后的文案</div>
-                          <div className="mt-1 text-[11px] text-emerald-200/75">右侧直接编辑，保存当前用于步骤 1 重拆分的最终版本。</div>
+                          <div className="mt-1 text-[11px] text-emerald-200/75">右侧只展示并编辑真正的优化稿，真实来源是 `project.progress.auto_split.optimized_script`。</div>
                         </div>
-                        <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
+                        <div className="text-[11px] text-emerald-200/75">{realOptimizedScript.length} 字</div>
                       </div>
-                      <Textarea
-                        value={editableOptimizedScript}
-                        onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                        className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100"
-                        placeholder="这里保留当前要进入流水线的广告文案。"
-                      />
+                      {realOptimizedScript ? (
+                        <Textarea
+                          value={editableOptimizedScript}
+                          onChange={(e) => setEditableOptimizedScript(e.target.value)}
+                          className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100"
+                          placeholder="这里保留当前要进入流水线的广告文案。"
+                        />
+                      ) : (
+                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+                          当前项目的运行态尚未返回真正优化后的文案（`auto_split.optimized_script` 为空），因此右侧不再用原文冒充。要显示真实优化稿，需要先让后端把该字段稳定回流到项目 progress。
+                        </div>
+                      )}
                     </div>
                   </div>
                 </TabsContent>
