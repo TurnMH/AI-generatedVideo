@@ -4759,31 +4759,91 @@ func splitByChapters(text string) []llmEpisode {
 	return episodes
 }
 
-// simpleSplit —— 降级方案：将剧本按字数均匀切分为 N 集
-// simpleSplit divides the script into N roughly equal parts as a fallback.
+type adSemanticUnit struct {
+	Text  string
+	Title string
+}
+
+// simpleSplit —— 降级方案：优先按广告语义段切分，再按目标集数合并。
+// 避免在广告文案里生硬按字数均分，尽量贴合卖点段、转场句、CTA、口播句群。
 func (s *EpisodeService) simpleSplit(scriptText string, n int) []llmEpisode {
-	runes := []rune(scriptText)
-	total := len(runes)
-	chunkSize := total / n
-	if chunkSize < 100 {
-		chunkSize = total
+	trimmed := strings.TrimSpace(scriptText)
+	if trimmed == "" {
+		return nil
+	}
+	if n <= 0 {
 		n = 1
 	}
 
+	units := splitAdSemanticUnits(trimmed)
+	if len(units) == 0 {
+		units = []adSemanticUnit{{Text: trimmed}}
+	}
+	if len(units) < n {
+		units = splitOversizedSemanticUnits(units, n)
+	}
+	if len(units) == 0 {
+		units = []adSemanticUnit{{Text: trimmed}}
+	}
+	if len(units) < n {
+		n = len(units)
+	}
+	if n <= 0 {
+		n = 1
+	}
+
+	totalChars := 0
+	for _, unit := range units {
+		totalChars += utf8.RuneCountInString(unit.Text)
+	}
+	if totalChars <= 0 {
+		totalChars = utf8.RuneCountInString(trimmed)
+	}
+	targetChars := totalChars / n
+	if targetChars < 80 {
+		targetChars = 80
+	}
+
+	groups := make([][]adSemanticUnit, 0, n)
+	current := make([]adSemanticUnit, 0)
+	currentChars := 0
+	for idx, unit := range units {
+		unitChars := utf8.RuneCountInString(unit.Text)
+		remainingUnitsAfter := len(units) - idx
+		remainingGroupsAfterCurrent := n - len(groups) - 1
+		shouldFlush := false
+		if len(current) > 0 && len(groups) < n-1 {
+			if currentChars+unitChars > targetChars && remainingUnitsAfter > remainingGroupsAfterCurrent {
+				shouldFlush = true
+			}
+			if remainingUnitsAfter == remainingGroupsAfterCurrent {
+				shouldFlush = true
+			}
+		}
+		if shouldFlush {
+			groups = append(groups, current)
+			current = nil
+			currentChars = 0
+		}
+		current = append(current, unit)
+		currentChars += unitChars
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+	for len(groups) > n {
+		last := groups[len(groups)-1]
+		groups = groups[:len(groups)-1]
+		groups[len(groups)-1] = append(groups[len(groups)-1], last...)
+	}
+
 	var episodes []llmEpisode
-	for i := 0; i < n; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if i == n-1 || end > total {
-			end = total
+	for i, group := range groups {
+		excerpt := joinSemanticUnits(group)
+		if strings.TrimSpace(excerpt) == "" {
+			continue
 		}
-		excerpt := string(runes[start:end])
-		// Find a reasonable title from the first line
-		title := fmt.Sprintf("第%d集", i+1)
-		lines := strings.SplitN(excerpt, "\n", 3)
-		if len(lines) > 0 && utf8.RuneCountInString(lines[0]) <= 20 && lines[0] != "" {
-			title = strings.TrimSpace(lines[0])
-		}
+		title := deriveSemanticTitle(group, i+1)
 		summary := excerpt
 		if utf8.RuneCountInString(summary) > 100 {
 			summary = string([]rune(summary)[:100]) + "..."
@@ -4794,7 +4854,184 @@ func (s *EpisodeService) simpleSplit(scriptText string, n int) []llmEpisode {
 			Excerpt: excerpt,
 		})
 	}
+	if len(episodes) == 0 {
+		return []llmEpisode{{
+			Title:   "第1集",
+			Summary: trimmed,
+			Excerpt: trimmed,
+		}}
+	}
 	return episodes
+}
+
+func splitAdSemanticUnits(text string) []adSemanticUnit {
+	text = normalizeSemanticSplitText(text)
+	if text == "" {
+		return nil
+	}
+
+	paragraphs := splitSemanticParagraphs(text)
+	var units []adSemanticUnit
+	for _, paragraph := range paragraphs {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			continue
+		}
+		if looksLikeStrongAdBoundary(paragraph) && utf8.RuneCountInString(paragraph) <= 140 {
+			units = append(units, adSemanticUnit{Text: paragraph, Title: extractSemanticHeading(paragraph)})
+			continue
+		}
+		for _, chunk := range splitParagraphIntoSemanticChunks(paragraph) {
+			chunk = strings.TrimSpace(chunk)
+			if chunk == "" {
+				continue
+			}
+			units = append(units, adSemanticUnit{Text: chunk, Title: extractSemanticHeading(chunk)})
+		}
+	}
+	return units
+}
+
+func normalizeSemanticSplitText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "。\n", "。\n\n")
+	text = strings.ReplaceAll(text, "！\n", "！\n\n")
+	text = strings.ReplaceAll(text, "？\n", "？\n\n")
+	return strings.TrimSpace(text)
+}
+
+func splitSemanticParagraphs(text string) []string {
+	re := regexp.MustCompile(`\n\s*\n+`)
+	parts := re.Split(text, -1)
+	if len(parts) == 0 {
+		return []string{text}
+	}
+	return parts
+}
+
+func looksLikeStrongAdBoundary(paragraph string) bool {
+	markers := []string{
+		"【", "卖点", "痛点", "转场", "镜头", "场景", "口播", "旁白", "CTA", "行动号召", "立即", "马上", "下单", "购买", "点击", "关注", "现在就",
+	}
+	for _, marker := range markers {
+		if strings.Contains(paragraph, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitParagraphIntoSemanticChunks(paragraph string) []string {
+	paragraph = strings.TrimSpace(paragraph)
+	if paragraph == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(paragraph) <= 140 {
+		return []string{paragraph}
+	}
+
+	splitter := regexp.MustCompile(`(?m)(?:(?<=[。！？!?；;])\s*|\n+)`)
+	segments := splitter.Split(paragraph, -1)
+	var chunks []string
+	var current []string
+	currentLen := 0
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		chunks = append(chunks, strings.TrimSpace(strings.Join(current, "")))
+		current = nil
+		currentLen = 0
+	}
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		segLen := utf8.RuneCountInString(segment)
+		if len(current) > 0 && (currentLen+segLen > 140 || looksLikeStrongAdBoundary(segment)) {
+			flush()
+		}
+		current = append(current, segment)
+		currentLen += segLen
+		if currentLen >= 110 || looksLikeStrongAdBoundary(segment) {
+			flush()
+		}
+	}
+	flush()
+	if len(chunks) == 0 {
+		return []string{paragraph}
+	}
+	return chunks
+}
+
+func splitOversizedSemanticUnits(units []adSemanticUnit, targetCount int) []adSemanticUnit {
+	if len(units) >= targetCount || targetCount <= 0 {
+		return units
+	}
+	var expanded []adSemanticUnit
+	for _, unit := range units {
+		text := strings.TrimSpace(unit.Text)
+		if text == "" {
+			continue
+		}
+		if utf8.RuneCountInString(text) > 220 {
+			parts := splitParagraphIntoSemanticChunks(text)
+			if len(parts) > 1 {
+				for _, part := range parts {
+					expanded = append(expanded, adSemanticUnit{Text: part, Title: extractSemanticHeading(part)})
+				}
+				continue
+			}
+		}
+		expanded = append(expanded, unit)
+	}
+	return expanded
+}
+
+func joinSemanticUnits(units []adSemanticUnit) string {
+	parts := make([]string, 0, len(units))
+	for _, unit := range units {
+		if text := strings.TrimSpace(unit.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func deriveSemanticTitle(units []adSemanticUnit, index int) string {
+	for _, unit := range units {
+		if title := strings.TrimSpace(unit.Title); title != "" {
+			return title
+		}
+		lines := strings.Split(strings.TrimSpace(unit.Text), "\n")
+		if len(lines) == 0 {
+			continue
+		}
+		line := strings.TrimSpace(lines[0])
+		if line != "" && utf8.RuneCountInString(line) <= 20 {
+			return line
+		}
+	}
+	return fmt.Sprintf("第%d集", index)
+}
+
+func extractSemanticHeading(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	first := strings.TrimSpace(lines[0])
+	if first == "" {
+		return ""
+	}
+	first = strings.Trim(first, "【】[]#：:*- ")
+	if utf8.RuneCountInString(first) > 20 {
+		return ""
+	}
+	return first
 }
 
 // fetchScriptContent —— 通过 storage-service 获取剧本文件内容
