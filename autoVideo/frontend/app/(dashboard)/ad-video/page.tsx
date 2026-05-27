@@ -316,16 +316,6 @@ export default function AdVideoWorkbenchPage() {
     })
   }, [workflowStoryboards])
 
-  useEffect(() => {
-    const next = typeof autoSplitInfo?.optimized_script === 'string' ? autoSplitInfo.optimized_script : ''
-    setEditableOptimizedScript((prev) => {
-      if (!prev.trim()) return next
-      if (prev.trim() === next.trim()) return prev
-      if (!next.trim()) return prev
-      return prev
-    })
-  }, [autoSplitInfo?.optimized_script])
-
   const updateStoryboardDraft = (storyboardId: number, field: 'scene_description' | 'dialogue', value: string) => {
     setStoryboardDrafts((prev) => ({
       ...prev,
