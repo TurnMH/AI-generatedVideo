@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,8 @@ import { useToast } from '@/components/ui/toast'
 import { modelAPI, projectAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
+const DEFAULT_ASPECT_RATIOS = ['16:9', '9:16', '1:1']
+const DEFAULT_RESOLUTIONS = ['1080p', '720p']
 
 type Task = {
   id: number
@@ -70,6 +72,24 @@ const unwrap = <T,>(payload: unknown): T | null => {
   if (!payload || typeof payload !== 'object') return null
   const maybe = payload as { data?: T }
   return maybe.data ?? (payload as T)
+}
+
+const uniqueStrings = (values: string[]) => Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)))
+
+const extractStringArray = (config: Record<string, unknown> | undefined, keys: string[]) => {
+  if (!config) return []
+  for (const key of keys) {
+    const value = config[key]
+    if (Array.isArray(value)) {
+      const items = uniqueStrings(value.map((item) => String(item)))
+      if (items.length > 0) return items
+    }
+    if (typeof value === 'string') {
+      const items = uniqueStrings(value.split(/[\s,|/]+/))
+      if (items.length > 0) return items
+    }
+  }
+  return []
 }
 
 export default function AdVideoWorkbenchPage() {
@@ -195,6 +215,38 @@ export default function AdVideoWorkbenchPage() {
       }))
     return entries.slice(0, 12)
   }, [selectedVideoModel])
+  const selectedVideoConfig = (selectedVideoModel?.config && typeof selectedVideoModel.config === 'object'
+    ? selectedVideoModel.config
+    : undefined) as Record<string, unknown> | undefined
+  const aspectRatioOptions = useMemo(() => {
+    const modelRatios = uniqueStrings(selectedVideoModel?.supported_ratios || [])
+    return modelRatios.length > 0 ? modelRatios : DEFAULT_ASPECT_RATIOS
+  }, [selectedVideoModel])
+  const resolutionOptions = useMemo(() => {
+    const fromConfig = extractStringArray(selectedVideoConfig, ['resolution_options', 'resolutions', 'supported_resolutions', 'resolutions_supported'])
+    if (fromConfig.length > 0) return fromConfig
+    const maxResolution = String(selectedVideoModel?.max_resolution || '').trim()
+    if (maxResolution) {
+      const normalized = maxResolution.toLowerCase()
+      if (normalized === '1080p') return ['1080p', '720p']
+      if (normalized === '720p') return ['720p']
+      if (normalized === '480p') return ['480p']
+      return [maxResolution]
+    }
+    return DEFAULT_RESOLUTIONS
+  }, [selectedVideoConfig, selectedVideoModel])
+
+  useEffect(() => {
+    if (!aspectRatioOptions.includes(workflowForm.aspectRatio)) {
+      setWorkflowForm((prev) => ({ ...prev, aspectRatio: aspectRatioOptions[0] || '16:9' }))
+    }
+  }, [aspectRatioOptions, workflowForm.aspectRatio])
+
+  useEffect(() => {
+    if (!resolutionOptions.includes(workflowForm.resolution)) {
+      setWorkflowForm((prev) => ({ ...prev, resolution: resolutionOptions[0] || '1080p' }))
+    }
+  }, [resolutionOptions, workflowForm.resolution])
 
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
@@ -407,38 +459,6 @@ export default function AdVideoWorkbenchPage() {
               </select>
             </div>
             <div className="space-y-2">
-              <Label className="text-slate-200">画幅比例</Label>
-              <select
-                value={workflowForm.aspectRatio}
-                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, aspectRatio: e.target.value }))}
-                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-              >
-                <option value="16:9">16:9 横屏</option>
-                <option value="9:16">9:16 竖屏</option>
-                <option value="1:1">1:1 方图</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-slate-200">分辨率</Label>
-              <select
-                value={workflowForm.resolution}
-                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, resolution: e.target.value }))}
-                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-              >
-                <option value="1080p">1080p</option>
-                <option value="720p">720p</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-slate-200">默认片段时长（秒）</Label>
-              <Input
-                type="number"
-                min={1}
-                value={workflowForm.duration}
-                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
               <Label className="text-slate-200">文本模型</Label>
               <select
                 value={workflowForm.textModelId}
@@ -484,14 +504,57 @@ export default function AdVideoWorkbenchPage() {
               </select>
             </div>
             <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4 md:col-span-2">
-              <div className="text-sm font-medium text-white">当前视频模型支持参数</div>
+              <div className="text-sm font-medium text-white">视频模型参数</div>
               {selectedVideoModel ? (
-                <div className="space-y-3 text-xs text-slate-300">
+                <div className="space-y-4 text-xs text-slate-300">
+                  <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                    <div className="text-[11px] text-slate-500">当前模型</div>
+                    <div className="mt-1 break-all text-white">{selectedVideoModel.name} · {selectedVideoModel.model_key}</div>
+                  </div>
+
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
-                      <div className="text-[11px] text-slate-500">当前模型</div>
-                      <div className="mt-1 break-all text-white">{selectedVideoModel.name} · {selectedVideoModel.model_key}</div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-200">画幅比例</Label>
+                      <select
+                        value={workflowForm.aspectRatio}
+                        onChange={(e) => setWorkflowForm((prev) => ({ ...prev, aspectRatio: e.target.value }))}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        {aspectRatioOptions.map((ratio) => (
+                          <option key={ratio} value={ratio}>{ratio}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-slate-500">按当前模型真实支持比例展示；不支持时回退默认比例。</div>
                     </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-200">分辨率</Label>
+                      <select
+                        value={workflowForm.resolution}
+                        onChange={(e) => setWorkflowForm((prev) => ({ ...prev, resolution: e.target.value }))}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        {resolutionOptions.map((resolution) => (
+                          <option key={resolution} value={resolution}>{resolution}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-slate-500">优先读取模型配置里的分辨率选项；拿不到时按 `max_resolution` 兜底。</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-200">默认片段时长（秒）</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={workflowForm.duration}
+                        onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
+                      />
+                      <div className="text-[11px] text-slate-500">你可以自己改；创建项目时会真实写入 `storyboard_config.duration`。</div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
                       <div className="text-[11px] text-slate-500">视频模式</div>
                       <div className="mt-1 text-white">{selectedVideoModel.video_mode || '未声明'}</div>
@@ -499,14 +562,6 @@ export default function AdVideoWorkbenchPage() {
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
                       <div className="text-[11px] text-slate-500">最高分辨率</div>
                       <div className="mt-1 text-white">{selectedVideoModel.max_resolution || '未声明'}</div>
-                    </div>
-                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
-                      <div className="text-[11px] text-slate-500">支持比例</div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {(selectedVideoModel.supported_ratios?.length ? selectedVideoModel.supported_ratios : ['未声明']).map((ratio) => (
-                          <span key={ratio} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-200">{ratio}</span>
-                        ))}
-                      </div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
                       <div className="text-[11px] text-slate-500">能力标签</div>
@@ -521,7 +576,7 @@ export default function AdVideoWorkbenchPage() {
                       <div className="mt-1 leading-5 text-slate-300">{selectedVideoModel.description || '暂无模型说明'}</div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
-                      <div className="text-[11px] text-slate-500">当前可选参数</div>
+                      <div className="text-[11px] text-slate-500">模型原始附加参数</div>
                       {selectedVideoParamEntries.length > 0 ? (
                         <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                           {selectedVideoParamEntries.map((entry) => (
@@ -538,7 +593,7 @@ export default function AdVideoWorkbenchPage() {
                   </div>
                 </div>
               ) : (
-                <div className="text-xs text-slate-400">选择视频模型后，这里会展示当前模型支持的参数、能力和限制。</div>
+                <div className="text-xs text-slate-400">先选视频模型；选中后这里会直接出现可调整的模型参数。</div>
               )}
             </div>
             <div className="space-y-2 md:col-span-2">
