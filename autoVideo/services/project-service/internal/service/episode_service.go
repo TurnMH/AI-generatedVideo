@@ -488,6 +488,16 @@ type storyboardRuntimeConfig struct {
 }
 
 // ProgressInfo is the JSON structure persisted in project.progress.
+type AutoSplitMeta struct {
+	Enabled               bool   `json:"enabled,omitempty"`
+	Duration              int    `json:"duration,omitempty"`
+	VideoModel            string `json:"video_model,omitempty"`
+	StylePreset           string `json:"style_preset,omitempty"`
+	ScriptLength          int    `json:"script_length,omitempty"`
+	EstimatedEpisodes     int    `json:"estimated_episodes,omitempty"`
+	TargetCharsPerEpisode int    `json:"target_chars_per_episode,omitempty"`
+}
+
 type ProgressInfo struct {
 	Stage          string         `json:"stage"` // episode_splitting | scene_splitting | script_prepping | idle
 	EpisodeSplit   *StageProgress `json:"episode_split,omitempty"`
@@ -497,6 +507,7 @@ type ProgressInfo struct {
 	NextStep       string         `json:"next_step,omitempty"`
 	CurrentEpisode int            `json:"current_episode,omitempty"`
 	TotalEpisodes  int            `json:"total_episodes,omitempty"`
+	AutoSplit      *AutoSplitMeta `json:"auto_split,omitempty"`
 	StartedAt      string         `json:"started_at,omitempty"`
 	UpdatedAt      string         `json:"updated_at,omitempty"`
 }
@@ -521,16 +532,28 @@ func parseStoryboardRuntimeConfig(project *model.Project) storyboardRuntimeConfi
 	return cfg
 }
 
-func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
-	wordCount := utf8.RuneCountInString(strings.TrimSpace(scriptText))
-	if wordCount <= 0 {
-		return 1
+func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) AutoSplitMeta {
+	scriptLength := utf8.RuneCountInString(strings.TrimSpace(scriptText))
+	meta := AutoSplitMeta{
+		Enabled:      true,
+		Duration:     runtimeCfg.Duration,
+		VideoModel:   strings.TrimSpace(runtimeCfg.VideoModel),
+		StylePreset:  stylepreset.Canonical(runtimeCfg.StylePreset),
+		ScriptLength: scriptLength,
+	}
+	if meta.Duration <= 0 {
+		meta.Duration = 10
+	}
+	if meta.StylePreset == "" {
+		meta.StylePreset = stylepreset.Default
+	}
+	if scriptLength <= 0 {
+		meta.EstimatedEpisodes = 1
+		meta.TargetCharsPerEpisode = meta.Duration * 7
+		return meta
 	}
 
-	clipDuration := runtimeCfg.Duration
-	if clipDuration <= 0 {
-		clipDuration = 10
-	}
+	clipDuration := meta.Duration
 	if clipDuration < 3 {
 		clipDuration = 3
 	}
@@ -539,7 +562,7 @@ func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRun
 	}
 
 	charsPerSecond := 7
-	switch stylepreset.Canonical(runtimeCfg.StylePreset) {
+	switch meta.StylePreset {
 	case stylepreset.LiveActionFilm:
 		charsPerSecond = 6
 	case stylepreset.LiveActionShort:
@@ -550,12 +573,10 @@ func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRun
 		charsPerSecond = 8
 	}
 
-	modelKey := strings.ToLower(runtimeCfg.VideoModel)
+	modelKey := strings.ToLower(meta.VideoModel)
 	switch {
 	case strings.Contains(modelKey, "seedance"), strings.Contains(modelKey, "doubao"):
 		charsPerSecond -= 1
-	case strings.Contains(modelKey, "kling"), strings.Contains(modelKey, "vidu"), strings.Contains(modelKey, "wan"):
-		charsPerSecond += 0
 	case strings.Contains(modelKey, "gaga"):
 		charsPerSecond += 1
 	}
@@ -563,22 +584,26 @@ func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRun
 		charsPerSecond = 4
 	}
 
-	targetCharsPerEpisode := clipDuration * charsPerSecond
-	if targetCharsPerEpisode < 80 {
-		targetCharsPerEpisode = 80
+	meta.TargetCharsPerEpisode = clipDuration * charsPerSecond
+	if meta.TargetCharsPerEpisode < 80 {
+		meta.TargetCharsPerEpisode = 80
 	}
-	if targetCharsPerEpisode > 4000 {
-		targetCharsPerEpisode = 4000
+	if meta.TargetCharsPerEpisode > 4000 {
+		meta.TargetCharsPerEpisode = 4000
 	}
 
-	targetEpisodes := (wordCount + targetCharsPerEpisode - 1) / targetCharsPerEpisode
-	if targetEpisodes < 1 {
-		targetEpisodes = 1
+	meta.EstimatedEpisodes = (scriptLength + meta.TargetCharsPerEpisode - 1) / meta.TargetCharsPerEpisode
+	if meta.EstimatedEpisodes < 1 {
+		meta.EstimatedEpisodes = 1
 	}
-	if targetEpisodes > 200 {
-		targetEpisodes = 200
+	if meta.EstimatedEpisodes > 200 {
+		meta.EstimatedEpisodes = 200
 	}
-	return targetEpisodes
+	return meta
+}
+
+func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
+	return buildAutoSplitMeta(scriptText, runtimeCfg).EstimatedEpisodes
 }
 
 // updateProgress —— 将进度信息序列化并持久化到项目的 progress 字段
@@ -2072,6 +2097,12 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			Stage:        "episode_splitting",
 			Message:      "正在按所选风格优化广告文案，为自动切分做准备…",
 			EpisodeSplit: &StageProgress{Status: "running"},
+			AutoSplit: &AutoSplitMeta{
+				Enabled:     true,
+				Duration:    runtimeCfg.Duration,
+				VideoModel:  runtimeCfg.VideoModel,
+				StylePreset: stylepreset.Canonical(runtimeCfg.StylePreset),
+			},
 		})
 		if improved, err := s.optimizeProjectScriptForAutoSplit(ctx, project, scriptText); err != nil {
 			if s.logger != nil {
@@ -2121,10 +2152,12 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		)
 	}
 
+	autoSplitMeta := buildAutoSplitMeta(optimizedScriptText, runtimeCfg)
 	if !chapterSplit {
-		targetEpisodes := estimateAutoSplitTargetEpisodes(optimizedScriptText, runtimeCfg)
+		targetEpisodes := autoSplitMeta.EstimatedEpisodes
 		if project.TargetEpisodes > 0 {
 			targetEpisodes = project.TargetEpisodes
+			autoSplitMeta.EstimatedEpisodes = project.TargetEpisodes
 		}
 		if targetEpisodes <= 1 {
 			episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
@@ -2186,6 +2219,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	}
 
 	// Report episode split done
+	autoSplitMeta.EstimatedEpisodes = len(dbEpisodes)
 	s.updateProgress(projectID, ProgressInfo{
 		Stage: "script_prepping",
 		EpisodeSplit: &StageProgress{
@@ -2194,7 +2228,8 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		SceneSplit: &StageProgress{
 			Total: len(dbEpisodes), Completed: 0, Status: "pending",
 		},
-		Message: fmt.Sprintf("分集完成（%d 集），开始润色、格式化并串联资源与分镜…", len(dbEpisodes)),
+		Message:   fmt.Sprintf("分集完成（%d 集），开始润色、格式化并串联资源与分镜…", len(dbEpisodes)),
+		AutoSplit: &autoSplitMeta,
 	})
 	s.startAutoPreparationPipeline(project, dbEpisodes, false)
 

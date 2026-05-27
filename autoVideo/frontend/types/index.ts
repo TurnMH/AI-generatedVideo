@@ -66,6 +66,16 @@ export interface StageProgress {
   current?: number
 }
 
+export interface AutoSplitMeta {
+  enabled?: boolean
+  duration?: number
+  video_model?: string
+  style_preset?: string
+  script_length?: number
+  estimated_episodes?: number
+  target_chars_per_episode?: number
+}
+
 export interface ProjectProgress {
   stage?: 'episode_splitting' | 'scene_splitting' | 'script_prepping' | 'idle'
   episode_split?: StageProgress
@@ -75,6 +85,7 @@ export interface ProjectProgress {
   next_step?: string
   current_episode?: number
   total_episodes?: number
+  auto_split?: AutoSplitMeta
   started_at?: string
   updated_at?: string
   // Legacy fields for backward compat
