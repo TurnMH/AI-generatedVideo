@@ -7,6 +7,7 @@ import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { assetAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Project } from '@/lib/api'
@@ -658,33 +659,150 @@ export default function AdVideoHistoryDetailPage() {
 
           <Card className="border-white/10 bg-slate-900/60 text-slate-100">
             <CardHeader>
-              <CardTitle>文案优化与一致性前提</CardTitle>
-              <CardDescription className="text-slate-400">顶部先留住当前可编辑文案；真正的执行入口全部收进下面的流水线。</CardDescription>
+              <CardTitle>广告详情内容</CardTitle>
+              <CardDescription className="text-slate-400">把文案、分镜、视频分开查看；优化后的文案固定放在“文案”页签中。</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm text-slate-200">
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <div className="mb-2 text-xs font-medium text-slate-400">优化前全文</div>
-                <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.original_script || project.script_text || '暂无'}</div>
-              </div>
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="mb-2 text-xs font-medium text-emerald-200">当前用于拆分的广告文案</div>
-                    <div className="text-[11px] text-emerald-200/75">你可以先在这里修正文案，再按下方步骤 1 的视频配置重新拆分。</div>
+            <CardContent>
+              <Tabs defaultValue="copy" className="space-y-4">
+                <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
+                  <TabsTrigger value="copy">文案</TabsTrigger>
+                  <TabsTrigger value="storyboard">分镜</TabsTrigger>
+                  <TabsTrigger value="video">视频</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="copy" className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4 text-sm text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">优化后的文案</div>
+                        <div className="mt-1 text-xs text-slate-400">这里保留当前用于步骤 1 重拆分的最终广告文案，可直接编辑。</div>
+                      </div>
+                      <div className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-200">
+                        {editableOptimizedScript.trim().length} 字
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                      <div className="mb-2 text-xs font-medium text-slate-400">优化前全文</div>
+                      <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.original_script || project.script_text || '暂无'}</div>
+                    </div>
+
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="mb-2 text-xs font-medium text-emerald-200">优化后的文案（当前用于拆分）</div>
+                          <div className="text-[11px] text-emerald-200/75">你可以先在这里修正文案，再按下方步骤 1 的视频配置重新拆分。</div>
+                        </div>
+                        <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
+                      </div>
+                      <Textarea
+                        value={editableOptimizedScript}
+                        onChange={(e) => setEditableOptimizedScript(e.target.value)}
+                        className="min-h-[240px] border-emerald-500/20 bg-black/20 text-slate-100"
+                        placeholder="这里保留当前要进入流水线的广告文案。"
+                      />
+                    </div>
+
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+                      <div className="mb-2 text-xs font-medium text-amber-200">一致性前提</div>
+                      <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.consistency_premise || '当前运行态尚未返回一致性前提。'}</div>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
-                </div>
-                <Textarea
-                  value={editableOptimizedScript}
-                  onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                  className="min-h-[220px] border-emerald-500/20 bg-black/20 text-slate-100"
-                  placeholder="这里保留当前要进入流水线的广告文案。"
-                />
-              </div>
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                <div className="mb-2 text-xs font-medium text-amber-200">一致性前提</div>
-                <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.consistency_premise || '当前运行态尚未返回一致性前提。'}</div>
-              </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">自动分集结果</div>
+                        <div className="mt-1 text-xs text-slate-400">这里展示步骤 1 拆分后的片段载体，方便对照优化文案查看。</div>
+                      </div>
+                      <div className="text-[11px] text-slate-400">共 {episodes.length} 集</div>
+                    </div>
+
+                    {episodes.length === 0 ? (
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有分集记录。</div>
+                    ) : episodes.map((episode) => (
+                      <div key={episode.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
+                        <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
+                        <div className="mt-2 whitespace-pre-wrap break-words text-slate-400">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
+                      </div>
+                    ))}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="storyboard" className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">当前范围分镜</div>
+                        <div className="mt-1 text-xs text-slate-400">这里直接看当前范围的 scene_description / dialogue / 分镜图是否齐了。</div>
+                      </div>
+                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel} · 分镜 {scopeStoryboards.length} 条</div>
+                    </div>
+                  </div>
+
+                  {scopeStoryboards.length === 0 ? (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前范围还没有分镜记录。</div>
+                  ) : scopeStoryboards.map((storyboard) => (
+                    <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number} · {storyboard.status || '-'} · episode {storyboard.episode_id || '-'}</div>
+                        <div className="text-[11px] text-slate-400">引用素材：{storyboard.asset_ids?.length || 0}</div>
+                      </div>
+                      {String(storyboard.image_url || '').trim() && (
+                        <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={storyboard.image_url} alt={`storyboard-${storyboard.id}`} className="max-h-64 w-full object-cover" />
+                        </div>
+                      )}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                          <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
+                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                        </div>
+                        <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+                          <div className="mb-2 text-xs font-medium text-violet-200">台词</div>
+                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                        </div>
+                      </div>
+                      <div className="grid gap-2 text-xs text-slate-400 md:grid-cols-4">
+                        <div>location：{storyboard.location || '-'}</div>
+                        <div>camera：{storyboard.camera_movement || '-'}</div>
+                        <div>duration：{storyboard.duration || '-'} 秒</div>
+                        <div>asset_ids：{storyboard.asset_ids?.length ? storyboard.asset_ids.join(', ') : '-'}</div>
+                      </div>
+                    </div>
+                  ))}
+                </TabsContent>
+
+                <TabsContent value="video" className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">视频任务 / 完整视频</div>
+                        <div className="mt-1 text-xs text-slate-400">广告历史详情内直接查看当前视频生成进度与完整视频结果。</div>
+                      </div>
+                      <div className="text-[11px] text-slate-400">当前任务数：{tasks.length}</div>
+                    </div>
+
+                    {tasks.length === 0 ? (
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有视频任务记录。</div>
+                    ) : tasks.slice().sort((a, b) => Number(b.id) - Number(a.id)).map((task) => (
+                      <div key={task.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
+                        <div>task #{task.id} · {task.status || '-'} · model {task.model_name || '-'} · {task.created_at || '-'}</div>
+                        {task.error_msg && <div className="mt-2 text-rose-300">错误：{task.error_msg}</div>}
+                        {taskResultUrl(task) && <div className="mt-2 break-all"><a className="text-cyan-300 underline" href={taskResultUrl(task)} target="_blank" rel="noreferrer">打开结果视频</a></div>}
+                      </div>
+                    ))}
+
+                    {resultUrl && (
+                      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
+                        <div className="mb-2 text-xs text-slate-400">最新完整视频预览</div>
+                        <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={resultUrl} />
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
             </CardContent>
           </Card>
 
@@ -970,87 +1088,6 @@ export default function AdVideoHistoryDetailPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-            <CardHeader>
-              <CardTitle>分集进度</CardTitle>
-              <CardDescription className="text-slate-400">展示自动切分后的片段载体。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {episodes.length === 0 ? (
-                <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前还没有分集记录。</div>
-              ) : episodes.map((episode) => (
-                <div key={episode.id} className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-200">
-                  <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
-                  <div className="mt-2 whitespace-pre-wrap break-words text-slate-400">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-            <CardHeader>
-              <CardTitle>当前范围分镜</CardTitle>
-              <CardDescription className="text-slate-400">这里直接看当前范围的 scene_description / dialogue / 分镜图是否齐了。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {scopeStoryboards.length === 0 ? (
-                <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前范围还没有分镜记录。</div>
-              ) : scopeStoryboards.map((storyboard) => (
-                <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number} · {storyboard.status || '-'} · episode {storyboard.episode_id || '-'}</div>
-                    <div className="text-[11px] text-slate-400">引用素材：{storyboard.asset_ids?.length || 0}</div>
-                  </div>
-                  {String(storyboard.image_url || '').trim() && (
-                    <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={storyboard.image_url} alt={`storyboard-${storyboard.id}`} className="max-h-64 w-full object-cover" />
-                    </div>
-                  )}
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
-                      <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
-                      <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
-                    </div>
-                    <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
-                      <div className="mb-2 text-xs font-medium text-violet-200">台词</div>
-                      <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
-                    </div>
-                  </div>
-                  <div className="grid gap-2 text-xs text-slate-400 md:grid-cols-4">
-                    <div>location：{storyboard.location || '-'}</div>
-                    <div>camera：{storyboard.camera_movement || '-'}</div>
-                    <div>duration：{storyboard.duration || '-'} 秒</div>
-                    <div>asset_ids：{storyboard.asset_ids?.length ? storyboard.asset_ids.join(', ') : '-'}</div>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-            <CardHeader>
-              <CardTitle>视频任务 / 完整视频</CardTitle>
-              <CardDescription className="text-slate-400">广告历史详情内直接查看当前视频生成进度与完整视频结果。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {tasks.length === 0 ? (
-                <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前还没有视频任务记录。</div>
-              ) : tasks.slice().sort((a, b) => Number(b.id) - Number(a.id)).map((task) => (
-                <div key={task.id} className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-200">
-                  <div>task #{task.id} · {task.status || '-'} · model {task.model_name || '-'} · {task.created_at || '-'}</div>
-                  {task.error_msg && <div className="mt-2 text-rose-300">错误：{task.error_msg}</div>}
-                  {taskResultUrl(task) && <div className="mt-2 break-all"><a className="text-cyan-300 underline" href={taskResultUrl(task)} target="_blank" rel="noreferrer">打开结果视频</a></div>}
-                </div>
-              ))}
-              {resultUrl && (
-                <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
-                  <div className="mb-2 text-xs text-slate-400">最新完整视频预览</div>
-                  <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={resultUrl} />
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </>
       )}
     </div>
