@@ -750,20 +750,20 @@ export default function AdVideoWorkbenchPage() {
                 value={workflowForm.scriptText}
                 onChange={(e) => setWorkflowForm((prev) => ({ ...prev, scriptText: e.target.value }))}
                 className="min-h-[220px]"
-                placeholder="把整套广告文案直接贴在这里。创建广告项目后，系统会立即开始“广告文案优化 → 自动分集 → 自动分镜”，并自动补全：世界观、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容，以及最终给 AI 的 Prompt 描述。"
+                placeholder="把广告文案贴在这里。创建后会自动开始：文案优化 → 自动分集 → 自动分镜。"
               />
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Button disabled={creatingProject} onClick={createWorkflowProject}>
-              {creatingProject ? '创建并启动中…' : '1）创建广告项目并开始文案优化'}
+              {creatingProject ? '创建中…' : '1）新建广告项目'}
             </Button>
             <Button variant="outline" onClick={openAdHistory}>
-              2）创建历史
+              2）查看历史
             </Button>
             <Button variant="outline" disabled={!workflowProjectId} onClick={openCurrentProgress}>
-              3）历史详情 / 进度
+              3）当前项目详情
             </Button>
             {workflowProjectId && (
               <Button variant="outline" asChild>
@@ -773,20 +773,14 @@ export default function AdVideoWorkbenchPage() {
           </div>
 
           <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">
-            <div>现在这里的创建动作已经变成一键链路：</div>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">
-              <li>创建广告项目载体，并自动标记为 <code>ad-workbench</code>。</li>
-              <li>自动上传当前广告文案，不再保留单独“上传当前脚本”按钮。</li>
-              <li>立即触发“文案优化 → 自动分集 → 自动分镜”。</li>
-              <li>优化 prompt 会按 14 个方向补全并固化：世界观、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容与 AI Prompt 描述，并写入一致性前提。</li>
-            </ul>
+            新建后会自动执行：文案优化、自动分集、自动分镜。后续的人物图、分镜图、视频生成请进入“当前项目详情”。
           </div>
         </CardContent>
       </Card>
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
-          <CardTitle className="text-white">二、广告工作项目任务区</CardTitle>
+          <CardTitle className="text-white">二、当前项目概览</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-sm text-slate-300">
           {workflowProject ? (
@@ -1091,7 +1085,7 @@ export default function AdVideoWorkbenchPage() {
               </TabsContent>
             </Tabs>
           ) : (
-            <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建广告项目并开始文案优化”，系统会自动继续文案优化、自动分集与自动分镜。</div>
+            <div className="text-xs text-slate-400">还没有当前项目。先新建一个广告项目，完成后再进入详情页继续处理。</div>
           )}
         </CardContent>
       </Card>
