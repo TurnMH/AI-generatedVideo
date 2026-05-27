@@ -1,80 +1,22 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
-import { modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
-import type { Storyboard } from '@/types'
-
-const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
+import { modelAPI, projectAPI, videoAPI, type Model, type Project } from '@/lib/api'
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
 type VideoModelStatus = { key: string; available: boolean; native_audio?: boolean; params?: ModelParamOption[] }
 
-type Task = {
-  id: number
-  project_id: number
-  status?: string
-  result_url?: string
-  subtitle_text?: string
-  error_msg?: string
-  render_config?: Record<string, unknown>
-}
-
-type ComposeAdResponse = {
-  code?: number
-  data?: {
-    task_ids?: number[]
-    task_id?: number
-    result_url?: string
-    task?: Task
-    meta?: Record<string, unknown>
-  }
-}
-
 type ProjectPayload = {
   code?: number
   data?: Project
-}
-
-type EpisodesPayload = {
-  code?: number
-  data?: Episode[]
-}
-
-type ProgressPayload = {
-  code?: number
-  data?: Project['progress']
-}
-
-type StoryboardsPayload = {
-  code?: number
-  data?: Storyboard[]
-}
-
-const parseIds = (raw: string) =>
-  raw
-    .split(/[\s,]+/)
-    .map((v) => Number(v.trim()))
-    .filter((v) => Number.isFinite(v) && v > 0)
-
-const getResultUrl = (task?: Task) => {
-  if (!task) return ''
-  const rc = task.render_config || {}
-  const active = String(rc.active_result_variant || '').trim()
-  const original = String(rc.original_result_url || '').trim()
-  const subtitled = String(rc.subtitled_result_url || '').trim()
-  if (active === 'subtitled' && subtitled) return subtitled
-  if (active === 'original' && original) return original
-  return String(task.result_url || subtitled || original || '').trim()
 }
 
 const unwrap = <T,>(payload: unknown): T | null => {
@@ -126,17 +68,6 @@ export default function AdVideoWorkbenchPage() {
   const [creatingProject, setCreatingProject] = useState(false)
   const creatingProjectRef = useRef(false)
   const [startingFlow, setStartingFlow] = useState(false)
-  const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
-  const [savingAllStoryboards, setSavingAllStoryboards] = useState(false)
-  const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
-
-  const [idsText, setIdsText] = useState(DEFAULT_IDS)
-  const [orderedIds, setOrderedIds] = useState<number[]>(parseIds(DEFAULT_IDS))
-  const [busy, setBusy] = useState(false)
-  const [busyTaskId, setBusyTaskId] = useState<number | null>(null)
-  const [resultUrl, setResultUrl] = useState('')
-  const [resultTaskId, setResultTaskId] = useState<number | null>(null)
-  const idsKey = useMemo(() => orderedIds.join(','), [orderedIds])
 
   const { data: workflowProjectData, mutate: mutateProject } = useSWR(
     workflowProjectId ? ['ad-video-project', workflowProjectId] : null,
@@ -145,37 +76,6 @@ export default function AdVideoWorkbenchPage() {
       return unwrap<Project>((res as { data?: ProjectPayload }).data)
     },
     { revalidateOnFocus: true },
-  )
-
-  const { data: workflowEpisodesData, mutate: mutateEpisodes } = useSWR(
-    workflowProjectId ? ['ad-video-episodes', workflowProjectId] : null,
-    async () => {
-      const res = await projectAPI.listEpisodes(workflowProjectId as number)
-      const payload = (res as { data?: EpisodesPayload }).data
-      return unwrap<Episode[]>(payload) ?? []
-    },
-    { refreshInterval: 5000, revalidateOnFocus: true },
-  )
-
-  const { data: workflowStoryboardsData, mutate: mutateStoryboards } = useSWR(
-    workflowProjectId ? ['ad-video-storyboards', workflowProjectId] : null,
-    async () => {
-      const res = await storyboardAPI.listAll(workflowProjectId as number)
-      const payload = (res as { data?: Storyboard[] | StoryboardsPayload }).data
-      if (Array.isArray(payload)) return payload
-      return unwrap<Storyboard[]>(payload) ?? []
-    },
-    { refreshInterval: 5000, revalidateOnFocus: true },
-  )
-
-  const { data: workflowProgressData, mutate: mutateProgress } = useSWR(
-    workflowProjectId ? ['ad-video-progress', workflowProjectId] : null,
-    async () => {
-      const res = await projectAPI.getProgress(workflowProjectId as number)
-      const payload = (res as { data?: ProgressPayload }).data
-      return unwrap<Project['progress']>(payload)
-    },
-    { refreshInterval: 5000, revalidateOnFocus: true },
   )
 
   const { data: workflowModelData } = useSWR(['ad-video-models'], async () => {
@@ -204,32 +104,6 @@ export default function AdVideoWorkbenchPage() {
     }
   }, { revalidateOnFocus: true })
 
-  const { data, mutate, isLoading } = useSWR(
-    idsKey ? ['ad-video-tasks', idsKey] : null,
-    async () => {
-      const results = await Promise.all(
-        orderedIds.map(async (id) => {
-          const res = await videoAPI.getTask<Task>(id)
-          const payload = res.data as VideoTaskDetailResponse<Task>
-          return payload?.data?.task as Task
-        }),
-      )
-      return results.filter(Boolean)
-    },
-    {
-      refreshInterval: (latest) =>
-        Array.isArray(latest) && latest.some((task) => task?.status === 'pending' || task?.status === 'processing') ? 5000 : 0,
-      revalidateOnFocus: true,
-    },
-  )
-
-  const tasks = useMemo(() => data || [], [data])
-  const workflowEpisodes = useMemo(() => workflowEpisodesData || [], [workflowEpisodesData])
-  const workflowStoryboards = useMemo(
-    () => (workflowStoryboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number),
-    [workflowStoryboardsData],
-  )
-  const workflowProgress = workflowProgressData || null
   const workflowProject = workflowProjectData || null
   const textModels = useMemo(() => workflowModelData?.text || [], [workflowModelData])
   const imageModels = useMemo(() => workflowModelData?.image || [], [workflowModelData])
@@ -240,11 +114,6 @@ export default function AdVideoWorkbenchPage() {
     if (!Number.isFinite(selectedId) || selectedId <= 0) return null
     return videoModels.find((item) => item.id === selectedId) || null
   }, [videoModels, workflowForm.videoModelId])
-  const selectedImageModel = useMemo(() => {
-    const selectedId = Number(workflowForm.imageModelId)
-    if (!Number.isFinite(selectedId) || selectedId <= 0) return null
-    return imageModels.find((item) => item.id === selectedId) || null
-  }, [imageModels, workflowForm.imageModelId])
   const selectedVideoStatus = useMemo(() => {
     const modelKey = String(selectedVideoModel?.model_key || '').trim()
     if (!modelKey) return null
@@ -268,8 +137,6 @@ export default function AdVideoWorkbenchPage() {
   const resolutionOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'resolution'), [selectedVideoStatus])
   const durationOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'duration'), [selectedVideoStatus])
   const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
-  const autoSplitInfo = workflowProgress?.auto_split || null
-
   useEffect(() => {
     if (!selectedVideoModel) return
     if (!aspectRatioOptions.includes(workflowForm.aspectRatio)) {
@@ -296,70 +163,6 @@ export default function AdVideoWorkbenchPage() {
       setWorkflowForm((prev) => ({ ...prev, generateAudio: false }))
     }
   }, [nativeAudioSupported, workflowForm.generateAudio])
-
-  useEffect(() => {
-    setStoryboardDrafts((prev) => {
-      let changed = false
-      const next = { ...prev }
-      for (const storyboard of workflowStoryboards) {
-        if (!next[storyboard.id]) {
-          next[storyboard.id] = {
-            scene_description: storyboard.scene_description || '',
-            dialogue: storyboard.dialogue || '',
-          }
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-  }, [workflowStoryboards])
-
-  const updateStoryboardDraft = (storyboardId: number, field: 'scene_description' | 'dialogue', value: string) => {
-    setStoryboardDrafts((prev) => ({
-      ...prev,
-      [storyboardId]: {
-        scene_description: prev[storyboardId]?.scene_description ?? workflowStoryboards.find((item) => item.id === storyboardId)?.scene_description ?? '',
-        dialogue: prev[storyboardId]?.dialogue ?? workflowStoryboards.find((item) => item.id === storyboardId)?.dialogue ?? '',
-        [field]: value,
-      },
-    }))
-  }
-
-  const saveStoryboardDraft = async (storyboardId: number, silent = false) => {
-    if (!workflowProjectId) return
-    const draft = storyboardDrafts[storyboardId]
-    if (!draft) return
-    setSavingStoryboardId(storyboardId)
-    try {
-      await storyboardAPI.update(workflowProjectId, storyboardId, {
-        scene_description: draft.scene_description,
-        dialogue: draft.dialogue,
-      })
-      if (!silent) {
-        toast({ title: `分镜 #${storyboardId} 已保存确认`, variant: 'success' })
-      }
-    } catch (error) {
-      throw error instanceof Error ? error : new Error(`分镜 #${storyboardId} 保存失败`)
-    } finally {
-      setSavingStoryboardId(null)
-    }
-  }
-
-  const saveAllStoryboardDrafts = async () => {
-    if (!workflowProjectId || workflowStoryboards.length === 0) return
-    setSavingAllStoryboards(true)
-    try {
-      for (const storyboard of workflowStoryboards) {
-        await saveStoryboardDraft(storyboard.id, true)
-      }
-      await mutateStoryboards()
-      toast({ title: `已批量保存 ${workflowStoryboards.length} 条分镜修改`, variant: 'success' })
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '批量保存分镜失败', variant: 'destructive' })
-    } finally {
-      setSavingAllStoryboards(false)
-    }
-  }
 
   const createWorkflowProject = async () => {
     if (creatingProjectRef.current) return
@@ -429,69 +232,11 @@ export default function AdVideoWorkbenchPage() {
       setWorkflowProjectId(project.id)
       toast({ title: `广告项目 #${project.id} 已创建，并已开始文案优化与自动分镜流程`, variant: 'success' })
       await mutateProject()
-      await mutateEpisodes()
-      await mutateProgress()
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '创建广告项目并启动优化失败', variant: 'destructive' })
     } finally {
       creatingProjectRef.current = false
       setCreatingProject(false)
-    }
-  }
-
-  const loadIds = () => {
-    const next = parseIds(idsText)
-    setOrderedIds(next)
-    setResultUrl('')
-    setResultTaskId(null)
-  }
-
-  const move = (idx: number, delta: number) => {
-    const next = [...orderedIds]
-    const target = idx + delta
-    if (target < 0 || target >= next.length) return
-    ;[next[idx], next[target]] = [next[target], next[idx]]
-    setOrderedIds(next)
-    setIdsText(next.join(','))
-    setResultUrl('')
-    setResultTaskId(null)
-  }
-
-  const compose = async () => {
-    if (orderedIds.length === 0) {
-      toast({ title: '请先输入 task id', variant: 'destructive' })
-      return
-    }
-    setBusy(true)
-    try {
-      const res = await videoAPI.composeAdVideo(orderedIds)
-      const payload = res.data as ComposeAdResponse
-      const url = String(payload?.data?.result_url || '').trim()
-      const taskId = Number(payload?.data?.task_id || 0)
-      if (!url) {
-        throw new Error('广告合成接口已返回，但 result_url 为空')
-      }
-      setResultUrl(url)
-      setResultTaskId(Number.isFinite(taskId) && taskId > 0 ? taskId : null)
-      toast({ title: taskId > 0 ? `广告合成完成，已落为 task #${taskId}` : '广告合成完成', variant: 'success' })
-      await mutate()
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '广告合成失败', variant: 'destructive' })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const composeSubtitle = async (taskId: number) => {
-    setBusyTaskId(taskId)
-    try {
-      await videoAPI.compose(taskId)
-      toast({ title: `已触发 task #${taskId} 添加字幕`, variant: 'success' })
-      await mutate()
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : `task #${taskId} 添加字幕失败`, variant: 'destructive' })
-    } finally {
-      setBusyTaskId(null)
     }
   }
 
@@ -747,294 +492,6 @@ export default function AdVideoWorkbenchPage() {
         </CardContent>
       </Card>
 
-      <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-        <CardHeader>
-          <CardTitle className="text-white">二、当前项目概览</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm text-slate-300">
-          {workflowProject ? (
-            <Tabs defaultValue="copy" className="space-y-4">
-              <TabsList className="bg-black/30">
-                <TabsTrigger value="copy">文案</TabsTrigger>
-                <TabsTrigger value="storyboards">分镜图</TabsTrigger>
-                <TabsTrigger value="videos">视频</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="copy" className="space-y-3">
-                <div>项目：#{workflowProject.id} · {workflowProject.title}</div>
-                <div>状态：{workflowProject.status || '-'} · 当前已生成分集数：{workflowEpisodes.length || '-'}</div>
-                <div>
-                  当前进度：
-                  {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
-                </div>
-                {autoSplitInfo?.enabled && (
-                  <div className="space-y-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-xs text-cyan-100">
-                    <div>
-                      <div className="font-medium text-cyan-50">本次自动切分依据</div>
-                      <div className="mt-1 break-all">
-                        模型：{autoSplitInfo.video_model || selectedVideoModel?.model_key || '未记录'}
-                        {' · '}时长：{autoSplitInfo.duration || workflowForm.duration || '-'} 秒
-                        {' · '}风格：{autoSplitInfo.style_preset || workflowForm.stylePreset || '-'}
-                      </div>
-                      <div className="mt-1 break-all text-cyan-200/90">
-                        文案长度：{autoSplitInfo.script_length || '-'} 字
-                        {' · '}目标每集承载：{autoSplitInfo.target_chars_per_episode || '-'} 字
-                        {' · '}最终分集数：{autoSplitInfo.estimated_episodes || workflowEpisodes.length || '-'}
-                      </div>
-                    </div>
-                    {autoSplitInfo.original_script && (
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div className="font-medium text-cyan-50">优化前全文</div>
-                        <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-slate-200">
-                          {autoSplitInfo.original_script}
-                        </div>
-                      </div>
-                    )}
-                    {autoSplitInfo.optimized_script && (
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div className="font-medium text-cyan-50">优化后全文</div>
-                        <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-slate-100">
-                          {autoSplitInfo.optimized_script}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {autoSplitInfo?.optimized_script && (
-                  <div className="space-y-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
-                    <div>
-                      <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
-                      <div className="mt-1 text-xs text-emerald-200/80">
-                        首页只展示当前结果。后续动作统一在项目详情页执行。
-                      </div>
-                    </div>
-                    <div className="max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-3 text-slate-100">
-                      {autoSplitInfo.optimized_script}
-                    </div>
-                  </div>
-                )}
-                {autoSplitInfo?.consistency_premise && (
-                  <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                    <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
-                    <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
-                      {autoSplitInfo.consistency_premise}
-                    </div>
-                  </div>
-                )}
-                <div className="space-y-3 rounded-xl border border-sky-500/20 bg-sky-500/10 p-4">
-                  <div>
-                    <div className="text-sm font-medium text-sky-100">后续生成已迁入项目详情页</div>
-                    <div className="mt-1 text-xs text-sky-200/80">
-                      首页只负责新建项目和查看当前结果。真正的后续生产动作，请进入项目详情页继续。
-                    </div>
-                  </div>
-                </div>
-
-                {workflowEpisodes.length > 0 ? (
-                  <div className="space-y-2">
-                    <div className="text-slate-200">已生成的分集 / 片段载体</div>
-                    {workflowEpisodes.map((episode) => (
-                      <div key={episode.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
-                        <div className="mt-1 text-xs text-slate-400 line-clamp-2">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-400">当前还没有分集记录；系统会在文案优化完成后，按所选视频模型时长自动切分并在这里出现内容。</div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="storyboards" className="space-y-3">
-                {workflowStoryboards.length > 0 ? (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={savingAllStoryboards || savingStoryboardId !== null}
-                        onClick={saveAllStoryboardDrafts}
-                      >
-                        {savingAllStoryboards ? '批量保存中…' : '保存全部分镜修改'}
-                      </Button>
-                    </div>
-                    {workflowStoryboards.map((storyboard) => {
-                      const draft = storyboardDrafts[storyboard.id] || {
-                        scene_description: storyboard.scene_description || '',
-                        dialogue: storyboard.dialogue || '',
-                      }
-                      return (
-                        <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="text-sm text-slate-100">
-                              分镜 #{storyboard.sequence_number}
-                              {storyboard.episode_id ? ` · episode ${storyboard.episode_id}` : ''}
-                              {' · '}
-                              {storyboard.status || '-'}
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={savingStoryboardId === storyboard.id}
-                              onClick={() => saveStoryboardDraft(storyboard.id)}
-                            >
-                              {savingStoryboardId === storyboard.id ? '保存中…' : '确认并保存修改'}
-                            </Button>
-                          </div>
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <div className="space-y-2">
-                              <Label className="text-slate-200">场景描述</Label>
-                              <Textarea
-                                value={draft.scene_description}
-                                onChange={(e) => updateStoryboardDraft(storyboard.id, 'scene_description', e.target.value)}
-                                className="min-h-[180px]"
-                                placeholder="这里是该分镜真实提交链里的 scene_description，可直接改。"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label className="text-slate-200">台词 / 旁白</Label>
-                              <Textarea
-                                value={draft.dialogue}
-                                onChange={(e) => updateStoryboardDraft(storyboard.id, 'dialogue', e.target.value)}
-                                className="min-h-[180px]"
-                                placeholder="这里是该分镜真实提交链里的 dialogue，可直接改。"
-                              />
-                            </div>
-                          </div>
-                          {(storyboard.prompt_used || storyboard.location || storyboard.camera_movement) && (
-                            <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-400">
-                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 md:col-span-2">
-                                <div className="text-slate-500">当前 prompt_used</div>
-                                <div className="mt-1 whitespace-pre-wrap break-words text-slate-300">{storyboard.prompt_used || '暂无'}</div>
-                              </div>
-                              <div className="space-y-3">
-                                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                                  <div className="text-slate-500">地点</div>
-                                  <div className="mt-1 text-slate-300">{storyboard.location || '未填写'}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                                  <div className="text-slate-500">镜头运动</div>
-                                  <div className="mt-1 text-slate-300">{storyboard.camera_movement || '未填写'}</div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-400">当前还没有分镜记录；启动基础生成后，这里会出现每个分镜的场景描述与台词确认区。</div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="videos" className="space-y-4">
-                <Card className="border-white/10 bg-black/20 text-slate-100">
-                  <CardHeader>
-                    <CardTitle className="text-base text-white">广告后处理与整片合成</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <Input value={idsText} onChange={(e) => setIdsText(e.target.value)} placeholder="150,151,152..." />
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={loadIds}>加载任务</Button>
-                      <Button variant="outline" disabled={busy || orderedIds.length === 0} onClick={compose}>
-                        {busy ? '合成中…' : '合成一个广告视频'}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setIdsText(DEFAULT_IDS)
-                          setOrderedIds(parseIds(DEFAULT_IDS))
-                          setResultUrl('')
-                          setResultTaskId(null)
-                        }}
-                      >
-                        恢复默认
-                      </Button>
-                    </div>
-                    <div className="text-xs text-slate-400">当前顺序：{orderedIds.length > 0 ? orderedIds.join(' → ') : '未选择任务'}</div>
-                  </CardContent>
-                </Card>
-
-                <div className="space-y-3">
-                  {isLoading ? (
-                    <div className="text-slate-300">加载中…</div>
-                  ) : tasks.length === 0 ? (
-                    <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前没有可展示的视频任务。</div>
-                  ) : (
-                    tasks.map((task, idx) => {
-                      const url = getResultUrl(task)
-                      const subtitle = String(task.subtitle_text || task.render_config?.subtitle_text || '').trim()
-                      const subtitleStatus = String(task.render_config?.subtitle_compose_status || '').trim()
-                      return (
-                        <Card key={task.id} className="border-white/10 bg-black/20 text-slate-100">
-                          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                            <div className="min-w-0 flex-1">
-                              <div className="font-medium">task #{task.id} · {task.status || '-'}</div>
-                              <div className="mt-1 text-xs text-slate-400">project={task.project_id} · subtitle={subtitleStatus || '-'}</div>
-                              <div className="mt-1 break-all text-xs text-slate-400">{url || '无结果 URL'}</div>
-                              {subtitle && <div className="mt-2 line-clamp-2 text-xs text-violet-200">{subtitle}</div>}
-                              {task.error_msg && <div className="mt-2 text-xs text-rose-300">{task.error_msg}</div>}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button size="sm" variant="outline" onClick={() => move(idx, -1)}>
-                                上移
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => move(idx, 1)}>
-                                下移
-                              </Button>
-                              <Button size="sm" variant="outline" disabled={busyTaskId !== null} onClick={() => composeSubtitle(task.id)}>
-                                {busyTaskId === task.id ? '处理中…' : '添加字幕'}
-                              </Button>
-                              <Button size="sm" variant="outline" asChild>
-                                <Link href={`/video/history/${task.id}`}>详情</Link>
-                              </Button>
-                              {url ? (
-                                <Button size="sm" variant="outline" asChild>
-                                  <a href={url} target="_blank" rel="noreferrer">打开结果</a>
-                                </Button>
-                              ) : (
-                                <Button size="sm" variant="outline" disabled>
-                                  打开结果
-                                </Button>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )
-                    })
-                  )}
-                </div>
-
-                {resultUrl && (
-                  <Card className="border-white/10 bg-black/20 text-slate-100">
-                    <CardHeader>
-                      <CardTitle className="text-white">合成结果</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="break-all text-sm text-slate-300">{resultUrl}</div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" asChild>
-                          <a href={resultUrl} target="_blank" rel="noreferrer">打开合成结果</a>
-                        </Button>
-                        {resultTaskId && (
-                          <Button variant="outline" asChild>
-                            <Link href={`/video/history/${resultTaskId}`}>查看合成任务详情</Link>
-                          </Button>
-                        )}
-                      </div>
-                      <video className="w-full rounded-lg bg-black" controls src={resultUrl} />
-                    </CardContent>
-                  </Card>
-                )}
-              </TabsContent>
-            </Tabs>
-          ) : (
-            <div className="text-xs text-slate-400">还没有当前项目。先新建一个广告项目，完成后再进入详情页继续处理。</div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   )
 }
