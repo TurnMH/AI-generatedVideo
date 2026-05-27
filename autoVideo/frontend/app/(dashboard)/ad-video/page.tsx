@@ -138,21 +138,18 @@ export default function AdVideoWorkbenchPage() {
     ])
     const normalize = (payload: unknown): Model[] => {
       if (!payload || typeof payload !== 'object') return []
-      const obj = payload as { data?: unknown }
-      const data = obj.data
-      if (Array.isArray(data)) return data as Model[]
-      if (data && typeof data === 'object' && Array.isArray((data as { items?: Model[] }).items)) {
-        return (data as { items?: Model[] }).items || []
+      const root = payload as { data?: unknown; items?: Model[] }
+      if (Array.isArray(root.data)) return root.data as Model[]
+      if (root.data && typeof root.data === 'object' && Array.isArray((root.data as { items?: Model[] }).items)) {
+        return (root.data as { items?: Model[] }).items || []
       }
-      if (Array.isArray((payload as { items?: Model[] }).items)) {
-        return (payload as { items?: Model[] }).items || []
-      }
+      if (Array.isArray(root.items)) return root.items || []
       return []
     }
     return {
-      text: normalize((textRes as { data?: unknown }).data),
-      image: normalize((imageRes as { data?: unknown }).data),
-      video: normalize((videoRes as { data?: unknown }).data),
+      text: normalize(textRes),
+      image: normalize(imageRes),
+      video: normalize(videoRes),
     }
   }, { revalidateOnFocus: true })
 
