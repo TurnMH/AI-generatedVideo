@@ -223,7 +223,10 @@ export default function AdVideoWorkbenchPage() {
 
   const tasks = data || []
   const workflowEpisodes = workflowEpisodesData || []
-  const workflowStoryboards = (workflowStoryboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
+  const workflowStoryboards = useMemo(
+    () => (workflowStoryboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number),
+    [workflowStoryboardsData],
+  )
   const workflowProgress = workflowProgressData || null
   const workflowProject = workflowProjectData || null
   const textModels = workflowModelData?.text || []
@@ -289,6 +292,7 @@ export default function AdVideoWorkbenchPage() {
 
   useEffect(() => {
     setStoryboardDrafts((prev) => {
+      let changed = false
       const next = { ...prev }
       for (const storyboard of workflowStoryboards) {
         if (!next[storyboard.id]) {
@@ -296,9 +300,10 @@ export default function AdVideoWorkbenchPage() {
             scene_description: storyboard.scene_description || '',
             dialogue: storyboard.dialogue || '',
           }
+          changed = true
         }
       }
-      return next
+      return changed ? next : prev
     })
   }, [workflowStoryboards])
 
