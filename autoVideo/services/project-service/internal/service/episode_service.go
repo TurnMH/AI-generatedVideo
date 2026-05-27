@@ -2055,8 +2055,6 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			}
 		} else if improved != nil && strings.TrimSpace(improved.OptimizedScript) != "" {
 			optimizedScriptText = strings.TrimSpace(improved.OptimizedScript)
-			project.ScriptText = optimizedScriptText
-			_ = s.projectRepo.Update(project)
 			autoSplitProgress.OptimizedScript = optimizedScriptText
 			autoSplitProgress.ConsistencyPremise = strings.TrimSpace(improved.ConsistencyPremise)
 			autoSplitProgress.ScriptLength = utf8.RuneCountInString(optimizedScriptText)

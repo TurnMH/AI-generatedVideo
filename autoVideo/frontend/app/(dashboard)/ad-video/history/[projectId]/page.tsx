@@ -355,8 +355,8 @@ export default function AdVideoHistoryDetailPage() {
     ? '当前正在重跑文本拆分 / 自动分镜，请先等这一轮结束。'
     : !splitConfigReady
       ? '先补齐视频模型、比例、分辨率、单分镜时长。'
-      : !(editableOptimizedScript.trim() || editableOriginalScript.trim())
-        ? '当前文案为空，无法拆分。'
+      : !editableOriginalScript.trim()
+        ? '当前原文为空，无法拆分。'
         : storyboardScopeReady
           ? '当前范围已经有可用分镜，可继续重跑覆盖。'
           : '先执行这一步，产出新的分集与分镜文本。'
@@ -521,9 +521,9 @@ export default function AdVideoHistoryDetailPage() {
   }
 
   const rerunStoryboardPipeline = async () => {
-    const scriptText = editableOptimizedScript.trim() || editableOriginalScript.trim()
+    const scriptText = editableOriginalScript.trim()
     if (!scriptText) {
-      toast({ title: '请先保留一版可用的优化文案，再开始按视频配置重拆分', variant: 'destructive' })
+      toast({ title: '请先保留一版可用的原文，再开始按当前视频配置重拆分', variant: 'destructive' })
       return
     }
     if (!splitConfigReady) {
@@ -1077,7 +1077,7 @@ export default function AdVideoHistoryDetailPage() {
                   )}
 
                   <Button
-                    disabled={pipelineBusy || !(editableOptimizedScript.trim() || editableOriginalScript.trim()) || !splitConfigReady}
+                    disabled={pipelineBusy || !editableOriginalScript.trim() || !splitConfigReady}
                     onClick={() => void rerunStoryboardPipeline()}
                   >
                     {rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按当前视频配置重拆分'}
