@@ -242,11 +242,16 @@ export default function AdVideoWorkbenchPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-white">口播广告工作台</h1>
-        <p className="mt-2 text-sm text-slate-300">
-          从这里新建广告项目。后续生成与处理统一在项目详情页完成。
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-white">口播广告工作台</h1>
+          <p className="mt-2 text-sm text-slate-300">
+            从这里新建广告项目。后续生成与处理统一在项目详情页完成。
+          </p>
+        </div>
+        <Button variant="outline" asChild>
+          <a href="/ad-video/history">历史记录</a>
+        </Button>
       </div>
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
