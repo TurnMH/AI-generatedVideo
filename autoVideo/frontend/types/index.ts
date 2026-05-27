@@ -93,6 +93,7 @@ export interface StoryboardConfig {
   video_mode: string
   style_preset?: string
   motion_mode?: string
+  generate_audio?: boolean
   video_model?: string  // runtime model key (e.g. "kling", "vidu", "wan") for director duration guidance
 }
 

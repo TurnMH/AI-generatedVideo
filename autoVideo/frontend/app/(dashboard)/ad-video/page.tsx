@@ -15,6 +15,10 @@ const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
 const DEFAULT_ASPECT_RATIOS = ['16:9', '9:16', '1:1']
 const DEFAULT_RESOLUTIONS = ['1080p', '720p']
 
+type ModelParamValue = { value: string; label: string }
+type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
+type VideoModelStatus = { key: string; available: boolean; native_audio?: boolean; params?: ModelParamOption[] }
+
 type Task = {
   id: number
   project_id: number
@@ -103,6 +107,7 @@ export default function AdVideoWorkbenchPage() {
     aspectRatio: '16:9',
     resolution: '1080p',
     duration: '10',
+    generateAudio: true,
     textModelId: 'default',
     imageModelId: 'default',
     videoModelId: 'default',
@@ -151,10 +156,11 @@ export default function AdVideoWorkbenchPage() {
   )
 
   const { data: workflowModelData } = useSWR(['ad-video-models'], async () => {
-    const [textRes, imageRes, videoRes] = await Promise.all([
+    const [textRes, imageRes, videoRes, videoStatusRes] = await Promise.all([
       modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' }),
       modelAPI.list({ type: 'image', enabled: 'true', sort_by: 'priority' }),
       modelAPI.list({ type: 'video', enabled: 'true', sort_by: 'priority' }),
+      videoAPI.modelStatus(),
     ])
     const normalize = (payload: unknown): Model[] => {
       if (!payload || typeof payload !== 'object') return []
@@ -166,10 +172,12 @@ export default function AdVideoWorkbenchPage() {
       if (Array.isArray(root.items)) return root.items || []
       return []
     }
+    const statusPayload = (videoStatusRes as { data?: { models?: VideoModelStatus[] } })?.data
     return {
       text: normalize(textRes),
       image: normalize(imageRes),
       video: normalize(videoRes),
+      videoStatus: Array.isArray(statusPayload?.models) ? statusPayload.models : [],
     }
   }, { revalidateOnFocus: true })
 
@@ -199,11 +207,17 @@ export default function AdVideoWorkbenchPage() {
   const textModels = workflowModelData?.text || []
   const imageModels = workflowModelData?.image || []
   const videoModels = workflowModelData?.video || []
+  const videoModelStatuses = workflowModelData?.videoStatus || []
   const selectedVideoModel = useMemo(() => {
     const selectedId = Number(workflowForm.videoModelId)
     if (!Number.isFinite(selectedId) || selectedId <= 0) return null
     return videoModels.find((item) => item.id === selectedId) || null
   }, [videoModels, workflowForm.videoModelId])
+  const selectedVideoStatus = useMemo(() => {
+    const modelKey = String(selectedVideoModel?.model_key || '').trim()
+    if (!modelKey) return null
+    return videoModelStatuses.find((item) => item.key === modelKey) || null
+  }, [selectedVideoModel, videoModelStatuses])
   const selectedVideoParamEntries = useMemo(() => {
     const cfg = selectedVideoModel?.config
     if (!cfg || typeof cfg !== 'object') return [] as Array<{ key: string; value: string }>
@@ -235,6 +249,12 @@ export default function AdVideoWorkbenchPage() {
     }
     return DEFAULT_RESOLUTIONS
   }, [selectedVideoConfig, selectedVideoModel])
+  const durationOptions = useMemo(() => {
+    const values = selectedVideoStatus?.params?.find((item) => item.key === 'duration')?.values || []
+    const normalized = uniqueStrings(values.map((item) => String(item.value || '').trim()).filter(Boolean))
+    return normalized
+  }, [selectedVideoStatus])
+  const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
 
   useEffect(() => {
     if (!aspectRatioOptions.includes(workflowForm.aspectRatio)) {
@@ -247,6 +267,18 @@ export default function AdVideoWorkbenchPage() {
       setWorkflowForm((prev) => ({ ...prev, resolution: resolutionOptions[0] || '1080p' }))
     }
   }, [resolutionOptions, workflowForm.resolution])
+
+  useEffect(() => {
+    if (durationOptions.length > 0 && !durationOptions.includes(workflowForm.duration)) {
+      setWorkflowForm((prev) => ({ ...prev, duration: durationOptions[0] || '10' }))
+    }
+  }, [durationOptions, workflowForm.duration])
+
+  useEffect(() => {
+    if (!nativeAudioSupported && workflowForm.generateAudio) {
+      setWorkflowForm((prev) => ({ ...prev, generateAudio: false }))
+    }
+  }, [nativeAudioSupported, workflowForm.generateAudio])
 
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
@@ -279,6 +311,7 @@ export default function AdVideoWorkbenchPage() {
           video_mode: 'api_generation',
           style_preset: workflowForm.stylePreset,
           motion_mode: 'gentle',
+          generate_audio: nativeAudioSupported ? workflowForm.generateAudio : false,
           ...(selectedVideoModel?.model_key ? { video_model: selectedVideoModel.model_key } : {}),
         },
       })
@@ -543,14 +576,51 @@ export default function AdVideoWorkbenchPage() {
 
                     <div className="space-y-2">
                       <Label className="text-slate-200">默认片段时长（秒）</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={60}
-                        value={workflowForm.duration}
-                        onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
-                      />
-                      <div className="text-[11px] text-slate-500">你可以自己改；创建项目时会真实写入 `storyboard_config.duration`。</div>
+                      {durationOptions.length > 0 ? (
+                        <select
+                          value={workflowForm.duration}
+                          onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
+                          className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                        >
+                          {durationOptions.map((duration) => (
+                            <option key={duration} value={duration}>{duration} 秒</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          type="number"
+                          min={1}
+                          max={60}
+                          value={workflowForm.duration}
+                          onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
+                        />
+                      )}
+                      <div className="text-[11px] text-slate-500">
+                        {durationOptions.length > 0
+                          ? '按当前模型在 model-status 中声明的时长能力展示；创建项目时会真实写入 storyboard_config.duration。'
+                          : '当前模型未声明离散时长能力，先允许手动填写；创建项目时会真实写入 storyboard_config.duration。'}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-200">原生音频</Label>
+                      {nativeAudioSupported ? (
+                        <select
+                          value={workflowForm.generateAudio ? 'on' : 'off'}
+                          onChange={(e) => setWorkflowForm((prev) => ({ ...prev, generateAudio: e.target.value === 'on' }))}
+                          className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                        >
+                          <option value="on">开启</option>
+                          <option value="off">关闭</option>
+                        </select>
+                      ) : (
+                        <Input value="当前模型不支持原生音频" disabled />
+                      )}
+                      <div className="text-[11px] text-slate-500">
+                        {nativeAudioSupported
+                          ? '按当前模型真实 native_audio 能力展示；创建项目时会真实写入 storyboard_config.generate_audio。'
+                          : '当前模型未声明 native_audio，创建项目时会按关闭处理。'}
+                      </div>
                     </div>
                   </div>
 
@@ -562,6 +632,14 @@ export default function AdVideoWorkbenchPage() {
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
                       <div className="text-[11px] text-slate-500">最高分辨率</div>
                       <div className="mt-1 text-white">{selectedVideoModel.max_resolution || '未声明'}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                      <div className="text-[11px] text-slate-500">原生音频能力</div>
+                      <div className="mt-1 text-white">{nativeAudioSupported ? '支持' : '不支持 / 未声明'}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-2">
+                      <div className="text-[11px] text-slate-500">支持时长</div>
+                      <div className="mt-1 text-white">{durationOptions.length > 0 ? durationOptions.map((item) => `${item} 秒`).join(' / ') : '未声明离散时长'}</div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
                       <div className="text-[11px] text-slate-500">能力标签</div>
