@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/toast'
-import { modelAPI, projectAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
+import { modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
+import type { Storyboard } from '@/types'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
 
@@ -51,6 +52,11 @@ type EpisodesPayload = {
 type ProgressPayload = {
   code?: number
   data?: Project['progress']
+}
+
+type StoryboardsPayload = {
+  code?: number
+  data?: Storyboard[]
 }
 
 const parseIds = (raw: string) =>
@@ -119,6 +125,8 @@ export default function AdVideoWorkbenchPage() {
   const [creatingProject, setCreatingProject] = useState(false)
   const [uploadingScript, setUploadingScript] = useState(false)
   const [startingFlow, setStartingFlow] = useState(false)
+  const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
+  const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
 
   const [idsText, setIdsText] = useState(DEFAULT_IDS)
   const [orderedIds, setOrderedIds] = useState<number[]>(parseIds(DEFAULT_IDS))
@@ -143,6 +151,17 @@ export default function AdVideoWorkbenchPage() {
       const res = await projectAPI.listEpisodes(workflowProjectId as number)
       const payload = (res as { data?: EpisodesPayload }).data
       return unwrap<Episode[]>(payload) ?? []
+    },
+    { refreshInterval: 5000, revalidateOnFocus: true },
+  )
+
+  const { data: workflowStoryboardsData, mutate: mutateStoryboards } = useSWR(
+    workflowProjectId ? ['ad-video-storyboards', workflowProjectId] : null,
+    async () => {
+      const res = await storyboardAPI.listAll(workflowProjectId as number)
+      const payload = (res as { data?: Storyboard[] | StoryboardsPayload }).data
+      if (Array.isArray(payload)) return payload
+      return unwrap<Storyboard[]>(payload) ?? []
     },
     { refreshInterval: 5000, revalidateOnFocus: true },
   )
@@ -204,6 +223,7 @@ export default function AdVideoWorkbenchPage() {
 
   const tasks = data || []
   const workflowEpisodes = workflowEpisodesData || []
+  const workflowStoryboards = (workflowStoryboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
   const workflowProgress = workflowProgressData || null
   const workflowProject = workflowProjectData || null
   const textModels = workflowModelData?.text || []
@@ -266,6 +286,51 @@ export default function AdVideoWorkbenchPage() {
       setWorkflowForm((prev) => ({ ...prev, generateAudio: false }))
     }
   }, [nativeAudioSupported, workflowForm.generateAudio])
+
+  useEffect(() => {
+    setStoryboardDrafts((prev) => {
+      const next = { ...prev }
+      for (const storyboard of workflowStoryboards) {
+        if (!next[storyboard.id]) {
+          next[storyboard.id] = {
+            scene_description: storyboard.scene_description || '',
+            dialogue: storyboard.dialogue || '',
+          }
+        }
+      }
+      return next
+    })
+  }, [workflowStoryboards])
+
+  const updateStoryboardDraft = (storyboardId: number, field: 'scene_description' | 'dialogue', value: string) => {
+    setStoryboardDrafts((prev) => ({
+      ...prev,
+      [storyboardId]: {
+        scene_description: prev[storyboardId]?.scene_description ?? workflowStoryboards.find((item) => item.id === storyboardId)?.scene_description ?? '',
+        dialogue: prev[storyboardId]?.dialogue ?? workflowStoryboards.find((item) => item.id === storyboardId)?.dialogue ?? '',
+        [field]: value,
+      },
+    }))
+  }
+
+  const saveStoryboardDraft = async (storyboardId: number) => {
+    if (!workflowProjectId) return
+    const draft = storyboardDrafts[storyboardId]
+    if (!draft) return
+    setSavingStoryboardId(storyboardId)
+    try {
+      await storyboardAPI.update(workflowProjectId, storyboardId, {
+        scene_description: draft.scene_description,
+        dialogue: draft.dialogue,
+      })
+      toast({ title: `分镜 #${storyboardId} 已保存确认`, variant: 'success' })
+      await mutateStoryboards()
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : `分镜 #${storyboardId} 保存失败`, variant: 'destructive' })
+    } finally {
+      setSavingStoryboardId(null)
+    }
+  }
 
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
@@ -757,6 +822,15 @@ export default function AdVideoWorkbenchPage() {
                   )}
                 </div>
               )}
+              {autoSplitInfo?.optimized_script && (
+                <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+                  <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
+                  <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
+                    {autoSplitInfo.optimized_script}
+                  </div>
+                </div>
+              )}
+
               {workflowEpisodes.length > 0 ? (
                 <div className="space-y-2">
                   <div className="text-slate-200">已生成的分集 / 片段载体</div>
@@ -770,6 +844,78 @@ export default function AdVideoWorkbenchPage() {
               ) : (
                 <div className="text-xs text-slate-400">当前还没有分集记录；系统会在文案优化完成后，按所选视频模型时长自动切分并在这里出现内容。</div>
               )}
+
+              {workflowStoryboards.length > 0 ? (
+                <div className="space-y-3">
+                  <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
+                  {workflowStoryboards.map((storyboard) => {
+                    const draft = storyboardDrafts[storyboard.id] || {
+                      scene_description: storyboard.scene_description || '',
+                      dialogue: storyboard.dialogue || '',
+                    }
+                    return (
+                      <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm text-slate-100">
+                            分镜 #{storyboard.sequence_number}
+                            {storyboard.episode_id ? ` · episode ${storyboard.episode_id}` : ''}
+                            {' · '}
+                            {storyboard.status || '-'}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={savingStoryboardId === storyboard.id}
+                            onClick={() => saveStoryboardDraft(storyboard.id)}
+                          >
+                            {savingStoryboardId === storyboard.id ? '保存中…' : '确认并保存修改'}
+                          </Button>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label className="text-slate-200">场景描述</Label>
+                            <Textarea
+                              value={draft.scene_description}
+                              onChange={(e) => updateStoryboardDraft(storyboard.id, 'scene_description', e.target.value)}
+                              className="min-h-[180px]"
+                              placeholder="这里是该分镜真实提交链里的 scene_description，可直接改。"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-slate-200">台词 / 旁白</Label>
+                            <Textarea
+                              value={draft.dialogue}
+                              onChange={(e) => updateStoryboardDraft(storyboard.id, 'dialogue', e.target.value)}
+                              className="min-h-[180px]"
+                              placeholder="这里是该分镜真实提交链里的 dialogue，可直接改。"
+                            />
+                          </div>
+                        </div>
+                        {(storyboard.prompt_used || storyboard.location || storyboard.camera_movement) && (
+                          <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-400">
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 md:col-span-2">
+                              <div className="text-slate-500">当前 prompt_used</div>
+                              <div className="mt-1 whitespace-pre-wrap break-words text-slate-300">{storyboard.prompt_used || '暂无'}</div>
+                            </div>
+                            <div className="space-y-3">
+                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                                <div className="text-slate-500">地点</div>
+                                <div className="mt-1 text-slate-300">{storyboard.location || '未填写'}</div>
+                              </div>
+                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                                <div className="text-slate-500">镜头运动</div>
+                                <div className="mt-1 text-slate-300">{storyboard.camera_movement || '未填写'}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : workflowProject ? (
+                <div className="text-xs text-slate-400">当前还没有分镜记录；启动基础生成后，这里会出现每个分镜的场景描述与台词确认区。</div>
+              ) : null}
             </>
           ) : (
             <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建项目 → 上传脚本 → 启动基础生成”。</div>
