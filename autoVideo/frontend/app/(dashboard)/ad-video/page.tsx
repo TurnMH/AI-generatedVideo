@@ -133,6 +133,8 @@ export default function AdVideoWorkbenchPage() {
   const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
   const [generationAction, setGenerationAction] = useState<string | null>(null)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
+  const [editableOptimizedScript, setEditableOptimizedScript] = useState('')
+  const [rerunAction, setRerunAction] = useState<string | null>(null)
 
   const [idsText, setIdsText] = useState(DEFAULT_IDS)
   const [orderedIds, setOrderedIds] = useState<number[]>(parseIds(DEFAULT_IDS))
@@ -325,6 +327,16 @@ export default function AdVideoWorkbenchPage() {
       return changed ? next : prev
     })
   }, [workflowStoryboards])
+
+  useEffect(() => {
+    const next = typeof autoSplitInfo?.optimized_script === 'string' ? autoSplitInfo.optimized_script : ''
+    setEditableOptimizedScript((prev) => {
+      if (!prev.trim()) return next
+      if (prev.trim() === next.trim()) return prev
+      if (!next.trim()) return prev
+      return prev
+    })
+  }, [autoSplitInfo?.optimized_script])
 
   const updateStoryboardDraft = (storyboardId: number, field: 'scene_description' | 'dialogue', value: string) => {
     setStoryboardDrafts((prev) => ({
@@ -547,6 +559,46 @@ export default function AdVideoWorkbenchPage() {
       () => storyboardAPI.generateAll(workflowProjectId, undefined, modelKey),
       '已触发全项目分镜图生成',
     )
+  }
+
+  const rerunEpisodePipeline = async (mode: 'episodes' | 'episodes+storyboards') => {
+    if (!workflowProjectId) {
+      toast({ title: '请先创建广告项目', variant: 'destructive' })
+      return
+    }
+    const scriptText = editableOptimizedScript.trim()
+    if (!scriptText) {
+      toast({ title: '请先填写或保留一版优化后的广告词，再重跑自动分集', variant: 'destructive' })
+      return
+    }
+    if (workflowProject?.status === 'script_processing' || workflowProgress?.stage === 'episode_splitting') {
+      toast({ title: '当前项目仍在自动分集中，请等本轮完成后再重跑，避免再次触发 409', variant: 'destructive' })
+      return
+    }
+    const action = mode === 'episodes+storyboards' ? 'rerun-episodes-storyboards' : 'rerun-episodes'
+    setRerunAction(action)
+    try {
+      const filenameBase = (workflowProject?.title || workflowForm.title || `ad-project-${workflowProjectId}`).trim() || `ad-project-${workflowProjectId}`
+      const file = new File([scriptText], `${filenameBase}-optimized.txt`, { type: 'text/plain' })
+      await projectAPI.uploadScript(workflowProjectId, file)
+      await projectAPI.generateEpisodes(workflowProjectId, undefined, { autoStoryboard: mode === 'episodes+storyboards' })
+      await Promise.all([
+        mutateProject(),
+        mutateEpisodes(),
+        mutateStoryboards(),
+        mutateProgress(),
+      ])
+      toast({
+        title: mode === 'episodes+storyboards'
+          ? '已用当前广告词重新上传脚本，并开始重跑自动分集 + 自动分镜'
+          : '已用当前广告词重新上传脚本，并开始重跑自动分集',
+        variant: 'success',
+      })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '重跑自动分集失败', variant: 'destructive' })
+    } finally {
+      setRerunAction(null)
+    }
   }
 
   const loadIds = () => {
@@ -934,10 +986,43 @@ export default function AdVideoWorkbenchPage() {
                   </div>
                 )}
                 {autoSplitInfo?.optimized_script && (
-                  <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
-                    <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
-                    <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
-                      {autoSplitInfo.optimized_script}
+                  <div className="space-y-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
+                        <div className="mt-1 text-xs text-emerald-200/80">
+                          这里现在支持直接编辑。你改完后，可以用这版文案重新上传项目脚本，并重跑自动分集 / 自动分镜。
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-emerald-200/75">
+                        {editableOptimizedScript.trim().length} 字
+                      </div>
+                    </div>
+                    <Textarea
+                      value={editableOptimizedScript}
+                      onChange={(e) => setEditableOptimizedScript(e.target.value)}
+                      className="min-h-[220px] border-emerald-500/20 bg-black/20 text-slate-100"
+                      placeholder="优化后的广告词会出现在这里；你可以继续人工改写，再重跑自动分集 / 自动分镜。"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={rerunAction !== null || generationAction !== null || !editableOptimizedScript.trim()}
+                        onClick={() => void rerunEpisodePipeline('episodes')}
+                      >
+                        {rerunAction === 'rerun-episodes' ? '重跑中…' : '用当前文案重新自动分集'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={rerunAction !== null || generationAction !== null || !editableOptimizedScript.trim()}
+                        onClick={() => void rerunEpisodePipeline('episodes+storyboards')}
+                      >
+                        {rerunAction === 'rerun-episodes-storyboards' ? '重跑中…' : '用当前文案重新自动分集 + 自动分镜'}
+                      </Button>
+                    </div>
+                    <div className="text-[11px] text-emerald-200/75">
+                      注意：重新自动分集会基于当前文案重建后续结果；若你选择“自动分镜”，旧分镜也会被替换。
                     </div>
                   </div>
                 )}
