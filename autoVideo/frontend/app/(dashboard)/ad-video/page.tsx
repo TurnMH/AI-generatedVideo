@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/toast'
-import { projectAPI, videoAPI, type Episode, type Project, type VideoTaskDetailResponse } from '@/lib/api'
+import { modelAPI, projectAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
 
@@ -83,6 +83,9 @@ export default function AdVideoWorkbenchPage() {
     aspectRatio: '16:9',
     resolution: '1080p',
     duration: '10',
+    textModelId: 'default',
+    imageModelId: 'default',
+    videoModelId: 'default',
     scriptText: '',
   })
   const [workflowProjectId, setWorkflowProjectId] = useState<number | null>(null)
@@ -127,6 +130,32 @@ export default function AdVideoWorkbenchPage() {
     { refreshInterval: 5000, revalidateOnFocus: true },
   )
 
+  const { data: workflowModelData } = useSWR(['ad-video-models'], async () => {
+    const [textRes, imageRes, videoRes] = await Promise.all([
+      modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' }),
+      modelAPI.list({ type: 'image', enabled: 'true', sort_by: 'priority' }),
+      modelAPI.list({ type: 'video', enabled: 'true', sort_by: 'priority' }),
+    ])
+    const normalize = (payload: unknown): Model[] => {
+      if (!payload || typeof payload !== 'object') return []
+      const obj = payload as { data?: unknown }
+      const data = obj.data
+      if (Array.isArray(data)) return data as Model[]
+      if (data && typeof data === 'object' && Array.isArray((data as { items?: Model[] }).items)) {
+        return (data as { items?: Model[] }).items || []
+      }
+      if (Array.isArray((payload as { items?: Model[] }).items)) {
+        return (payload as { items?: Model[] }).items || []
+      }
+      return []
+    }
+    return {
+      text: normalize((textRes as { data?: unknown }).data),
+      image: normalize((imageRes as { data?: unknown }).data),
+      video: normalize((videoRes as { data?: unknown }).data),
+    }
+  }, { revalidateOnFocus: true })
+
   const { data, mutate, isLoading } = useSWR(
     idsKey ? ['ad-video-tasks', idsKey] : null,
     async () => {
@@ -150,6 +179,9 @@ export default function AdVideoWorkbenchPage() {
   const workflowEpisodes = workflowEpisodesData || []
   const workflowProgress = workflowProgressData || null
   const workflowProject = workflowProjectData || null
+  const textModels = workflowModelData?.text || []
+  const imageModels = workflowModelData?.image || []
+  const videoModels = workflowModelData?.video || []
 
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
@@ -158,11 +190,19 @@ export default function AdVideoWorkbenchPage() {
     }
     setCreatingProject(true)
     try {
+      const parseModelId = (value: string) => {
+        const num = Number(value)
+        return Number.isFinite(num) && num > 0 ? num : undefined
+      }
+      const selectedVideoModel = videoModels.find((item) => item.id === parseModelId(workflowForm.videoModelId))
       const res = await projectAPI.create({
         title: workflowForm.title.trim(),
         description: workflowForm.description.trim(),
         project_type: 'video',
         target_episodes: Math.max(1, Number(workflowForm.targetEpisodes) || 1),
+        text_model_id: parseModelId(workflowForm.textModelId),
+        image_model_id: parseModelId(workflowForm.imageModelId),
+        video_model_id: parseModelId(workflowForm.videoModelId),
         enable_subtitle: true,
         enable_dubbing: true,
         video_mode: 'api_generation',
@@ -175,6 +215,7 @@ export default function AdVideoWorkbenchPage() {
           video_mode: 'api_generation',
           style_preset: workflowForm.stylePreset,
           motion_mode: 'gentle',
+          ...(selectedVideoModel?.model_key ? { video_model: selectedVideoModel.model_key } : {}),
         },
       })
       const project = unwrap<Project>((res as { data?: ProjectPayload }).data)
@@ -384,6 +425,51 @@ export default function AdVideoWorkbenchPage() {
                 value={workflowForm.duration}
                 onChange={(e) => setWorkflowForm((prev) => ({ ...prev, duration: e.target.value }))}
               />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">文本模型</Label>
+              <select
+                value={workflowForm.textModelId}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, textModelId: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="default">系统默认</option>
+                {textModels.map((model) => (
+                  <option key={model.id} value={String(model.id)}>
+                    {model.name} · {model.model_key}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-slate-200">图片模型</Label>
+              <select
+                value={workflowForm.imageModelId}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, imageModelId: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="default">系统默认</option>
+                {imageModels.map((model) => (
+                  <option key={model.id} value={String(model.id)}>
+                    {model.name} · {model.model_key}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-slate-200">视频模型</Label>
+              <select
+                value={workflowForm.videoModelId}
+                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, videoModelId: e.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+              >
+                <option value="default">系统默认</option>
+                {videoModels.map((model) => (
+                  <option key={model.id} value={String(model.id)}>
+                    {model.name} · {model.model_key}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2 md:col-span-2">
               <Label className="text-slate-200">广告脚本 / 口播文案</Label>
