@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
@@ -126,6 +126,7 @@ export default function AdVideoWorkbenchPage() {
   })
   const [workflowProjectId, setWorkflowProjectId] = useState<number | null>(null)
   const [creatingProject, setCreatingProject] = useState(false)
+  const creatingProjectRef = useRef(false)
   const [startingFlow, setStartingFlow] = useState(false)
   const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
   const [savingAllStoryboards, setSavingAllStoryboards] = useState(false)
@@ -358,6 +359,7 @@ export default function AdVideoWorkbenchPage() {
   }
 
   const createWorkflowProject = async () => {
+    if (creatingProjectRef.current) return
     if (!workflowForm.title.trim()) {
       toast({ title: '请先填写广告工作项目标题', variant: 'destructive' })
       return
@@ -382,6 +384,7 @@ export default function AdVideoWorkbenchPage() {
       toast({ title: '当前模型没有可用的时长参数，请先切换模型', variant: 'destructive' })
       return
     }
+    creatingProjectRef.current = true
     setCreatingProject(true)
     try {
       const parseModelId = (value: string) => {
@@ -419,7 +422,7 @@ export default function AdVideoWorkbenchPage() {
       const filenameBase = workflowForm.title.trim() || `ad-project-${project.id}`
       const file = new File([workflowForm.scriptText.trim()], `${filenameBase}.txt`, { type: 'text/plain' })
       await projectAPI.uploadScript(project.id, file)
-      await projectAPI.generateEpisodes(project.id, undefined, { force: true, autoStoryboard: true })
+      await projectAPI.generateEpisodes(project.id, undefined, { autoStoryboard: true })
       setWorkflowProjectId(project.id)
       toast({ title: `广告项目 #${project.id} 已创建，并已开始文案优化与自动分镜流程`, variant: 'success' })
       await mutateProject()
@@ -428,6 +431,7 @@ export default function AdVideoWorkbenchPage() {
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '创建广告项目并启动优化失败', variant: 'destructive' })
     } finally {
+      creatingProjectRef.current = false
       setCreatingProject(false)
     }
   }
