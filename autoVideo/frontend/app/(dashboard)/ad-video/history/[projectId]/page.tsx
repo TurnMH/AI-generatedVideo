@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
@@ -44,6 +44,20 @@ type VideoModelMeta = {
   native_audio?: boolean
   params?: VideoModelParam[]
 }
+
+const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
+
+必须遵守：
+- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
+- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成。
+- 必须主动补全并澄清以下 14 个维度：1）世界观/故事发生的视觉宇宙；2）空间（在哪里）；3）时间（几点/昼夜/时序）；4）人物（谁）；5）服装（穿什么）；6）动作（做什么）；7）核心物件/镜头重点；8）光线（怎么打光）；9）色彩（什么色调）；10）材质（表面质感）；11）镜头运动（怎么拍）；12）情绪（传达什么感觉）；13）转场（怎么切）；14）字幕/屏幕文字、配音/口播内容、以及最终给 AI 的生成 Prompt 描述。
+- optimized_script 必须是可直接用于后续自动分集的广告正文；但文中要自然包含这些维度所需的信息，不要只给抽象概念。
+- consistency_premise 必须单独总结以上 14 个维度里“后续不得漂移”的硬约束，写成清晰条目。
+- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
+- 段落之间要有清楚转场，避免一句话承载过多镜头。
+- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
+- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。
+- 要明确区分：哪些是画面信息、哪些是台词/配音、哪些是屏幕字幕、哪些是最终喂给模型的视觉 Prompt 重点。`
 
 function unwrap<T>(payload: unknown): T | null {
   if (!payload || typeof payload !== 'object') return null
@@ -164,6 +178,7 @@ export default function AdVideoHistoryDetailPage() {
   const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('')
+  const previousStoryboardsRef = useRef<Storyboard[]>([])
   const [selectedResolution, setSelectedResolution] = useState('')
   const [selectedDuration, setSelectedDuration] = useState('')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
@@ -231,7 +246,7 @@ export default function AdVideoHistoryDetailPage() {
     [adCopyState?.original_script, autoSplit?.original_script, project?.script_text],
   )
   const realOptimizationPrompt = useMemo(
-    () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || '').trim(),
+    () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || DEFAULT_AD_COPY_OPTIMIZATION_PROMPT).trim(),
     [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
   )
   const resultUrl = taskResultUrl(latestTask)
@@ -260,6 +275,18 @@ export default function AdVideoHistoryDetailPage() {
     return storyboards.filter((item) => Number(item.episode_id) === selectedEpisodeNumber)
   }, [selectedEpisodeNumber, storyboards])
 
+  useEffect(() => {
+    if (scopeStoryboards.length > 0) {
+      previousStoryboardsRef.current = scopeStoryboards
+    }
+  }, [scopeStoryboards])
+
+  const displayStoryboards = useMemo(() => {
+    if (scopeStoryboards.length > 0) return scopeStoryboards
+    if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
+    return []
+  }, [scopeStoryboards, step1Running])
+
   const scopeStoryboardAssetIds = useMemo(() => {
     const ids = new Set<number>()
     for (const storyboard of scopeStoryboards) {
@@ -278,8 +305,8 @@ export default function AdVideoHistoryDetailPage() {
   }, [assets, scopeStoryboardAssetIds, selectedEpisodeNumber])
 
   const completedStoryboardImages = useMemo(
-    () => scopeStoryboards.filter((item) => String(item.image_url || '').trim()).length,
-    [scopeStoryboards],
+    () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
+    [displayStoryboards],
   )
 
   const uploadedScopeAssets = useMemo(
@@ -303,11 +330,11 @@ export default function AdVideoHistoryDetailPage() {
   )
 
   const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
-  const storyboardScopeReady = scopeStoryboards.length > 0
+  const storyboardScopeReady = displayStoryboards.length > 0
   const assetScopeReady = scopeAssets.length > 0
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
   const storyboardImagesReady = storyboardScopeReady && completedStoryboardImages > 0
-  const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === scopeStoryboards.length
+  const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === displayStoryboards.length
 
   const step1Running = rerunAction === 'pipeline' || project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting'
   const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
@@ -724,7 +751,7 @@ export default function AdVideoHistoryDetailPage() {
               <Tabs defaultValue="copy" className="space-y-4">
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
                   <TabsTrigger value="copy">文案 · {realOptimizedScript.length} 字 / {episodes.length} 集</TabsTrigger>
-                  <TabsTrigger value="storyboard">分镜 · {scopeStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
+                  <TabsTrigger value="storyboard">分镜 · {displayStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
                   <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
 
@@ -799,13 +826,13 @@ export default function AdVideoHistoryDetailPage() {
                         <div className="text-sm font-medium text-white">当前范围分镜</div>
                         <div className="mt-1 text-xs text-slate-400">这里直接看当前范围的 scene_description / dialogue / 分镜图是否齐了。</div>
                       </div>
-                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel} · 分镜 {scopeStoryboards.length} 条</div>
+                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel} · 分镜 {displayStoryboards.length} 条{step1Running && scopeStoryboards.length === 0 && previousStoryboardsRef.current.length > 0 ? ' · 正在重建，先显示上一版' : ''}</div>
                     </div>
                   </div>
 
-                  {scopeStoryboards.length === 0 ? (
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前范围还没有分镜记录。</div>
-                  ) : scopeStoryboards.map((storyboard) => (
+                  {displayStoryboards.length === 0 ? (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜记录。'}</div>
+                  ) : displayStoryboards.map((storyboard) => (
                     <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number} · {storyboard.status || '-'} · episode {storyboard.episode_id || '-'}</div>
@@ -935,7 +962,7 @@ export default function AdVideoHistoryDetailPage() {
                   <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
                       <div className="text-xs text-slate-400">已拆出的分镜</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{scopeStoryboards.length}</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{displayStoryboards.length}</div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
                       <div className="text-xs text-slate-400">已上传人物/素材图</div>
@@ -943,7 +970,7 @@ export default function AdVideoHistoryDetailPage() {
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
                       <div className="text-xs text-slate-400">已就绪分镜图</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{completedStoryboardImages}/{scopeStoryboards.length}</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">{completedStoryboardImages}/{displayStoryboards.length}</div>
                     </div>
                     <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
                       <div className="text-xs text-slate-400">进行中视频任务</div>
@@ -1133,7 +1160,7 @@ export default function AdVideoHistoryDetailPage() {
                     <div>当前模型：{selectedVideoModel || '未选择'}</div>
                     <div>比例 / 分辨率 / 单分镜时长：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
                     <div>当前范围：{scopeLabel}</div>
-                    <div>可用分镜图：{completedStoryboardImages} / {scopeStoryboards.length}</div>
+                    <div>可用分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                   </div>
 
                   <Button

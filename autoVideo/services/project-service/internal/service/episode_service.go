@@ -863,6 +863,10 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 		)
 	}
 
+	var progressSnapshot ProgressInfo
+	if len(project.Progress) > 0 {
+		_ = json.Unmarshal(project.Progress, &progressSnapshot)
+	}
 	s.updateProgress(projectID, ProgressInfo{
 		Stage: "scene_splitting",
 		EpisodeSplit: &StageProgress{
@@ -876,6 +880,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 		NextStep:       "分镜拆分完成后即可继续出图或进入后续制作",
 		CurrentEpisode: 0,
 		TotalEpisodes:  len(episodes),
+		AutoSplit:      progressSnapshot.AutoSplit,
 	})
 	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "storyboard_generating")
 
@@ -2027,14 +2032,14 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
 	autoSplitAfterOptimization := runtimeCfg.AutoSplitAfterOptimization || strings.EqualFold(project.Mode, "script")
 	optimizedScriptText := strings.TrimSpace(scriptText)
+	autoSplitProgress := AutoSplitMeta{
+		Enabled:        autoSplitAfterOptimization,
+		Duration:       runtimeCfg.Duration,
+		VideoModel:     runtimeCfg.VideoModel,
+		StylePreset:    stylepreset.Canonical(runtimeCfg.StylePreset),
+		OriginalScript: strings.TrimSpace(scriptText),
+	}
 	if autoSplitAfterOptimization {
-		autoSplitProgress := AutoSplitMeta{
-			Enabled:        true,
-			Duration:       runtimeCfg.Duration,
-			VideoModel:     runtimeCfg.VideoModel,
-			StylePreset:    stylepreset.Canonical(runtimeCfg.StylePreset),
-			OriginalScript: strings.TrimSpace(scriptText),
-		}
 		s.updateProgress(projectID, ProgressInfo{
 			Stage:        "episode_splitting",
 			Message:      "正在按所选风格优化广告文案，为自动切分做准备…",
@@ -2070,6 +2075,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		Stage:        "episode_splitting",
 		Message:      "正在按优化后文案自动拆分剧本为集数…",
 		EpisodeSplit: &StageProgress{Status: "running"},
+		AutoSplit:    &autoSplitProgress,
 	})
 
 	// Try user-provided split keywords first
@@ -2483,6 +2489,10 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			mu.Unlock()
 
 			// Report progress
+			var progressSnapshot ProgressInfo
+			if refreshedProject, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil && len(refreshedProject.Progress) > 0 {
+				_ = json.Unmarshal(refreshedProject.Progress, &progressSnapshot)
+			}
 			s.updateProgress(projectID, ProgressInfo{
 				Stage: "scene_splitting",
 				EpisodeSplit: &StageProgress{
@@ -2491,7 +2501,8 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				SceneSplit: &StageProgress{
 					Total: len(dbEpisodes), Completed: completed, Current: epNum, Status: "running",
 				},
-				Message: fmt.Sprintf("正在拆分分镜 %d/%d（第%d集）", completed, len(dbEpisodes), epNum),
+				Message:   fmt.Sprintf("正在拆分分镜 %d/%d（第%d集）", completed, len(dbEpisodes), epNum),
+				AutoSplit: progressSnapshot.AutoSplit,
 			})
 		}(i, uint64(ep.ID), ep.EpisodeNumber, content)
 	}
