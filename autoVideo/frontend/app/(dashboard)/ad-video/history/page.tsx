@@ -56,8 +56,8 @@ export default function AdVideoHistoryPage() {
     revalidateOnFocus: true,
   })
 
-  const projects = projectData || []
-  const tasks = taskData || []
+  const projects = useMemo(() => projectData || [], [projectData])
+  const tasks = useMemo(() => taskData || [], [taskData])
   const latestTaskMap = useMemo(() => {
     const map = new Map<number, VideoTask>()
     for (const task of tasks) {
@@ -135,7 +135,6 @@ export default function AdVideoHistoryPage() {
                   <div className="flex flex-wrap gap-2">
                     <Button variant="outline" asChild><Link href={`/ad-video/history/${project.id}`}>查看详情 / 进度</Link></Button>
                     {resultUrl && <Button variant="outline" asChild><a href={resultUrl} target="_blank" rel="noreferrer">查看完整视频</a></Button>}
-                    <Button variant="outline" asChild><Link href={`/projects/${project.id}`}>底层项目页</Link></Button>
                   </div>
                 </div>
               </div>
