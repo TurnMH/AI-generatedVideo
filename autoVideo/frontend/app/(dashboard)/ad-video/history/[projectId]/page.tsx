@@ -665,12 +665,16 @@ export default function AdVideoHistoryDetailPage() {
             <CardContent>
               <Tabs defaultValue="copy" className="space-y-4">
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
-                  <TabsTrigger value="copy">文案</TabsTrigger>
-                  <TabsTrigger value="storyboard">分镜</TabsTrigger>
-                  <TabsTrigger value="video">视频</TabsTrigger>
+                  <TabsTrigger value="copy">文案 · {editableOptimizedScript.trim().length} 字 / {episodes.length} 集</TabsTrigger>
+                  <TabsTrigger value="storyboard">分镜 · {scopeStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
+                  <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="copy" className="space-y-4">
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+                    <div className="font-medium">文案工作区</div>
+                    <div className="mt-1 text-xs text-emerald-100/80">这里集中看优化前后文案、一致性前提，以及当前自动分集结果；步骤 1 仍在上方流水线执行。</div>
+                  </div>
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4 text-sm text-slate-200">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -730,6 +734,10 @@ export default function AdVideoHistoryDetailPage() {
                 </TabsContent>
 
                 <TabsContent value="storyboard" className="space-y-4">
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 text-sm text-violet-100">
+                    <div className="font-medium">分镜工作区</div>
+                    <div className="mt-1 text-xs text-violet-100/80">这里集中看当前范围分镜、场景描述、台词和分镜图补齐情况；步骤 2 的人物图上传与分镜图刷新仍在上方流水线执行。</div>
+                  </div>
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
@@ -775,6 +783,10 @@ export default function AdVideoHistoryDetailPage() {
                 </TabsContent>
 
                 <TabsContent value="video" className="space-y-4">
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+                    <div className="font-medium">视频工作区</div>
+                    <div className="mt-1 text-xs text-cyan-100/80">这里集中看当前视频任务、报错、结果链接与成片预览；步骤 3 的提交动作仍在上方流水线执行。</div>
+                  </div>
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
