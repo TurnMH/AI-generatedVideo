@@ -1016,8 +1016,10 @@ func (s *EpisodeService) PolishEpisode(ctx context.Context, id, projectID uint64
 	productionHints := s.fetchProductionSkillHints(ctx, projectID)
 
 	// Load project keyword library for consistency bible injection.
+	var projectRef *model.Project
 	var kwLib *KeywordLibrary
 	if project, pErr := s.projectRepo.FindByIDNoAuth(projectID); pErr == nil {
+		projectRef = project
 		var lib KeywordLibrary
 		if len(project.KeywordLibrary) > 0 {
 			if jsonErr := json.Unmarshal(project.KeywordLibrary, &lib); jsonErr == nil {
@@ -1026,7 +1028,7 @@ func (s *EpisodeService) PolishEpisode(ctx context.Context, id, projectID uint64
 		}
 	}
 
-	polished, err := s.callLLMPolish(ctx, episode, writingHints, productionHints, kwLib)
+	polished, err := s.callLLMPolish(ctx, projectRef, episode, writingHints, productionHints, kwLib)
 	if err != nil {
 		return nil, fmt.Errorf("LLM polish failed: %w", err)
 	}
@@ -1383,6 +1385,32 @@ func storyboardStyleKey(stylePreset string) string {
 	}
 }
 
+func hasStyleTag(project *model.Project, tag string) bool {
+	if project == nil || tag == "" {
+		return false
+	}
+	for _, item := range project.StyleTags {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(tag)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAdWorkbenchProject(project *model.Project) bool {
+	return hasStyleTag(project, "ad-workbench")
+}
+
+func adWorkbenchPromptDirective() string {
+	return `
+- 本项目来自“口播广告工作台”，整体节奏必须按广告片处理，而不是普通剧情短片。
+- 优先按“钩子/痛点/卖点展开/转场/证据或场景化演示/行动号召 CTA”组织内容。
+- 口播句群要短、稳、利落，适合配音与镜头切换，不要写成长篇散文或小说叙述。
+- 尽量不要把 CTA 提前切碎；CTA 应尽量收束在后段或最后一段。
+- 不要把同一个卖点拆散到多个分段里，除非时长明显不足。
+- 转场句、镜头切换句、口播提示句应尽量保持完整，不要从中间截断。`
+}
+
 func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string) (string, error) {
 	trimmed := strings.TrimSpace(scriptText)
 	if trimmed == "" {
@@ -1429,6 +1457,9 @@ func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, 
 - 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
 - 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。`
 
+	if isAdWorkbenchProject(project) {
+		systemPrompt += "\n\n**广告工作台节奏规则（务必遵守）：**\n" + adWorkbenchPromptDirective()
+	}
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属优化指引（务必遵守）：**\n" + writingHints
 	}
@@ -1498,7 +1529,7 @@ type polishedEpisode struct {
 }
 
 // callLLMPolish sends the episode to the LLM for professional rewriting.
-func (s *EpisodeService) callLLMPolish(ctx context.Context, ep *model.Episode, writingHints string, productionHints string, kwLib *KeywordLibrary) (*polishedEpisode, error) {
+func (s *EpisodeService) callLLMPolish(ctx context.Context, project *model.Project, ep *model.Episode, writingHints string, productionHints string, kwLib *KeywordLibrary) (*polishedEpisode, error) {
 	systemPrompt := `你是专业的短剧编剧顾问，同时兼任导演组的剧本统筹。请对给定的分集内容进行专业优化润色，返回严格JSON格式（不要markdown代码块），字段如下：
 {
   "title": "优化后的集标题（简洁有力，20字以内）",
@@ -1523,6 +1554,9 @@ func (s *EpisodeService) callLLMPolish(ctx context.Context, ep *model.Episode, w
 - 避免空泛词汇，如“气氛很紧张”“两人对峙”而没有可见画面支撑；要改成可拍摄、可视化的具体画面
 - 同一段不要让人物、空间、镜头意图互相打架；一个自然段只承载一组清晰的视觉动作`
 
+	if isAdWorkbenchProject(project) {
+		systemPrompt += "\n\n**广告工作台节奏规则（分集润色时强制遵守）：**\n" + adWorkbenchPromptDirective()
+	}
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属优化指引（请务必遵守）：**\n" + writingHints
 	}
@@ -2179,7 +2213,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			splitCtx, cancelSplit := context.WithTimeout(ctx, episodeSplitTimeout)
 			var err error
 			writingHints := s.fetchWritingSkillHints(splitCtx, projectID)
-			episodes, err = s.callLLMSplit(splitCtx, optimizedScriptText, targetEpisodes, &kwLib, writingHints)
+			episodes, err = s.callLLMSplit(splitCtx, project, optimizedScriptText, targetEpisodes, &kwLib, writingHints)
 			cancelSplit()
 			if err != nil {
 				episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
@@ -2197,7 +2231,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			EpisodeSplit: &StageProgress{Total: len(episodes), Status: "running"},
 		})
 		enrichCtx, cancelEnrich := context.WithTimeout(ctx, episodeEnrichTimeout)
-		s.enrichEpisodesParallel(enrichCtx, episodes, &kwLib, chapterWritingHints)
+		s.enrichEpisodesParallel(enrichCtx, project, episodes, &kwLib, chapterWritingHints)
 		cancelEnrich()
 	}
 
@@ -3582,10 +3616,10 @@ func mergeIntoGroups(paragraphs []string, n int) [][]string {
 }
 
 // callLLMSplit —— 调用 LLM 将剧本拆分为指定集数的剧集
-func (s *EpisodeService) callLLMSplit(ctx context.Context, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
+func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
 	// For very large episode counts, split via multiple LLM calls in batches
 	if targetEpisodes > 30 {
-		return s.callLLMSplitBatched(ctx, scriptText, targetEpisodes, kwLib, writingHints)
+		return s.callLLMSplitBatched(ctx, project, scriptText, targetEpisodes, kwLib, writingHints)
 	}
 
 	// Truncate very long scripts for the prompt
@@ -3627,6 +3661,9 @@ func (s *EpisodeService) callLLMSplit(ctx context.Context, scriptText string, ta
 %s`, targetEpisodes, kwContext, targetEpisodes, truncated)
 
 	systemPrompt := "你是剧本分析助手，只输出JSON，不要输出其他内容。"
+	if isAdWorkbenchProject(project) {
+		systemPrompt += "\n\n**广告工作台节奏规则（分集时强制遵守）：**\n" + adWorkbenchPromptDirective()
+	}
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属写作指引（分集时请遵守）：**\n" + writingHints
 	}
@@ -3710,7 +3747,7 @@ func (s *EpisodeService) callLLMSplit(ctx context.Context, scriptText string, ta
 // callLLMSplitBatched handles large episode counts (>30) by first using simpleSplit
 // to create text segments, then enriching each segment with an LLM-generated
 // title, summary and keywords in parallel batches.
-func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
+func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
 	if s.logger != nil {
 		s.logger.Info("using batched split for large episode count",
 			zap.Int("target", targetEpisodes))
@@ -3749,7 +3786,7 @@ func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, scriptText str
 
 			go func(idx int, ep llmEpisode) {
 				defer func() { <-sem }()
-				title, summary, kws := s.enrichEpisodeWithLLM(ctx, ep.Title, ep.Excerpt, idx+1, kwLib, writingHints)
+				title, summary, kws := s.enrichEpisodeWithLLM(ctx, project, ep.Title, ep.Excerpt, idx+1, kwLib, writingHints)
 				results <- enrichResult{idx: idx, title: title, summary: summary, keywords: kws}
 			}(batchStart+i, seg)
 		}
@@ -3776,7 +3813,7 @@ func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, scriptText str
 // enrichEpisodesParallel enriches a slice of chapter-split episodes with LLM-generated
 // summaries and keyword tags, using up to 5 parallel workers.
 // writingHints is the concatenated text of active writing skills (may be empty).
-func (s *EpisodeService) enrichEpisodesParallel(ctx context.Context, episodes []llmEpisode, kwLib *KeywordLibrary, writingHints string) {
+func (s *EpisodeService) enrichEpisodesParallel(ctx context.Context, project *model.Project, episodes []llmEpisode, kwLib *KeywordLibrary, writingHints string) {
 	const workers = 5
 	const batchSize = 10
 
@@ -3805,7 +3842,7 @@ func (s *EpisodeService) enrichEpisodesParallel(ctx context.Context, episodes []
 			}
 			go func(idx int, ep llmEpisode) {
 				defer func() { <-sem }()
-				title, summary, kws := s.enrichEpisodeWithLLM(ctx, ep.Title, ep.Excerpt, idx+1, kwLib, writingHints)
+				title, summary, kws := s.enrichEpisodeWithLLM(ctx, project, ep.Title, ep.Excerpt, idx+1, kwLib, writingHints)
 				results <- enrichResult{idx: idx, title: title, summary: summary, keywords: kws}
 			}(batchStart+i, seg)
 		}
@@ -3829,7 +3866,7 @@ func (s *EpisodeService) enrichEpisodesParallel(ctx context.Context, episodes []
 // enrichEpisodeWithLLM calls LLM to generate title, summary, and keywords for one episode.
 // chapterTitle is the original chapter heading (may be empty for non-chapter splits).
 // writingHints is the concatenated text of active writing skills for this project (may be empty).
-func (s *EpisodeService) enrichEpisodeWithLLM(ctx context.Context, chapterTitle, excerpt string, episodeNum int, kwLib *KeywordLibrary, writingHints string) (string, string, []string) {
+func (s *EpisodeService) enrichEpisodeWithLLM(ctx context.Context, project *model.Project, chapterTitle, excerpt string, episodeNum int, kwLib *KeywordLibrary, writingHints string) (string, string, []string) {
 	maxChars := 5000
 	truncated := excerpt
 	if utf8.RuneCountInString(truncated) > maxChars {
@@ -3863,6 +3900,9 @@ func (s *EpisodeService) enrichEpisodeWithLLM(ctx context.Context, chapterTitle,
 		"messages": []map[string]string{
 			{"role": "system", "content": func() string {
 				sys := "你是影视剧本分析专家，只输出JSON，不要输出其他内容。"
+				if isAdWorkbenchProject(project) {
+					sys += "\n\n**广告工作台节奏规则（标题/摘要生成时强制遵守）：**\n" + adWorkbenchPromptDirective()
+				}
 				if writingHints != "" {
 					sys += "\n\n**本项目专属写作指引（生成摘要时请遵守）：**\n" + writingHints
 				}
@@ -5648,7 +5688,8 @@ func (s *EpisodeService) polishEpisodeInternal(ctx context.Context, id, projectI
 	if episode.ProjectID != projectID {
 		return nil, errors.New("episode not found")
 	}
-	polished, err := s.callLLMPolish(ctx, episode, writingHints, productionHints, kwLib)
+	projectRef, _ := s.projectRepo.FindByIDNoAuth(projectID)
+	polished, err := s.callLLMPolish(ctx, projectRef, episode, writingHints, productionHints, kwLib)
 	if err != nil {
 		return nil, fmt.Errorf("LLM polish failed: %w", err)
 	}
