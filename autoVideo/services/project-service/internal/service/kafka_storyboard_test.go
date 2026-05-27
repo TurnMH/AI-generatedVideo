@@ -37,7 +37,7 @@ func TestIsTransientStoryboardGenerationError(t *testing.T) {
 func TestSetProjectGenerationScopeClonesEpisodeID(t *testing.T) {
 	t.Parallel()
 
-	svc := NewStoryboardService(nil)
+	svc := NewStoryboardService(nil, nil)
 	episodeID := uint64(42)
 
 	svc.setProjectGenerationScope(7, storyboardGenerationScope{EpisodeID: &episodeID})

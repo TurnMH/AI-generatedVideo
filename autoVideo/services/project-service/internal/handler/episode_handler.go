@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -419,6 +420,49 @@ func (h *EpisodeHandler) BatchOptimizeEpisodes(c *gin.Context) {
 		_, _ = h.svc.BatchOptimizeEpisodes(ctx, projectID)
 	}()
 	response.OK(c, gin.H{"message": "batch optimize started", "status": "processing"})
+}
+
+// GetAdCopyOptimizationState —— 获取广告文案优化提示词 / 原文 / 优化稿当前状态
+// GET /api/v1/projects/:id/episodes/ad-copy-optimization
+func (h *EpisodeHandler) GetAdCopyOptimizationState(c *gin.Context) {
+	projectID, err := parseUint64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	payload, err := h.svc.GetAdCopyOptimizationState(projectID)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.OK(c, payload)
+}
+
+// OptimizeAdCopy —— 用当前原文 + 提示词执行广告文案优化，可多次重跑
+// POST /api/v1/projects/:id/episodes/ad-copy-optimization
+func (h *EpisodeHandler) OptimizeAdCopy(c *gin.Context) {
+	projectID, err := parseUint64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	var req service.AdCopyOptimizeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+	payload, err := h.svc.OptimizeAdCopy(ctx, projectID, req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			response.Fail(c, http.StatusGatewayTimeout, 504, "广告文案优化超时，请稍后重试")
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.OK(c, payload)
 }
 
 // BatchReviewEpisodes — POST /api/v1/projects/:id/episodes/batch-review

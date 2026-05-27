@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { assetAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Project } from '@/lib/api'
-import type { Asset, Storyboard } from '@/types'
+import type { AdCopyOptimizationState, Asset, Storyboard } from '@/types'
 
 type VideoTask = {
   id: number
@@ -155,6 +155,9 @@ export default function AdVideoHistoryDetailPage() {
   const projectId = Number(params?.projectId || 0)
 
   const [editableOptimizedScript, setEditableOptimizedScript] = useState('')
+  const [editableOriginalScript, setEditableOriginalScript] = useState('')
+  const [editableOptimizationPrompt, setEditableOptimizationPrompt] = useState('')
+  const [optimizingCopy, setOptimizingCopy] = useState(false)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
   const [generationAction, setGenerationAction] = useState<string | null>(null)
   const [rerunAction, setRerunAction] = useState<string | null>(null)
@@ -174,6 +177,11 @@ export default function AdVideoHistoryDetailPage() {
     const res = await projectAPI.listEpisodes(projectId)
     return unwrap<Episode[]>((res as { data?: unknown }).data) || []
   }, { refreshInterval: 5000, revalidateOnFocus: true })
+
+  const { data: adCopyState, mutate: mutateAdCopyState } = useSWR(projectId ? ['ad-video-history-ad-copy', projectId] : null, async () => {
+    const res = await projectAPI.getAdCopyOptimizationState(projectId)
+    return unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
+  }, { revalidateOnFocus: true })
 
   const { data: storyboardsData, mutate: mutateStoryboards } = useSWR(projectId ? ['ad-video-history-storyboards', projectId] : null, async () => {
     const res = await storyboardAPI.listAll(projectId)
@@ -215,8 +223,16 @@ export default function AdVideoHistoryDetailPage() {
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
   const autoSplit = project?.progress?.auto_split || null
   const realOptimizedScript = useMemo(
-    () => (typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script.trim() : ''),
-    [autoSplit?.optimized_script],
+    () => String(adCopyState?.optimized_script || autoSplit?.optimized_script || '').trim(),
+    [adCopyState?.optimized_script, autoSplit?.optimized_script],
+  )
+  const realOriginalScript = useMemo(
+    () => String(adCopyState?.original_script || autoSplit?.original_script || project?.script_text || '').trim(),
+    [adCopyState?.original_script, autoSplit?.original_script, project?.script_text],
+  )
+  const realOptimizationPrompt = useMemo(
+    () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || '').trim(),
+    [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
   )
   const resultUrl = taskResultUrl(latestTask)
 
@@ -310,7 +326,7 @@ export default function AdVideoHistoryDetailPage() {
     ? '当前正在重跑文本拆分 / 自动分镜，请先等这一轮结束。'
     : !splitConfigReady
       ? '先补齐视频模型、比例、分辨率、单分镜时长。'
-      : !editableOptimizedScript.trim()
+      : !(editableOptimizedScript.trim() || editableOriginalScript.trim())
         ? '当前文案为空，无法拆分。'
         : storyboardScopeReady
           ? '当前范围已经有可用分镜，可继续重跑覆盖。'
@@ -350,6 +366,24 @@ export default function AdVideoHistoryDetailPage() {
   }, [realOptimizedScript])
 
   useEffect(() => {
+    setEditableOriginalScript((prev) => {
+      if (!prev.trim()) return realOriginalScript
+      if (prev.trim() === realOriginalScript) return prev
+      if (!realOriginalScript) return prev
+      return realOriginalScript
+    })
+  }, [realOriginalScript])
+
+  useEffect(() => {
+    setEditableOptimizationPrompt((prev) => {
+      if (!prev.trim()) return realOptimizationPrompt
+      if (prev.trim() === realOptimizationPrompt) return prev
+      if (!realOptimizationPrompt) return prev
+      return realOptimizationPrompt
+    })
+  }, [realOptimizationPrompt])
+
+  useEffect(() => {
     if (!availableModels.length) return
     setSelectedVideoModel((prev) => {
       if (prev && availableModels.some((item) => item.key === prev)) return prev
@@ -380,7 +414,7 @@ export default function AdVideoHistoryDetailPage() {
   }, [project?.storyboard_config?.generate_audio])
 
   const refreshAll = async () => {
-    await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateAssets()])
+    await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateAssets(), mutateAdCopyState()])
   }
 
   const runScopedAction = async (action: string, runner: () => Promise<unknown>, successTitle: string) => {
@@ -396,8 +430,44 @@ export default function AdVideoHistoryDetailPage() {
     }
   }
 
+  const optimizeAdCopy = async () => {
+    const originalScript = editableOriginalScript.trim()
+    const optimizationPrompt = editableOptimizationPrompt.trim()
+    if (!originalScript) {
+      toast({ title: '请先填写原文，再开始优化', variant: 'destructive' })
+      return
+    }
+    if (!optimizationPrompt) {
+      toast({ title: '请先填写文案优化提示词', variant: 'destructive' })
+      return
+    }
+    setOptimizingCopy(true)
+    try {
+      await storyboardAPI.updateConfig(projectId, {
+        ad_copy_optimization_prompt: optimizationPrompt,
+      })
+      const res = await projectAPI.optimizeAdCopy(projectId, {
+        original_script: originalScript,
+        optimization_prompt: optimizationPrompt,
+        persist_original: true,
+      })
+      const payload = unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
+      if (payload) {
+        setEditableOriginalScript(payload.original_script || originalScript)
+        setEditableOptimizationPrompt(payload.optimization_prompt || optimizationPrompt)
+        setEditableOptimizedScript(payload.optimized_script || '')
+      }
+      await refreshAll()
+      toast({ title: realOptimizedScript ? '已按当前提示词重新优化文案' : '已完成首次文案优化', variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '文案优化失败', variant: 'destructive' })
+    } finally {
+      setOptimizingCopy(false)
+    }
+  }
+
   const rerunStoryboardPipeline = async () => {
-    const scriptText = editableOptimizedScript.trim()
+    const scriptText = editableOptimizedScript.trim() || editableOriginalScript.trim()
     if (!scriptText) {
       toast({ title: '请先保留一版可用的优化文案，再开始按视频配置重拆分', variant: 'destructive' })
       return
@@ -658,25 +728,33 @@ export default function AdVideoHistoryDetailPage() {
                   <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="copy">
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                      <div className="mb-3 flex items-center justify-between gap-2">
-                        <div className="text-sm font-medium text-white">原文</div>
-                        <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || '').trim().length || String(project.script_text || '').trim().length} 字</div>
+                <TabsContent value="copy" className="space-y-4">
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-cyan-100">文案优化提示词</div>
+                        <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。点击按钮后支持首次优化，也支持基于当前原文和当前提示词多次重新优化。</div>
                       </div>
-                      <div className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words text-sm text-slate-100">
-                        {autoSplit?.original_script || project.script_text || '暂无'}
-                      </div>
+                      <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || pipelineBusy}>
+                        {optimizingCopy ? '优化中…' : realOptimizedScript ? '重新优化' : '开始优化'}
+                      </Button>
                     </div>
+                    <Textarea
+                      value={editableOptimizationPrompt}
+                      onChange={(e) => setEditableOptimizationPrompt(e.target.value)}
+                      className="min-h-[180px] border-cyan-500/20 bg-black/20 text-slate-100"
+                      placeholder="请输入文案优化提示词。"
+                    />
+                  </div>
 
+                  <div className="grid gap-4 xl:grid-cols-2">
                     <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4">
                       <div className="mb-3 flex items-center justify-between gap-2">
                         <div>
                           <div className="text-sm font-medium text-white">优化后的文案</div>
-                          <div className="mt-1 text-[11px] text-emerald-200/75">右侧只展示并编辑真正的优化稿，真实来源是 `project.progress.auto_split.optimized_script`。</div>
+                          <div className="mt-1 text-[11px] text-emerald-200/75">这里固定放真正的优化稿，真实来源仍是 `project.progress.auto_split.optimized_script`。</div>
                         </div>
-                        <div className="text-[11px] text-emerald-200/75">{realOptimizedScript.length} 字</div>
+                        <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length || realOptimizedScript.length} 字</div>
                       </div>
                       {realOptimizedScript ? (
                         <Textarea
@@ -687,9 +765,25 @@ export default function AdVideoHistoryDetailPage() {
                         />
                       ) : (
                         <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-                          当前项目的运行态尚未返回真正优化后的文案（`auto_split.optimized_script` 为空），因此右侧不再用原文冒充。要显示真实优化稿，需要先让后端把该字段稳定回流到项目 progress。
+                          当前项目还没有真正优化后的文案。请先填写左侧原文和上方提示词，再点击“开始优化”。
                         </div>
                       )}
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-white">原文</div>
+                          <div className="mt-1 text-[11px] text-slate-500">右侧原文支持直接调整；下次点击“开始优化 / 重新优化”会以这里的当前文本为准。</div>
+                        </div>
+                        <div className="text-[11px] text-slate-500">{editableOriginalScript.trim().length || realOriginalScript.length} 字</div>
+                      </div>
+                      <Textarea
+                        value={editableOriginalScript}
+                        onChange={(e) => setEditableOriginalScript(e.target.value)}
+                        className="min-h-[520px] border-white/10 bg-black/20 text-slate-100"
+                        placeholder="请输入或调整当前原文。"
+                      />
                     </div>
                   </div>
                 </TabsContent>

@@ -8,6 +8,7 @@ import type {
   StoryboardConfig,
   CharacterData,
   ImageModelCapabilitiesResponse,
+  AdCopyOptimizationState,
 } from '@/types'
 
 function normalizeBaseURL(value?: string) {
@@ -128,6 +129,13 @@ export const projectAPI = {
   clone: (id: number) => api.post(`/api/v1/projects/${id}/clone`),
   // Episodes
   listEpisodes: (id: number) => api.get(`/api/v1/projects/${id}/episodes`),
+  getAdCopyOptimizationState: (id: number) =>
+    api.get<AdCopyOptimizationState>(`/api/v1/projects/${id}/episodes/ad-copy-optimization`),
+  optimizeAdCopy: (id: number, data: {
+    original_script: string
+    optimization_prompt: string
+    persist_original?: boolean
+  }) => api.post<AdCopyOptimizationState>(`/api/v1/projects/${id}/episodes/ad-copy-optimization`, data),
   createEpisode: (id: number, data: { episode_number: number; title: string; summary?: string; script_excerpt?: string }) =>
     api.post(`/api/v1/projects/${id}/episodes`, data),
   generateEpisodes: (

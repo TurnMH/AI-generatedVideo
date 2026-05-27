@@ -30,20 +30,22 @@ type storyboardGenerationScope struct {
 }
 
 type StoryboardService struct {
-	repo               *repository.StoryboardRepo
-	kafkaProducer      *KafkaProducer
-	logger             *zap.Logger
-	maxInFlight        int
-	generationScopes   sync.Map
-	pausedProjects     sync.Map
-	auditor            *PromptAuditorService
-	continuityAuditor  *SceneContinuityAuditor
+	repo              *repository.StoryboardRepo
+	projectRepo       *repository.ProjectRepo
+	kafkaProducer     *KafkaProducer
+	logger            *zap.Logger
+	maxInFlight       int
+	generationScopes  sync.Map
+	pausedProjects    sync.Map
+	auditor           *PromptAuditorService
+	continuityAuditor *SceneContinuityAuditor
 }
 
 // NewStoryboardService —— 创建分镜服务实例
-func NewStoryboardService(repo *repository.StoryboardRepo) *StoryboardService {
+func NewStoryboardService(repo *repository.StoryboardRepo, projectRepo *repository.ProjectRepo) *StoryboardService {
 	return &StoryboardService{
 		repo:        repo,
+		projectRepo: projectRepo,
 		logger:      zap.NewNop(),
 		maxInFlight: defaultStoryboardMaxInFlight,
 		auditor:     NewPromptAuditorService("", "", "", nil, nil),
@@ -207,7 +209,6 @@ func cloneStringSlice(values []string) []string {
 	copy(cloned, values)
 	return cloned
 }
-
 
 func normalizeStoryboardModelNames(modelName string, modelNames []string) []string {
 	normalized := make([]string, 0, len(modelNames)+1)
@@ -533,12 +534,12 @@ type CreateStoryboardReq struct {
 	VideoMode        *string  `json:"video_mode"`
 	Dialogue         string   `json:"dialogue"`
 	AssetIDs         []int64  `json:"asset_ids"`
-	Mood             string   `json:"mood"`        // scene mood (tense/romantic/dramatic etc.)
-	PromptUsed        string   `json:"prompt_used"` // pre-computed image-gen prompt from PromptTemplate
-	SceneGroupKey     string   `json:"scene_group_key"`  // 标准化场景键（视频串行流程使用）
-	IsSceneFirstClip  bool     `json:"is_scene_first_clip"` // 是否为该场景组的首个分镜（串行模式）
+	Mood             string   `json:"mood"`                // scene mood (tense/romantic/dramatic etc.)
+	PromptUsed       string   `json:"prompt_used"`         // pre-computed image-gen prompt from PromptTemplate
+	SceneGroupKey    string   `json:"scene_group_key"`     // 标准化场景键（视频串行流程使用）
+	IsSceneFirstClip bool     `json:"is_scene_first_clip"` // 是否为该场景组的首个分镜（串行模式）
 	// Mode 工作流模式: "script"（完整流程）/ "storyboard"（直接上传分镜模式）
-	Mode              string   `json:"mode"`
+	Mode string `json:"mode"`
 }
 
 // Create —— 创建新分镜记录，设置默认值
@@ -1141,8 +1142,26 @@ func mergeStoryboardSceneDescription(current, instruction string) string {
 
 // UpdateConfig —— 更新项目级分镜配置
 func (s *StoryboardService) UpdateConfig(projectID uint64, config map[string]interface{}) error {
-	// Config is stored on the project itself, this is a placeholder
-	return nil
+	if s.projectRepo == nil {
+		return errors.New("project repo not configured")
+	}
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		return err
+	}
+	merged := map[string]interface{}{}
+	if len(project.StoryboardConfig) > 0 {
+		_ = json.Unmarshal(project.StoryboardConfig, &merged)
+	}
+	for key, value := range config {
+		merged[key] = value
+	}
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	project.StoryboardConfig = datatypes.JSON(data)
+	return s.projectRepo.Update(project)
 }
 
 // EpisodeCompletedCounts returns count of completed storyboards per episode for a project.

@@ -5,7 +5,7 @@ import "testing"
 func TestResolveProjectGenerationScopePrefersOverride(t *testing.T) {
 	t.Parallel()
 
-	svc := NewStoryboardService(nil)
+	svc := NewStoryboardService(nil, nil)
 	stored := uint64(42)
 	override := uint64(7)
 	svc.setProjectGenerationScope(1, storyboardGenerationScope{EpisodeID: &stored})
@@ -27,7 +27,7 @@ func TestResolveProjectGenerationScopePrefersOverride(t *testing.T) {
 func TestResolveProjectGenerationScopeFallsBackToStoredScope(t *testing.T) {
 	t.Parallel()
 
-	svc := NewStoryboardService(nil)
+	svc := NewStoryboardService(nil, nil)
 	stored := uint64(42)
 	svc.setProjectGenerationScope(9, storyboardGenerationScope{EpisodeID: &stored})
 
@@ -48,7 +48,7 @@ func TestResolveProjectGenerationScopeFallsBackToStoredScope(t *testing.T) {
 func TestResolveProjectGenerationScopeAllowsProjectWideResume(t *testing.T) {
 	t.Parallel()
 
-	svc := NewStoryboardService(nil)
+	svc := NewStoryboardService(nil, nil)
 	if got := svc.resolveProjectGenerationScope(3, nil, "", nil); got.EpisodeID != nil {
 		t.Fatalf("resolved scope = %d, want nil", *got.EpisodeID)
 	}

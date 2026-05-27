@@ -89,7 +89,7 @@ func main() {
 	episodeSvc := service.NewEpisodeService(episodeRepo, projectRepo, cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model, cfg.Storage.BaseURL)
 	costSvc := service.NewCostService(projectRepo, episodeRepo)
 
-	storyboardSvc := service.NewStoryboardService(storyboardRepo)
+	storyboardSvc := service.NewStoryboardService(storyboardRepo, projectRepo)
 	storyboardSvc.SetMaxInFlight(cfg.Concurrency.MaxStoryboardInFlight)
 
 	// Wire scene continuity auditor
@@ -182,6 +182,8 @@ func main() {
 		projects.GET("/:id/progress", projectHandler.GetProgress)
 
 		projects.GET("/:id/episodes", episodeHandler.ListEpisodes)
+		projects.GET("/:id/episodes/ad-copy-optimization", episodeHandler.GetAdCopyOptimizationState)
+		projects.POST("/:id/episodes/ad-copy-optimization", episodeHandler.OptimizeAdCopy)
 		projects.POST("/:id/episodes", episodeHandler.CreateEpisode)
 		projects.POST("/:id/episodes/generate", episodeHandler.GenerateEpisodes)
 		projects.POST("/:id/episodes/extract-storyboards", episodeHandler.ExtractStoryboards)
@@ -189,12 +191,12 @@ func main() {
 		projects.DELETE("/:id/episodes/:eid", episodeHandler.DeleteEpisode)
 		projects.POST("/:id/episodes/:eid/polish", episodeHandler.PolishEpisode)
 		projects.POST("/:id/episodes/:eid/extract-storyboards", episodeHandler.ExtractEpisodeStoryboards)
-			projects.POST("/:id/episodes/:eid/optimize", episodeHandler.OptimizeEpisode)
-			projects.POST("/:id/episodes/:eid/apply-optimized", episodeHandler.ApplyOptimizedText)
-			projects.POST("/:id/episodes/:eid/review", episodeHandler.ReviewEpisode)
-			projects.POST("/:id/episodes/:eid/auto-optimize-review", episodeHandler.AutoOptimizeReview)
-			projects.POST("/:id/episodes/batch-optimize", episodeHandler.BatchOptimizeEpisodes)
-			projects.POST("/:id/episodes/batch-review", episodeHandler.BatchReviewEpisodes)
+		projects.POST("/:id/episodes/:eid/optimize", episodeHandler.OptimizeEpisode)
+		projects.POST("/:id/episodes/:eid/apply-optimized", episodeHandler.ApplyOptimizedText)
+		projects.POST("/:id/episodes/:eid/review", episodeHandler.ReviewEpisode)
+		projects.POST("/:id/episodes/:eid/auto-optimize-review", episodeHandler.AutoOptimizeReview)
+		projects.POST("/:id/episodes/batch-optimize", episodeHandler.BatchOptimizeEpisodes)
+		projects.POST("/:id/episodes/batch-review", episodeHandler.BatchReviewEpisodes)
 		storyboards := projects.Group("/:id/storyboards")
 		storyboards.GET("", storyboardHandler.ListStoryboards)
 		storyboards.GET("/stats", storyboardHandler.Stats)
@@ -220,6 +222,7 @@ func main() {
 		// utility routes
 		utils := v1.Group("/utils")
 		utils.POST("/translate", utilsHandler.TranslatePrompt)
+		utils.POST("/optimize-video-prompt", utilsHandler.OptimizeVideoPrompt)
 	}
 
 	httpServer := &http.Server{

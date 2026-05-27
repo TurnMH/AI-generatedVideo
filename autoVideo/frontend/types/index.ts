@@ -77,6 +77,7 @@ export interface AutoSplitMeta {
   original_script?: string
   optimized_script?: string
   consistency_premise?: string
+  optimization_prompt?: string
 }
 
 export interface ProjectProgress {
@@ -110,6 +111,7 @@ export interface StoryboardConfig {
   generate_audio?: boolean
   auto_split_after_optimization?: boolean
   video_model?: string  // runtime model key (e.g. "kling", "vidu", "wan") for director duration guidance
+  ad_copy_optimization_prompt?: string
 }
 
 export interface WatermarkConfig {
@@ -124,6 +126,14 @@ export interface WatermarkConfig {
 }
 
 export type ProjectType = 'video' | 'video_serial' | 'comics' | 'music' | 'image'
+
+export interface AdCopyOptimizationState {
+  original_script: string
+  optimization_prompt: string
+  optimized_script: string
+  consistency_premise?: string
+  script_length?: number
+}
 
 export interface Project {
   id: number

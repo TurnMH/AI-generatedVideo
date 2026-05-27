@@ -499,6 +499,7 @@ type AutoSplitMeta struct {
 	OriginalScript        string `json:"original_script,omitempty"`
 	OptimizedScript       string `json:"optimized_script,omitempty"`
 	ConsistencyPremise    string `json:"consistency_premise,omitempty"`
+	OptimizationPrompt    string `json:"optimization_prompt,omitempty"`
 }
 
 type ProgressInfo struct {
@@ -614,6 +615,25 @@ type optimizedAdScriptResult struct {
 	ConsistencyPremise string `json:"consistency_premise"`
 }
 
+func (s *EpisodeService) buildDefaultAdCopyUserPrompt(project *model.Project, trimmed string) string {
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	duration := runtimeCfg.Duration
+	if duration <= 0 {
+		duration = 10
+	}
+	stylePreset := stylepreset.Canonical(runtimeCfg.StylePreset)
+	if stylePreset == "" {
+		stylePreset = stylepreset.Default
+	}
+	styleLabel := stylePreset
+	videoModel := strings.TrimSpace(runtimeCfg.VideoModel)
+	if videoModel == "" {
+		videoModel = "default"
+	}
+	return fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分，并单独输出后续必须继承的一致性前提。\n\n请围绕这 14 个方向补全并写实：\n1. 世界观 / 故事发生的视觉宇宙\n2. 空间 / 在哪里\n3. 时间 / 几点、白天还是夜晚\n4. 人物 / 谁在说、谁在动\n5. 服装 / 穿什么\n6. 动作 / 做什么\n7. 核心物件 / 镜头重点\n8. 光线 / 怎么打光\n9. 色彩 / 什么色调\n10. 材质 / 表面质感是什么\n11. 镜头运动 / 怎么拍\n12. 情绪 / 传达什么感觉\n13. 转场 / 怎么切\n14. 字幕 / 屏幕文字、配音 / 口播内容、以及最终给 AI 的 Prompt 描述\n\n一致性前提必须至少覆盖：\n1. 人物身份/外观/服装/年龄感/口播身份\n2. 世界观、核心场景与空间锚点（室内外、前后左右、景别、机位）\n3. 关键道具、品牌信息与镜头重点\n4. 光线/色调/材质的稳定风格\n5. 时间线、动作链与转场约束\n6. 台词/旁白/字幕/CTA 收束方式\n7. 最终给 AI 生成时必须保留的 Prompt 关键元素\n\n原始广告文案如下：\n\n%s",
+		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
+}
+
 func isAdWorkbenchProject(project *model.Project) bool {
 	if project == nil {
 		return false
@@ -636,50 +656,18 @@ func adWorkbenchPromptDirective() string {
 - 同一个广告项目内，人物外观、服饰、场景主色调、道具、品牌表达、口播身份和语气必须稳定延续。`)
 }
 
-func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string) (*optimizedAdScriptResult, error) {
+func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string, customPrompt string) (*optimizedAdScriptResult, error) {
 	trimmed := strings.TrimSpace(scriptText)
 	if trimmed == "" {
 		return nil, errors.New("empty script text")
 	}
 
-	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	duration := runtimeCfg.Duration
-	if duration <= 0 {
-		duration = 10
-	}
-	stylePreset := stylepreset.Canonical(runtimeCfg.StylePreset)
-	if stylePreset == "" {
-		stylePreset = stylepreset.Default
-	}
-	styleLabel := stylePreset
-	videoModel := strings.TrimSpace(runtimeCfg.VideoModel)
-	if videoModel == "" {
-		videoModel = "default"
-	}
-
-	systemPrompt := `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。返回严格 JSON（不要 markdown 代码块）：
-{
-  "optimized_script": "优化后的完整广告文案",
-  "consistency_premise": "后续分镜/图片/视频都必须继承的一致性前提，使用条目化自然语言"
-}
-
-必须遵守：
-- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
-- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成。
-- 必须主动补全并澄清以下 14 个维度：1）世界观/故事发生的视觉宇宙；2）空间（在哪里）；3）时间（几点/昼夜/时序）；4）人物（谁）；5）服装（穿什么）；6）动作（做什么）；7）核心物件/镜头重点；8）光线（怎么打光）；9）色彩（什么色调）；10）材质（表面质感）；11）镜头运动（怎么拍）；12）情绪（传达什么感觉）；13）转场（怎么切）；14）字幕/屏幕文字、配音/口播内容、以及最终给 AI 的生成 Prompt 描述。
-- optimized_script 必须是可直接用于后续自动分集的广告正文；但文中要自然包含这些维度所需的信息，不要只给抽象概念。
-- consistency_premise 必须单独总结以上 14 个维度里“后续不得漂移”的硬约束，写成清晰条目。
-- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
-- 段落之间要有清楚转场，避免一句话承载过多镜头。
-- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
-- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。
-- 要明确区分：哪些是画面信息、哪些是台词/配音、哪些是屏幕字幕、哪些是最终喂给模型的视觉 Prompt 重点。`
+	systemPrompt := normalizeAdCopyPrompt(customPrompt) + "\n\n返回严格 JSON（不要 markdown 代码块）：\n{\n  \"optimized_script\": \"优化后的完整广告文案\",\n  \"consistency_premise\": \"后续分镜/图片/视频都必须继承的一致性前提，使用条目化自然语言\"\n}"
 	if isAdWorkbenchProject(project) {
 		systemPrompt += "\n\n广告工作台补充规则：\n" + adWorkbenchPromptDirective()
 	}
 
-	userPrompt := fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分，并单独输出后续必须继承的一致性前提。\n\n请围绕这 14 个方向补全并写实：\n1. 世界观 / 故事发生的视觉宇宙\n2. 空间 / 在哪里\n3. 时间 / 几点、白天还是夜晚\n4. 人物 / 谁在说、谁在动\n5. 服装 / 穿什么\n6. 动作 / 做什么\n7. 核心物件 / 镜头重点\n8. 光线 / 怎么打光\n9. 色彩 / 什么色调\n10. 材质 / 表面质感是什么\n11. 镜头运动 / 怎么拍\n12. 情绪 / 传达什么感觉\n13. 转场 / 怎么切\n14. 字幕 / 屏幕文字、配音 / 口播内容、以及最终给 AI 的 Prompt 描述\n\n一致性前提必须至少覆盖：\n1. 人物身份/外观/服装/年龄感/口播身份\n2. 世界观、核心场景与空间锚点（室内外、前后左右、景别、机位）\n3. 关键道具、品牌信息与镜头重点\n4. 光线/色调/材质的稳定风格\n5. 时间线、动作链与转场约束\n6. 台词/旁白/字幕/CTA 收束方式\n7. 最终给 AI 生成时必须保留的 Prompt 关键元素\n\n原始广告文案如下：\n\n%s",
-		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
+	userPrompt := s.buildDefaultAdCopyUserPrompt(project, trimmed)
 
 	reqBody := map[string]interface{}{
 		"model": s.llmModel,
@@ -1332,7 +1320,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		if s.logger != nil {
-			 s.logger.Warn("script prep LLM non-200", zap.Int("episode", episodeNum), zap.Int("status", resp.StatusCode))
+			s.logger.Warn("script prep LLM non-200", zap.Int("episode", episodeNum), zap.Int("status", resp.StatusCode))
 		}
 		return content
 	}
@@ -2053,7 +2041,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			EpisodeSplit: &StageProgress{Status: "running"},
 			AutoSplit:    &autoSplitProgress,
 		})
-		if improved, err := s.optimizeProjectScriptForAutoSplit(ctx, project, scriptText); err != nil {
+		if improved, err := s.optimizeProjectScriptForAutoSplit(ctx, project, scriptText, s.currentAdCopyOptimizationPrompt(project)); err != nil {
 			if s.logger != nil {
 				s.logger.Warn("project-level script optimization before auto split failed; fallback to original script",
 					zap.Uint64("project_id", projectID),
