@@ -741,7 +741,7 @@ export default function AdVideoWorkbenchPage() {
                 value={workflowForm.scriptText}
                 onChange={(e) => setWorkflowForm((prev) => ({ ...prev, scriptText: e.target.value }))}
                 className="min-h-[220px]"
-                placeholder="把整套广告文案直接贴在这里。创建广告项目后，系统会立即开始“广告文案优化 → 自动分集 → 自动分镜”，并自动补全空间、时间、场景、内容、人物等维度。"
+                placeholder="把整套广告文案直接贴在这里。创建广告项目后，系统会立即开始“广告文案优化 → 自动分集 → 自动分镜”，并自动补全：世界观、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容，以及最终给 AI 的 Prompt 描述。"
               />
             </div>
           </div>
@@ -769,7 +769,7 @@ export default function AdVideoWorkbenchPage() {
               <li>创建广告项目载体，并自动标记为 <code>ad-workbench</code>。</li>
               <li>自动上传当前广告文案，不再保留单独“上传当前脚本”按钮。</li>
               <li>立即触发“文案优化 → 自动分集 → 自动分镜”。</li>
-              <li>优化 prompt 会补全空间、时间、场景、内容、人物、动作链、道具、转场与 CTA 收束，并写入一致性前提。</li>
+              <li>优化 prompt 会按 14 个方向补全并固化：世界观、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容与 AI Prompt 描述，并写入一致性前提。</li>
             </ul>
           </div>
         </CardContent>
