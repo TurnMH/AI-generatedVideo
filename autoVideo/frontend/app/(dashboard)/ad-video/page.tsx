@@ -179,6 +179,22 @@ export default function AdVideoWorkbenchPage() {
   const textModels = workflowModelData?.text || []
   const imageModels = workflowModelData?.image || []
   const videoModels = workflowModelData?.video || []
+  const selectedVideoModel = useMemo(() => {
+    const selectedId = Number(workflowForm.videoModelId)
+    if (!Number.isFinite(selectedId) || selectedId <= 0) return null
+    return videoModels.find((item) => item.id === selectedId) || null
+  }, [videoModels, workflowForm.videoModelId])
+  const selectedVideoParamEntries = useMemo(() => {
+    const cfg = selectedVideoModel?.config
+    if (!cfg || typeof cfg !== 'object') return [] as Array<{ key: string; value: string }>
+    const entries = Object.entries(cfg)
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .map(([key, value]) => ({
+        key,
+        value: Array.isArray(value) ? value.join(' / ') : typeof value === 'object' ? JSON.stringify(value) : String(value),
+      }))
+    return entries.slice(0, 12)
+  }, [selectedVideoModel])
 
   const createWorkflowProject = async () => {
     if (!workflowForm.title.trim()) {
@@ -191,7 +207,6 @@ export default function AdVideoWorkbenchPage() {
         const num = Number(value)
         return Number.isFinite(num) && num > 0 ? num : undefined
       }
-      const selectedVideoModel = videoModels.find((item) => item.id === parseModelId(workflowForm.videoModelId))
       const res = await projectAPI.create({
         title: workflowForm.title.trim(),
         description: workflowForm.description.trim(),
@@ -467,6 +482,64 @@ export default function AdVideoWorkbenchPage() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4 md:col-span-2">
+              <div className="text-sm font-medium text-white">当前视频模型支持参数</div>
+              {selectedVideoModel ? (
+                <div className="space-y-3 text-xs text-slate-300">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                      <div className="text-[11px] text-slate-500">当前模型</div>
+                      <div className="mt-1 break-all text-white">{selectedVideoModel.name} · {selectedVideoModel.model_key}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                      <div className="text-[11px] text-slate-500">视频模式</div>
+                      <div className="mt-1 text-white">{selectedVideoModel.video_mode || '未声明'}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                      <div className="text-[11px] text-slate-500">最高分辨率</div>
+                      <div className="mt-1 text-white">{selectedVideoModel.max_resolution || '未声明'}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                      <div className="text-[11px] text-slate-500">支持比例</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(selectedVideoModel.supported_ratios?.length ? selectedVideoModel.supported_ratios : ['未声明']).map((ratio) => (
+                          <span key={ratio} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-200">{ratio}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                      <div className="text-[11px] text-slate-500">能力标签</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(selectedVideoModel.capability_tags?.length ? selectedVideoModel.capability_tags : ['暂无标签']).map((tag) => (
+                          <span key={tag} className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">{tag}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                      <div className="text-[11px] text-slate-500">模型说明</div>
+                      <div className="mt-1 leading-5 text-slate-300">{selectedVideoModel.description || '暂无模型说明'}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                      <div className="text-[11px] text-slate-500">当前可选参数</div>
+                      {selectedVideoParamEntries.length > 0 ? (
+                        <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                          {selectedVideoParamEntries.map((entry) => (
+                            <div key={entry.key} className="rounded-md border border-white/10 px-2 py-2">
+                              <div className="text-[11px] text-slate-500">{entry.key}</div>
+                              <div className="mt-1 break-all text-slate-100">{entry.value}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-slate-300">当前模型没有返回额外参数配置。</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-400">选择视频模型后，这里会展示当前模型支持的参数、能力和限制。</div>
+              )}
             </div>
             <div className="space-y-2 md:col-span-2">
               <Label className="text-slate-200">广告脚本 / 口播文案</Label>
