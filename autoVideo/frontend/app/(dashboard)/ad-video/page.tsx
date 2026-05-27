@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -108,6 +109,7 @@ const extractParamOptionValues = (status: VideoModelStatus | null | undefined, k
 
 export default function AdVideoWorkbenchPage() {
   const { toast } = useToast()
+  const router = useRouter()
 
   const [workflowForm, setWorkflowForm] = useState({
     title: '口播广告工作台项目',
@@ -124,7 +126,6 @@ export default function AdVideoWorkbenchPage() {
   })
   const [workflowProjectId, setWorkflowProjectId] = useState<number | null>(null)
   const [creatingProject, setCreatingProject] = useState(false)
-  const [uploadingScript, setUploadingScript] = useState(false)
   const [startingFlow, setStartingFlow] = useState(false)
   const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
   const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
@@ -343,6 +344,10 @@ export default function AdVideoWorkbenchPage() {
       toast({ title: '请先填写广告工作项目标题', variant: 'destructive' })
       return
     }
+    if (!workflowForm.scriptText.trim()) {
+      toast({ title: '请先填写广告文案，再开始创建与优化', variant: 'destructive' })
+      return
+    }
     if (!selectedVideoModel) {
       toast({ title: '请先选择视频模型', variant: 'destructive' })
       return
@@ -391,60 +396,34 @@ export default function AdVideoWorkbenchPage() {
       })
       const project = unwrap<Project>((res as { data?: ProjectPayload }).data)
       if (!project?.id) {
-        throw new Error('创建广告工作项目失败：未拿到 project id')
+        throw new Error('创建广告项目失败：未拿到 project id')
       }
+      const filenameBase = workflowForm.title.trim() || `ad-project-${project.id}`
+      const file = new File([workflowForm.scriptText.trim()], `${filenameBase}.txt`, { type: 'text/plain' })
+      await projectAPI.uploadScript(project.id, file)
+      await projectAPI.generateEpisodes(project.id, undefined, { force: true, autoStoryboard: true })
       setWorkflowProjectId(project.id)
-      toast({ title: `广告工作项目已创建 #${project.id}`, variant: 'success' })
+      toast({ title: `广告项目 #${project.id} 已创建，并已开始文案优化与自动分镜流程`, variant: 'success' })
       await mutateProject()
+      await mutateEpisodes()
+      await mutateProgress()
     } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '创建广告工作项目失败', variant: 'destructive' })
+      toast({ title: error instanceof Error ? error.message : '创建广告项目并启动优化失败', variant: 'destructive' })
     } finally {
       setCreatingProject(false)
     }
   }
 
-  const uploadWorkflowScript = async () => {
-    if (!workflowProjectId) {
-      toast({ title: '请先创建广告工作项目', variant: 'destructive' })
-      return
-    }
-    const text = workflowForm.scriptText.trim()
-    if (!text) {
-      toast({ title: '请先粘贴广告脚本文案', variant: 'destructive' })
-      return
-    }
-    setUploadingScript(true)
-    try {
-      const filenameBase = workflowForm.title.trim() || `ad-project-${workflowProjectId}`
-      const file = new File([text], `${filenameBase}.txt`, { type: 'text/plain' })
-      await projectAPI.uploadScript(workflowProjectId, file)
-      toast({ title: '广告脚本已上传到当前工作项目', variant: 'success' })
-      await mutateProject()
-      await mutateProgress()
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '上传广告脚本失败', variant: 'destructive' })
-    } finally {
-      setUploadingScript(false)
-    }
+  const openAdHistory = () => {
+    router.push('/ad-video/history')
   }
 
-  const startWorkflowGeneration = async () => {
+  const openCurrentProgress = () => {
     if (!workflowProjectId) {
-      toast({ title: '请先创建广告工作项目', variant: 'destructive' })
+      toast({ title: '请先创建广告项目，才能查看当前进度详情', variant: 'destructive' })
       return
     }
-    setStartingFlow(true)
-    try {
-      await projectAPI.generateEpisodes(workflowProjectId, undefined, { force: true, autoStoryboard: true })
-      toast({ title: '已启动广告工作流基础生成（分集 + 自动分镜）', variant: 'success' })
-      await mutateEpisodes()
-      await mutateProgress()
-      await mutateProject()
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '启动广告工作流失败', variant: 'destructive' })
-    } finally {
-      setStartingFlow(false)
-    }
+    router.push(`/ad-video/history/${workflowProjectId}`)
   }
 
   const loadIds = () => {
@@ -513,18 +492,14 @@ export default function AdVideoWorkbenchPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button asChild variant="outline">
-            <Link href="/video/history">返回历史</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/video">返回手动创建</Link>
-          </Button>
+          <Button variant="outline" onClick={openAdHistory}>创建历史</Button>
+          <Button variant="outline" onClick={openCurrentProgress} disabled={!workflowProjectId}>历史详情 / 进度</Button>
         </div>
       </div>
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
-          <CardTitle className="text-white">一、广告工作流主入口（第一阶段骨架）</CardTitle>
+          <CardTitle className="text-white">一、广告创建主入口</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">
@@ -748,35 +723,35 @@ export default function AdVideoWorkbenchPage() {
                 value={workflowForm.scriptText}
                 onChange={(e) => setWorkflowForm((prev) => ({ ...prev, scriptText: e.target.value }))}
                 className="min-h-[220px]"
-                placeholder="把整套广告脚本直接贴在这里。第一阶段先复用项目脚本上传 + 分集生成链，让广告工作台不再依赖先去单个项目页手工起流程。"
+                placeholder="把整套广告文案直接贴在这里。创建广告项目后，系统会立即开始“广告文案优化 → 自动分集 → 自动分镜”，并自动补全空间、时间、场景、内容、人物等维度。"
               />
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Button disabled={creatingProject} onClick={createWorkflowProject}>
-              {creatingProject ? '创建中…' : '1）创建广告工作项目'}
+              {creatingProject ? '创建并启动中…' : '1）创建广告项目并开始文案优化'}
             </Button>
-            <Button variant="outline" disabled={!workflowProjectId || uploadingScript} onClick={uploadWorkflowScript}>
-              {uploadingScript ? '上传中…' : '2）上传当前脚本'}
+            <Button variant="outline" onClick={openAdHistory}>
+              2）创建历史
             </Button>
-            <Button variant="outline" disabled={!workflowProjectId || startingFlow} onClick={startWorkflowGeneration}>
-              {startingFlow ? '启动中…' : '3）启动基础生成（分集 + 自动分镜）'}
+            <Button variant="outline" disabled={!workflowProjectId} onClick={openCurrentProgress}>
+              3）历史详情 / 进度
             </Button>
             {workflowProjectId && (
               <Button variant="outline" asChild>
-                <Link href={`/projects/${workflowProjectId}`}>打开工作项目</Link>
+                <Link href={`/projects/${workflowProjectId}`}>打开底层项目</Link>
               </Button>
             )}
           </div>
 
           <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">
-            <div>当前第一阶段先复用已有项目链做底座，但入口已经前置到广告工作台内部：</div>
+            <div>现在这里的创建动作已经变成一键链路：</div>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">
-              <li>在这里直接创建广告项目载体，而不是先去项目页手工新建。</li>
-              <li>在这里直接粘贴脚本并上传到该广告项目。</li>
-              <li>在这里直接启动“文案优化 → 自动分集 → 自动分镜”基础流程。</li>
-              <li>后续再继续把资产生成、视频生成、排序、合成彻底前移到本页。</li>
+              <li>创建广告项目载体，并自动标记为 <code>ad-workbench</code>。</li>
+              <li>自动上传当前广告文案，不再保留单独“上传当前脚本”按钮。</li>
+              <li>立即触发“文案优化 → 自动分集 → 自动分镜”。</li>
+              <li>优化 prompt 会补全空间、时间、场景、内容、人物、动作链、道具、转场与 CTA 收束，并写入一致性前提。</li>
             </ul>
           </div>
         </CardContent>
@@ -840,6 +815,14 @@ export default function AdVideoWorkbenchPage() {
                     <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
                     <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
                       {autoSplitInfo.optimized_script}
+                    </div>
+                  </div>
+                )}
+                {autoSplitInfo?.consistency_premise && (
+                  <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
+                    <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
+                    <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
+                      {autoSplitInfo.consistency_premise}
                     </div>
                   </div>
                 )}

@@ -498,6 +498,7 @@ type AutoSplitMeta struct {
 	TargetCharsPerEpisode int    `json:"target_chars_per_episode,omitempty"`
 	OriginalScript        string `json:"original_script,omitempty"`
 	OptimizedScript       string `json:"optimized_script,omitempty"`
+	ConsistencyPremise    string `json:"consistency_premise,omitempty"`
 }
 
 type ProgressInfo struct {
@@ -606,6 +607,123 @@ func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) A
 
 func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
 	return buildAutoSplitMeta(scriptText, runtimeCfg).EstimatedEpisodes
+}
+
+type optimizedAdScriptResult struct {
+	OptimizedScript    string `json:"optimized_script"`
+	ConsistencyPremise string `json:"consistency_premise"`
+}
+
+func isAdWorkbenchProject(project *model.Project) bool {
+	if project == nil {
+		return false
+	}
+	for _, tag := range project.StyleTags {
+		if strings.EqualFold(strings.TrimSpace(tag), "ad-workbench") {
+			return true
+		}
+	}
+	return false
+}
+
+func adWorkbenchPromptDirective() string {
+	return strings.TrimSpace(`- 面向广告转化，不写成长剧情拖沓节奏；每个片段都要快速建立场景、动作、卖点与 CTA 关系。
+- 镜头节奏优先“开场钩子 → 痛点/场景 → 解决方案/产品展示 → 证据/细节 → CTA 收束”。
+- 场景描述必须明确时间、空间、人物位置关系、关键道具和镜头焦点，避免后续素材生成漂移。
+- 台词必须口语化、可口播，并与画面动作同步，不要把视觉描述混进台词。
+- 同一个广告项目内，人物外观、服饰、场景主色调、道具、品牌表达和语气必须稳定延续。`)
+}
+
+func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string) (*optimizedAdScriptResult, error) {
+	trimmed := strings.TrimSpace(scriptText)
+	if trimmed == "" {
+		return nil, errors.New("empty script text")
+	}
+
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	duration := runtimeCfg.Duration
+	if duration <= 0 {
+		duration = 10
+	}
+	stylePreset := stylepreset.Canonical(runtimeCfg.StylePreset)
+	if stylePreset == "" {
+		stylePreset = stylepreset.Default
+	}
+	styleLabel := stylePreset
+	videoModel := strings.TrimSpace(runtimeCfg.VideoModel)
+	if videoModel == "" {
+		videoModel = "default"
+	}
+
+	systemPrompt := `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。返回严格 JSON（不要 markdown 代码块）：
+{
+  "optimized_script": "优化后的完整广告文案",
+  "consistency_premise": "后续分镜/图片/视频都必须继承的一致性前提，使用条目化自然语言"
+}
+
+必须遵守：
+- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
+- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成。
+- 主动补全用户没写全但广告视频生成必须明确的维度：时间、空间、场景、人物外观与身份、动作链、道具、机位意图、情绪节奏、环境声/口播关系、转场逻辑、CTA 落点。
+- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
+- 段落之间要有清楚转场，避免一句话承载过多镜头。
+- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
+- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。
+- consistency_premise 必须服务于后续一致性：明确主角/配角身份与外观锚点、核心场景锚点、关键道具、镜头语言边界、口播人称和语气、禁止漂移的设定。`
+	if isAdWorkbenchProject(project) {
+		systemPrompt += "\n\n广告工作台补充规则：\n" + adWorkbenchPromptDirective()
+	}
+
+	userPrompt := fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分，并单独输出后续必须继承的一致性前提。\n\n一致性前提至少覆盖：\n1. 人物身份/外观/服装/年龄感/口播身份\n2. 核心场景与空间锚点（室内外、前后左右、景别、机位）\n3. 关键道具与品牌信息\n4. 时间线与转场约束\n5. 台词/旁白口吻与 CTA 收束方式\n\n原始广告文案如下：\n\n%s",
+		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
+
+	reqBody := map[string]interface{}{
+		"model": s.llmModel,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"temperature":     0.5,
+		"max_tokens":      8192,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+	data, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LLM responded %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var llmResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
+		return nil, fmt.Errorf("parse LLM response: %w", err)
+	}
+	content := strings.TrimSpace(llmResp.Choices[0].Message.Content)
+	var result optimizedAdScriptResult
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return nil, fmt.Errorf("parse optimized script json: %w", err)
+	}
+	result.OptimizedScript = strings.TrimSpace(result.OptimizedScript)
+	result.ConsistencyPremise = strings.TrimSpace(result.ConsistencyPremise)
+	if result.OptimizedScript == "" {
+		return nil, errors.New("optimizer returned empty optimized_script")
+	}
+	return &result, nil
 }
 
 // updateProgress —— 将进度信息序列化并持久化到项目的 progress 字段
@@ -1078,119 +1196,100 @@ func (s *EpisodeService) fetchSkillHintsByUseCase(ctx context.Context, projectID
 	if resp.StatusCode != http.StatusOK {
 		return ""
 	}
-	var result struct {
+	var envelope struct {
 		Data struct {
 			Items []struct {
-				Name        string `json:"name"`
-				Description string `json:"description"`
-				IsActive    bool   `json:"is_active"`
+				PromptText string `json:"prompt_text"`
+				Label      string `json:"label"`
+				Name       string `json:"name"`
 			} `json:"items"`
 		} `json:"data"`
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return ""
 	}
-	var lines []string
-	for _, sk := range result.Data.Items {
-		if sk.IsActive && strings.TrimSpace(sk.Description) != "" {
-			lines = append(lines, fmt.Sprintf("- [%s] %s", sk.Name, sk.Description))
+	parts := make([]string, 0, len(envelope.Data.Items))
+	for _, item := range envelope.Data.Items {
+		content := strings.TrimSpace(item.PromptText)
+		if content == "" {
+			content = strings.TrimSpace(item.Label)
+		}
+		if content == "" {
+			content = strings.TrimSpace(item.Name)
+		}
+		if content != "" {
+			parts = append(parts, content)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(parts, "\n")
 }
 
-// fetchWritingSkillHints returns active writing skills for a project.
 func (s *EpisodeService) fetchWritingSkillHints(ctx context.Context, projectID uint64) string {
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "writing")
 }
 
-// fetchStoryboardSkillHints returns active storyboard skills for a project.
 func (s *EpisodeService) fetchStoryboardSkillHints(ctx context.Context, projectID uint64) string {
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "storyboard")
 }
 
-// fetchScriptPrepSkillHints returns active storyboard_prep skills for a project.
 func (s *EpisodeService) fetchScriptPrepSkillHints(ctx context.Context, projectID uint64) string {
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "storyboard_prep")
 }
 
-// prepareScriptForStoryboard runs the episode script through a professional LLM pre-optimization pass
-// to make it more suitable for scene splitting and video storyboarding.
-// It adds explicit visual markers, camera suggestions, character positions and pacing cues.
-// The returned string is a fully annotated script ready for breakEpisodeIntoScenes.
-// On any failure the original content is returned unchanged so the pipeline is never blocked.
 func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string) string {
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
-	// Skip prep for comics — the panel prompt already handles raw text well.
 	if projectType == "comics" {
 		return content
 	}
 
-	// Truncate very long inputs to avoid overwhelming the LLM.
 	const maxRunes = 40000
 	runes := []rune(content)
 	if len(runes) > maxRunes {
-		runes = runes[:maxRunes]
-		content = string(runes)
+		content = string(runes[:maxRunes])
 	}
 
 	systemPrompt := `你是一位专业的分镜统筹导演，同时兼任影视文学编辑与现场执行导演，拥有丰富的短剧视频制作经验。
 
-你的任务是对给定的分集剧本进行**分镜预处理优化**，将其转化为结构清晰、镜头可执行、空间关系明确、人物动作衔接细腻的分镜脚本，为后续 AI 自动拆分分镜和视频生成做铺垫。
+你的任务是对给定的分集剧本进行分镜预处理优化，将其转化为结构清晰、镜头可执行、空间关系明确、人物动作衔接细腻的分镜脚本，为后续 AI 自动拆分分镜和视频生成做铺垫。
 
-**优化目标：**
+优化目标：
 1. 保持原有故事情节、对白和人物关系完整不变
 2. 将隐含的视觉信息显式化，加入影视专业标注
 3. 优化节奏结构，突出视觉高潮和情感转折点
 4. 使每个场景的视觉元素、空间结构、人物关系清晰可读
-5. 让相邻镜头之间的动作、视线、站位、空间方向自然承接，避免“白痴式跳切”
+5. 让相邻镜头之间的动作、视线、站位、空间方向自然承接，避免跳切
 
-**必须添加的内联标注（紧跟相关文字，不单独成行）：**
-- [场景:地点描述/时间/天气/空间锚点] — 每次场景切换时标注新场景的地点、时间和稳定空间结构（如 [场景:现代都市高楼天台,夜晚,风大,铁门在右后侧,城市灯海铺满远景]）
-- [人物:姓名/动作/情绪/语气/表情/站位/朝向] — 每次角色出现、说话或状态改变时标注（如 [人物:李明/推开门后停在画面左侧/愤怒/压低声音质问/眉头紧皱牙关咬紧/面朝右前方]）；说话场景必须标注语气、表情、站位和朝向
-- [摄影:景别/角度/运镜] — 关键场景的镜头建议（如 [摄影:中景/平视/缓推] [摄影:特写/仰拍/固定]）
-- [构图:方式/主体位置/前后景关系] — 构图建议（如 [构图:三分法/人物居左/门框作前景遮挡] [构图:对称/两人对峙分列左右]）
-- [氛围:描述] — 当前段落的视觉氛围基调（如 [氛围:压抑紧张] [氛围:温暖明亮]）
-- [道具:物品名称/位置/持有状态] — 剧情中重要道具（如 [道具:信封/右手紧握] [道具:手枪/桌面右侧]）
-- [情绪:氛围词] — 段落的整体情绪基调（如 [情绪:紧张对峙] [情绪:温情暖心]）
-- [节奏:快切/慢镜/停顿] — 关键情节的节奏标注（如 [节奏:快切] [节奏:慢镜回放]）
-- [调度:人物位移/视线关系/前后景变化] — 角色或镜头调度的连续性提示（如 [调度:林薇从右后景走到画面中央，与陈默保持一步距离]）
-- [长镜头:秒数/动作说明] — 需要用单个连续镜头处理的场景（如 [长镜头:6s/人物走近后开口说话，摄影机缓跟，全程保持中景]）；特别用于对话场景，说明角色动作与台词如何在单个连续镜头内自然衔接，避免后续视频生成产生跳切
-- [字幕:对白原文] — 【最重要】将原文中所有对话台词、角色独白用此标注紧贴在对白文字之前（如 [字幕:你为什么要离开？] [字幕:因为我已经累了。]）。凡原文出现冒号引用句、引号内容、角色发言，均需添加此标注，绝不遗漏
+必须添加的内联标注（紧跟相关文字，不单独成行）：
+- [场景:地点描述/时间/天气/空间锚点]
+- [人物:姓名/动作/情绪/语气/表情/站位/朝向]
+- [摄影:景别/角度/运镜]
+- [构图:方式/主体位置/前后景关系]
+- [氛围:描述]
+- [道具:物品名称/位置/持有状态]
+- [情绪:氛围词]
+- [节奏:快切/慢镜/停顿]
+- [调度:人物位移/视线关系/前后景变化]
+- [长镜头:秒数/动作说明]
+- [字幕:对白原文]
 
-**结构优化：**
-- 在场景切换处添加明确的转场标记
-- 将长段独白或叙述拆分为行动+对白的组合
-- 对关键情感节点（冲突高潮、转折、结尾悬念）加强视觉描写
-- 确保每个段落都有明确的视觉主体
-- 对话场景中，用[人物:姓名/动作/情绪/语气/表情/站位/朝向]完整标注说话者的肢体状态
-- 对需要人物连续说话或复杂动作的段落，用[长镜头:时长/说明]明确标注，指出应在单个连续镜头内完成，避免视频生成时出现跳切或场景衔接断裂
-- 相邻分镜之间，确保动作有交代（起身→走近→停下→对视→开口），避免无缘由的位置跳变
-- 每个场景首段优先交代空间锚点：谁在左、谁在右、门窗/桌椅/楼梯/车辆等关键物件在什么方位
-- 若人物、道具或镜头方向发生变化，必须在变化发生的当下用文字明确写出过渡动作
-
-**连续性硬规则（必须遵守）：**
+连续性硬规则：
 - 同一场景内，人物服装、发型、持有物、伤势、站位朝向不能无缘由变化
-- 同一角色连续说话时，必须交代动作延续和视线方向，避免上一句站立、下一句突然坐下或转身
-- 新场景第一次出现时，优先给出清晰的地点与空间锚点，让后续镜头能稳定继承背景结构
-- 如果角色从画面左侧移动到右侧，必须在文字中明确写出移动过程，不能让后续镜头直接跳位
+- 同一角色连续说话时，必须交代动作延续和视线方向
+- 新场景第一次出现时，优先给出清晰地点与空间锚点
+- 如果角色从画面左侧移动到右侧，必须明确写出移动过程
 - 重要道具一旦出现在角色手中，直到放下或转场前都要持续标注
-- 每个段落只保留一个核心视觉动作，避免一个自然段同时承载多个互相冲突的镜头意图
-- 不允许人物朝向、视线对象、相对位置在相邻镜头间无缘由反转
-- 描述必须优先写“观众能看见的外部行为与空间关系”，不要偷换成心理总结或抽象概念
+- 每个段落只保留一个核心视觉动作，避免互相冲突的镜头意图
 
-**输出要求：**
-- 返回纯文本格式（不要JSON），直接输出优化后的分集脚本内容
-- 保持原有文字风格，只在视觉关键节点加入标注
-- 字数与原文相近（不超过原文字数的1.35倍）`
+输出要求：
+- 返回纯文本格式，不要 JSON
+- 直接输出优化后的分集脚本内容
+- 保持原有文字风格，只在视觉关键节点加入标注`
 
 	if prepSkillHints != "" {
-		systemPrompt += "\n\n**本项目专属分镜预处理指引（请务必遵守）：**\n" + prepSkillHints
+		systemPrompt += "\n\n本项目专属分镜预处理指引：\n" + prepSkillHints
 	}
-
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n" + bible + "\n所有标注中的人物姓名和场景描述必须与以上一致性词库保持一致。"
 	}
@@ -1226,7 +1325,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		if s.logger != nil {
-			s.logger.Warn("script prep LLM non-200", zap.Int("episode", episodeNum), zap.Int("status", resp.StatusCode))
+			 s.logger.Warn("script prep LLM non-200", zap.Int("episode", episodeNum), zap.Int("status", resp.StatusCode))
 		}
 		return content
 	}
@@ -1248,57 +1347,10 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 	return optimized
 }
 
-// fetchProductionSkillHints calls character-service to get active production department skills for a project.
-// Returns a formatted string with each skill's label_tag and system_prompt for LLM injection.
 func (s *EpisodeService) fetchProductionSkillHints(ctx context.Context, projectID uint64) string {
-	if s.characterBaseURL == "" || s.jwtSecret == "" {
-		return ""
-	}
-	token, err := s.buildServiceToken(projectID)
-	if err != nil {
-		return ""
-	}
-	url := fmt.Sprintf("%s/api/v1/projects/%d/production-skills", s.characterBaseURL, projectID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	var result struct {
-		Data struct {
-			Items []struct {
-				LabelTag     string `json:"label_tag"`
-				Name         string `json:"name"`
-				SystemPrompt string `json:"system_prompt"`
-				IsActive     bool   `json:"is_active"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &result); err != nil {
-		return ""
-	}
-	var lines []string
-	for _, sk := range result.Data.Items {
-		if sk.IsActive && strings.TrimSpace(sk.SystemPrompt) != "" {
-			lines = append(lines, fmt.Sprintf("【%s — 标签[%s:]】%s", sk.Name, sk.LabelTag, sk.SystemPrompt))
-		}
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
+	return s.fetchSkillHintsByUseCase(ctx, projectID, "production")
 }
 
-// fetchStoryboardPromptTemplate fetches a PromptTemplate from script-service by style_key.
 func (s *EpisodeService) fetchStoryboardPromptTemplate(ctx context.Context, styleKey string) string {
 	if s.scriptBaseURL == "" || strings.TrimSpace(styleKey) == "" {
 		return ""
@@ -1331,9 +1383,9 @@ func (s *EpisodeService) fetchStoryboardPromptTemplate(ctx context.Context, styl
 		if err := json.Unmarshal(body, &result); err != nil {
 			continue
 		}
-		for _, t := range result.Data {
-			if t.IsActive && strings.TrimSpace(t.Content) != "" {
-				return t.Content
+		for _, tpl := range result.Data {
+			if tpl.IsActive && strings.TrimSpace(tpl.Content) != "" {
+				return tpl.Content
 			}
 		}
 	}
@@ -1346,15 +1398,12 @@ func storyboardTemplateLookupKeys(styleKey string) []string {
 		return nil
 	}
 	keys := []string{trimmed}
-	switch trimmed {
-	case "storyboard_anime2d":
+	if trimmed == "storyboard_anime2d" {
 		keys = append(keys, "animation_v43")
 	}
 	return keys
 }
 
-// applyPromptTemplate replaces {scene}, {characters}, {action}, {mood} placeholders
-// in a PromptTemplate content string with the given values.
 func applyPromptTemplate(template, scene, characters, action, mood string) string {
 	result := template
 	result = strings.ReplaceAll(result, "{scene}", strings.TrimSpace(scene))
@@ -1364,162 +1413,17 @@ func applyPromptTemplate(template, scene, characters, action, mood string) strin
 	return strings.TrimSpace(result)
 }
 
-// storyboardStyleKey maps a canonical stylePreset to its PromptTemplate style_key.
 func storyboardStyleKey(stylePreset string) string {
-	switch stylePreset {
+	switch stylepreset.Canonical(stylePreset) {
 	case stylepreset.Anime2D:
 		return "storyboard_anime2d"
 	case stylepreset.Anime3D:
 		return "storyboard_anime3d"
-	case stylepreset.LiveActionFilm:
+	case stylepreset.LiveActionFilm, stylepreset.LiveActionShort:
 		return "storyboard_cinematic"
-	case stylepreset.LiveActionShort:
-		return "storyboard_live_action"
 	default:
-		if stylePreset != "" {
-			// Convert "live-action-film" → "storyboard_live_action_film"
-			safe := strings.ToLower(strings.ReplaceAll(stylePreset, "-", "_"))
-			return "storyboard_" + safe
-		}
-		return "storyboard_anime2d" // safe default
+		return "storyboard_cinematic"
 	}
-}
-
-func hasStyleTag(project *model.Project, tag string) bool {
-	if project == nil || tag == "" {
-		return false
-	}
-	for _, item := range project.StyleTags {
-		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(tag)) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAdWorkbenchProject(project *model.Project) bool {
-	return hasStyleTag(project, "ad-workbench")
-}
-
-func adWorkbenchPromptDirective() string {
-	return `
-- 本项目来自“口播广告工作台”，整体节奏必须按广告片处理，而不是普通剧情短片。
-- 优先按“钩子/痛点/卖点展开/转场/证据或场景化演示/行动号召 CTA”组织内容。
-- 口播句群要短、稳、利落，适合配音与镜头切换，不要写成长篇散文或小说叙述。
-- 尽量不要把 CTA 提前切碎；CTA 应尽量收束在后段或最后一段。
-- 不要把同一个卖点拆散到多个分段里，除非时长明显不足。
-- 转场句、镜头切换句、口播提示句应尽量保持完整，不要从中间截断。`
-}
-
-func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string) (string, error) {
-	trimmed := strings.TrimSpace(scriptText)
-	if trimmed == "" {
-		return "", errors.New("empty script text")
-	}
-
-	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	stylePreset := stylepreset.Canonical(runtimeCfg.StylePreset)
-	if stylePreset == "" {
-		stylePreset = stylepreset.Default
-	}
-	styleLabel := "动漫风格"
-	switch stylePreset {
-	case stylepreset.LiveActionFilm:
-		styleLabel = "真实环境 / 电影感风格"
-	case stylepreset.LiveActionShort:
-		styleLabel = "真实环境 / 写实短视频风格"
-	case stylepreset.Anime3D:
-		styleLabel = "动漫风格（3D）"
-	default:
-		styleLabel = "动漫风格（2D）"
-	}
-
-	duration := runtimeCfg.Duration
-	if duration <= 0 {
-		duration = 10
-	}
-	videoModel := runtimeCfg.VideoModel
-	if videoModel == "" {
-		videoModel = "default"
-	}
-
-	writingHints := s.fetchWritingSkillHints(ctx, project.ID)
-	systemPrompt := `你是广告短视频编剧与切分导演。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿。返回严格 JSON（不要 markdown 代码块）：
-{
-  "optimized_script": "优化后的完整广告文案"
-}
-
-必须遵守：
-- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
-- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成。
-- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
-- 段落之间要有清楚转场，避免一句话承载过多镜头。
-- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
-- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。`
-
-	if isAdWorkbenchProject(project) {
-		systemPrompt += "\n\n**广告工作台节奏规则（务必遵守）：**\n" + adWorkbenchPromptDirective()
-	}
-	if writingHints != "" {
-		systemPrompt += "\n\n**本项目专属优化指引（务必遵守）：**\n" + writingHints
-	}
-
-	userPrompt := fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分：\n\n%s",
-		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
-
-	reqBody := map[string]interface{}{
-		"model": s.llmModel,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-		"temperature":     0.7,
-		"max_tokens":      8192,
-		"response_format": map[string]string{"type": "json_object"},
-	}
-	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LLM request: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("LLM responded %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var llmResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
-		return "", fmt.Errorf("parse LLM response: %w", err)
-	}
-	content := strings.TrimSpace(llmResp.Choices[0].Message.Content)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
-	var result struct {
-		OptimizedScript string `json:"optimized_script"`
-	}
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return "", fmt.Errorf("parse optimized script json: %w", err)
-	}
-	if strings.TrimSpace(result.OptimizedScript) == "" {
-		return "", errors.New("optimizer returned empty optimized_script")
-	}
-	return strings.TrimSpace(result.OptimizedScript), nil
 }
 
 type polishedEpisode struct {
@@ -2149,11 +2053,12 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 					zap.Error(err),
 				)
 			}
-		} else if strings.TrimSpace(improved) != "" {
-			optimizedScriptText = strings.TrimSpace(improved)
+		} else if improved != nil && strings.TrimSpace(improved.OptimizedScript) != "" {
+			optimizedScriptText = strings.TrimSpace(improved.OptimizedScript)
 			project.ScriptText = optimizedScriptText
 			_ = s.projectRepo.Update(project)
 			autoSplitProgress.OptimizedScript = optimizedScriptText
+			autoSplitProgress.ConsistencyPremise = strings.TrimSpace(improved.ConsistencyPremise)
 			autoSplitProgress.ScriptLength = utf8.RuneCountInString(optimizedScriptText)
 			s.updateProgress(projectID, ProgressInfo{
 				Stage:        "episode_splitting",
