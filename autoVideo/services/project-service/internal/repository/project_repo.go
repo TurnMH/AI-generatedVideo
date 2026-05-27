@@ -122,6 +122,20 @@ func (r *ProjectRepo) Update(p *model.Project) error {
 	return r.db.Save(p).Error
 }
 
+// UpdateScriptText updates only the script_text column for a project.
+func (r *ProjectRepo) UpdateScriptText(id uint64, scriptText string) error {
+	return r.db.Model(&model.Project{}).
+		Where("id = ?", id).
+		Update("script_text", scriptText).Error
+}
+
+// UpdateKeywordLibrary updates only the keyword_library column for a project.
+func (r *ProjectRepo) UpdateKeywordLibrary(id uint64, keywordLibrary json.RawMessage) error {
+	return r.db.Model(&model.Project{}).
+		Where("id = ?", id).
+		Update("keyword_library", keywordLibrary).Error
+}
+
 // SoftDelete —— 按 ID 和用户 ID 软删除项目
 // SoftDelete soft-deletes a project by ID with ownership check.
 func (r *ProjectRepo) SoftDelete(id, userID uint64) error {

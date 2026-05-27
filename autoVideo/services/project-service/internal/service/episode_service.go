@@ -741,6 +741,30 @@ func (s *EpisodeService) updateProgress(projectID uint64, info ProgressInfo) {
 	_ = s.projectRepo.UpdateProgress(projectID, data)
 }
 
+// MarkGenerationFailed forcefully marks a project generation pipeline as failed.
+func (s *EpisodeService) MarkGenerationFailed(projectID uint64, message string) {
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		return
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "后台生成任务失败"
+	}
+	s.updateProgress(projectID, ProgressInfo{
+		Stage:        "idle",
+		Message:      msg,
+		EpisodeSplit: &StageProgress{Status: "failed"},
+	})
+	_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "failed")
+	if s.logger != nil {
+		s.logger.Error("generation marked failed after panic or forced abort",
+			zap.Uint64("project_id", projectID),
+			zap.String("message", msg),
+		)
+	}
+}
+
 // Create —— 手动创建单条剧集记录
 func (s *EpisodeService) Create(projectID uint64, req CreateEpisodeReq) (*model.Episode, error) {
 	episode := &model.Episode{
@@ -1574,7 +1598,7 @@ func (s *EpisodeService) GenerateFromScriptWithOptions(ctx context.Context, proj
 	if userKeywords != nil {
 		if kwJSON, err := json.Marshal(userKeywords); err == nil {
 			project.KeywordLibrary = kwJSON
-			_ = s.projectRepo.Update(project)
+			_ = s.projectRepo.UpdateKeywordLibrary(projectID, kwJSON)
 		}
 	}
 
@@ -1939,7 +1963,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		}
 		scriptText = body
 		project.ScriptText = scriptText
-		_ = s.projectRepo.Update(project)
+		_ = s.projectRepo.UpdateScriptText(projectID, scriptText)
 	}
 	if strings.TrimSpace(scriptText) == "" {
 		return nil, errors.New("project has no script content, please upload a script first")
@@ -1994,7 +2018,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	}
 	if kwJSON, err := json.Marshal(kwLib); err == nil {
 		project.KeywordLibrary = kwJSON
-		_ = s.projectRepo.Update(project)
+		_ = s.projectRepo.UpdateKeywordLibrary(projectID, kwJSON)
 	}
 
 	// ══════════════════════════════════════════════════════════════════════════
@@ -2020,7 +2044,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	// Persist enriched library (with profiles) back to DB
 	if kwJSON, err := json.Marshal(kwLib); err == nil {
 		project.KeywordLibrary = kwJSON
-		_ = s.projectRepo.Update(project)
+		_ = s.projectRepo.UpdateKeywordLibrary(projectID, kwJSON)
 	}
 
 	// T3C: Auto-create Skills in character-service from detected character capability hints
@@ -4887,8 +4911,27 @@ func splitParagraphIntoSemanticChunks(paragraph string) []string {
 		return []string{paragraph}
 	}
 
-	splitter := regexp.MustCompile(`(?m)(?:(?<=[。！？!?；;])\s*|\n+)`)
-	segments := splitter.Split(paragraph, -1)
+	var segments []string
+	var currentSegment strings.Builder
+	flushSegment := func() {
+		segment := strings.TrimSpace(currentSegment.String())
+		if segment != "" {
+			segments = append(segments, segment)
+		}
+		currentSegment.Reset()
+	}
+	for _, r := range paragraph {
+		if r == '\n' {
+			flushSegment()
+			continue
+		}
+		currentSegment.WriteRune(r)
+		switch r {
+		case '。', '！', '？', '!', '?', '；', ';':
+			flushSegment()
+		}
+	}
+	flushSegment()
 	var chunks []string
 	var current []string
 	currentLen := 0

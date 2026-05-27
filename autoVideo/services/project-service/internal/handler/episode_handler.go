@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -287,6 +288,10 @@ func (h *EpisodeHandler) GenerateEpisodes(c *gin.Context) {
 
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				errMsg := fmt.Sprintf("后台生成任务异常崩溃: %v", r)
+				h.svc.MarkGenerationFailed(projectID, errMsg)
+			}
 			h.genMu.Lock()
 			delete(h.genRunning, projectID)
 			h.genMu.Unlock()
