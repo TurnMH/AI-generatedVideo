@@ -86,6 +86,32 @@ function humanStage(project: Project | null) {
   return project.progress?.phase_label || project.progress?.stage || project.progress?.message || project.status || '暂无'
 }
 
+function stepTone(status: 'pending' | 'active' | 'done' | 'blocked') {
+  switch (status) {
+    case 'done':
+      return 'border-emerald-500/30 bg-emerald-500/15 text-emerald-100'
+    case 'active':
+      return 'border-cyan-500/30 bg-cyan-500/15 text-cyan-100'
+    case 'blocked':
+      return 'border-rose-500/30 bg-rose-500/15 text-rose-100'
+    default:
+      return 'border-white/10 bg-black/20 text-slate-200'
+  }
+}
+
+function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
+  switch (status) {
+    case 'done':
+      return '已完成'
+    case 'active':
+      return '当前执行'
+    case 'blocked':
+      return '前置未完成'
+    default:
+      return '待执行'
+  }
+}
+
 function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number) {
   const sorted = storyboards
     .filter((item) => String(item.image_url || '').trim())
@@ -254,6 +280,60 @@ export default function AdVideoHistoryDetailPage() {
       && resolutionOptions.length > 0
       && durationOptions.length > 0,
   )
+
+  const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
+  const storyboardScopeReady = scopeStoryboards.length > 0
+  const assetScopeReady = scopeAssets.length > 0
+  const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
+  const storyboardImagesReady = storyboardScopeReady && completedStoryboardImages > 0
+  const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === scopeStoryboards.length
+
+  const step1Running = rerunAction === 'pipeline' || project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting'
+  const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
+  const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
+  const step2Enabled = step1Done
+  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && storyboardImagesComplete
+  const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
+  const step3Enabled = step2Done
+  const step3Done = Boolean(resultUrl)
+
+  const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
+  const step2Status: 'pending' | 'active' | 'done' | 'blocked' = !step2Enabled ? 'blocked' : step2Running ? 'active' : step2Done ? 'done' : 'pending'
+  const step3Status: 'pending' | 'active' | 'done' | 'blocked' = !step3Enabled ? 'blocked' : step3Running ? 'active' : step3Done ? 'done' : 'pending'
+
+  const step1Hint = step1Running
+    ? '当前正在重跑文本拆分 / 自动分镜，请先等这一轮结束。'
+    : !splitConfigReady
+      ? '先补齐视频模型、比例、分辨率、单分镜时长。'
+      : !editableOptimizedScript.trim()
+        ? '当前文案为空，无法拆分。'
+        : storyboardScopeReady
+          ? '当前范围已经有可用分镜，可继续重跑覆盖。'
+          : '先执行这一步，产出新的分集与分镜文本。'
+
+  const step2Hint = !step2Enabled
+    ? '请先完成步骤 1，先得到当前视频配置下的分镜文本。'
+    : step2Running
+      ? '当前正在准备人物槽位 / 上传素材 / 刷新分镜图。'
+      : !assetScopeReady
+        ? '先点击“准备人物槽位”，让当前范围出现可上传素材。'
+        : !allScopeAssetsUploaded
+          ? '当前还有人物 / 素材图未上传，先补齐再刷新分镜图。'
+          : !storyboardImagesReady
+            ? '人物图已就绪，但还没生成出可用分镜图，请继续刷新分镜图。'
+            : storyboardImagesComplete
+              ? '当前范围分镜图已经齐了，可以进入下一步。'
+              : '已有部分分镜图，建议继续补齐。'
+
+  const step3Hint = !step3Enabled
+    ? '请先完成步骤 2：人物图上传完，并把当前范围的分镜图补齐。'
+    : step3Running
+      ? '当前已经有视频任务在执行中。'
+      : !storyboardImagesReady
+        ? '当前还没有可用分镜图。'
+        : step3Done
+          ? '当前已经产出完整视频，可继续按需重生。'
+          : '当前可以提交视频生成。'
 
   useEffect(() => {
     const next = typeof autoSplit?.optimized_script === 'string' ? autoSplit.optimized_script : ''
@@ -615,24 +695,40 @@ export default function AdVideoHistoryDetailPage() {
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4">
-                  <div className="text-xs font-medium text-cyan-200">步骤 1</div>
+                <div className={`rounded-xl border p-4 ${stepTone(step1Status)}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 1</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
+                  </div>
                   <div className="mt-1 text-base font-semibold text-white">按视频配置重拆分文本</div>
-                  <div className="mt-2 text-xs text-cyan-100/80">先确定视频模型、比例、分辨率、单分镜时长，再把当前文案重跑为分镜文本。</div>
+                  <div className="mt-2 text-xs text-current/80">先确定视频模型、比例、分辨率、单分镜时长，再把当前文案重跑为分镜文本。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{step1Hint}</div>
                 </div>
-                <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4">
-                  <div className="text-xs font-medium text-violet-200">步骤 2</div>
+                <div className={`rounded-xl border p-4 ${stepTone(step2Status)}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 2</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step2Status)}</div>
+                  </div>
                   <div className="mt-1 text-base font-semibold text-white">上传人物图 / 刷新分镜图</div>
-                  <div className="mt-2 text-xs text-violet-100/80">先准备人物 / 素材槽位，再为当前范围逐个上传真实参考图，最后刷新分镜图。</div>
+                  <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为当前范围逐个上传真实参考图，最后刷新分镜图。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{step2Hint}</div>
                 </div>
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4">
-                  <div className="text-xs font-medium text-emerald-200">步骤 3</div>
+                <div className={`rounded-xl border p-4 ${stepTone(step3Status)}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 3</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step3Status)}</div>
+                  </div>
                   <div className="mt-1 text-base font-semibold text-white">开始生成视频</div>
-                  <div className="mt-2 text-xs text-emerald-100/80">只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。</div>
+                  <div className="mt-2 text-xs text-current/80">只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{step3Hint}</div>
                 </div>
               </div>
 
               <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
+                  <div>流水线状态：{pipelineBusy ? '执行中' : '空闲'}</div>
+                  <div>步骤 1：{stepLabel(step1Status)} / 步骤 2：{stepLabel(step2Status)} / 步骤 3：{stepLabel(step3Status)}</div>
+                </div>
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,280px)_1fr]">
                   <div className="space-y-2">
                     <Label className="text-slate-200">当前处理范围</Label>
@@ -758,11 +854,15 @@ export default function AdVideoHistoryDetailPage() {
                   )}
 
                   <Button
-                    disabled={rerunAction !== null || generationAction !== null || !editableOptimizedScript.trim() || !splitConfigReady}
+                    disabled={pipelineBusy || !editableOptimizedScript.trim() || !splitConfigReady}
                     onClick={() => void rerunStoryboardPipeline()}
                   >
                     {rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按当前视频配置重拆分'}
                   </Button>
+
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-cyan-100/80">
+                    {step1Hint}
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
@@ -775,18 +875,22 @@ export default function AdVideoHistoryDetailPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={generationAction !== null}
+                      disabled={pipelineBusy || !step2Enabled}
                       onClick={() => void triggerAssetExtraction()}
                     >
                       {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '准备中…' : '先准备人物槽位'}
                     </Button>
                     <Button
                       size="sm"
-                      disabled={generationAction !== null || scopeAssets.length === 0}
+                      disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
                       onClick={() => void triggerStoryboardImageGeneration()}
                     >
                       {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '刷新中…' : '上传完成后刷新分镜图'}
                     </Button>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
+                    {step2Hint}
                   </div>
 
                   <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
@@ -823,7 +927,7 @@ export default function AdVideoHistoryDetailPage() {
                               type="file"
                               accept="image/*"
                               className="hidden"
-                              disabled={uploadingAssetId !== null}
+                              disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
                               onChange={(event) => { void handleAssetUpload(asset.id, event) }}
                             />
                           </label>
@@ -848,11 +952,15 @@ export default function AdVideoHistoryDetailPage() {
                   </div>
 
                   <Button
-                    disabled={generationAction !== null || !splitConfigReady || completedStoryboardImages === 0}
+                    disabled={pipelineBusy || !step3Enabled || !splitConfigReady || completedStoryboardImages === 0}
                     onClick={() => void startScopedVideoGeneration()}
                   >
                     {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
                   </Button>
+
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
+                    {step3Hint}
+                  </div>
 
                   <div className="text-[11px] text-emerald-100/75">
                     视频生成真实读取的是分镜图 `image_url`、分镜文案、台词、镜头运动、人物 / 素材引用等字段；不是直接拿人物图就开跑。
