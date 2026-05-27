@@ -480,6 +480,13 @@ type StageProgress struct {
 	Status    string `json:"status"` // pending | running | done | failed
 }
 
+type storyboardRuntimeConfig struct {
+	Duration                   int    `json:"duration"`
+	VideoModel                 string `json:"video_model"`
+	StylePreset                string `json:"style_preset"`
+	AutoSplitAfterOptimization bool   `json:"auto_split_after_optimization"`
+}
+
 // ProgressInfo is the JSON structure persisted in project.progress.
 type ProgressInfo struct {
 	Stage          string         `json:"stage"` // episode_splitting | scene_splitting | script_prepping | idle
@@ -502,6 +509,77 @@ const (
 )
 
 var ErrScreenplayNotReady = errors.New("screenplay not ready")
+
+func parseStoryboardRuntimeConfig(project *model.Project) storyboardRuntimeConfig {
+	cfg := storyboardRuntimeConfig{}
+	if project == nil || len(project.StoryboardConfig) == 0 {
+		return cfg
+	}
+	_ = json.Unmarshal(project.StoryboardConfig, &cfg)
+	cfg.VideoModel = strings.TrimSpace(cfg.VideoModel)
+	cfg.StylePreset = strings.TrimSpace(cfg.StylePreset)
+	return cfg
+}
+
+func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
+	wordCount := utf8.RuneCountInString(strings.TrimSpace(scriptText))
+	if wordCount <= 0 {
+		return 1
+	}
+
+	clipDuration := runtimeCfg.Duration
+	if clipDuration <= 0 {
+		clipDuration = 10
+	}
+	if clipDuration < 3 {
+		clipDuration = 3
+	}
+	if clipDuration > 180 {
+		clipDuration = 180
+	}
+
+	charsPerSecond := 7
+	switch stylepreset.Canonical(runtimeCfg.StylePreset) {
+	case stylepreset.LiveActionFilm:
+		charsPerSecond = 6
+	case stylepreset.LiveActionShort:
+		charsPerSecond = 7
+	case stylepreset.Anime3D:
+		charsPerSecond = 8
+	default:
+		charsPerSecond = 8
+	}
+
+	modelKey := strings.ToLower(runtimeCfg.VideoModel)
+	switch {
+	case strings.Contains(modelKey, "seedance"), strings.Contains(modelKey, "doubao"):
+		charsPerSecond -= 1
+	case strings.Contains(modelKey, "kling"), strings.Contains(modelKey, "vidu"), strings.Contains(modelKey, "wan"):
+		charsPerSecond += 0
+	case strings.Contains(modelKey, "gaga"):
+		charsPerSecond += 1
+	}
+	if charsPerSecond < 4 {
+		charsPerSecond = 4
+	}
+
+	targetCharsPerEpisode := clipDuration * charsPerSecond
+	if targetCharsPerEpisode < 80 {
+		targetCharsPerEpisode = 80
+	}
+	if targetCharsPerEpisode > 4000 {
+		targetCharsPerEpisode = 4000
+	}
+
+	targetEpisodes := (wordCount + targetCharsPerEpisode - 1) / targetCharsPerEpisode
+	if targetEpisodes < 1 {
+		targetEpisodes = 1
+	}
+	if targetEpisodes > 200 {
+		targetEpisodes = 200
+	}
+	return targetEpisodes
+}
 
 // updateProgress —— 将进度信息序列化并持久化到项目的 progress 字段
 func (s *EpisodeService) updateProgress(projectID uint64, info ProgressInfo) {
@@ -1278,6 +1356,114 @@ func storyboardStyleKey(stylePreset string) string {
 	}
 }
 
+func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string) (string, error) {
+	trimmed := strings.TrimSpace(scriptText)
+	if trimmed == "" {
+		return "", errors.New("empty script text")
+	}
+
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	stylePreset := stylepreset.Canonical(runtimeCfg.StylePreset)
+	if stylePreset == "" {
+		stylePreset = stylepreset.Default
+	}
+	styleLabel := "动漫风格"
+	switch stylePreset {
+	case stylepreset.LiveActionFilm:
+		styleLabel = "真实环境 / 电影感风格"
+	case stylepreset.LiveActionShort:
+		styleLabel = "真实环境 / 写实短视频风格"
+	case stylepreset.Anime3D:
+		styleLabel = "动漫风格（3D）"
+	default:
+		styleLabel = "动漫风格（2D）"
+	}
+
+	duration := runtimeCfg.Duration
+	if duration <= 0 {
+		duration = 10
+	}
+	videoModel := runtimeCfg.VideoModel
+	if videoModel == "" {
+		videoModel = "default"
+	}
+
+	writingHints := s.fetchWritingSkillHints(ctx, project.ID)
+	systemPrompt := `你是广告短视频编剧与切分导演。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿。返回严格 JSON（不要 markdown 代码块）：
+{
+  "optimized_script": "优化后的完整广告文案"
+}
+
+必须遵守：
+- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
+- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成。
+- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
+- 段落之间要有清楚转场，避免一句话承载过多镜头。
+- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
+- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。`
+
+	if writingHints != "" {
+		systemPrompt += "\n\n**本项目专属优化指引（务必遵守）：**\n" + writingHints
+	}
+
+	userPrompt := fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分：\n\n%s",
+		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
+
+	reqBody := map[string]interface{}{
+		"model": s.llmModel,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"temperature":     0.7,
+		"max_tokens":      8192,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+	data, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("LLM request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("LLM responded %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var llmResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &llmResp); err != nil || len(llmResp.Choices) == 0 {
+		return "", fmt.Errorf("parse LLM response: %w", err)
+	}
+	content := strings.TrimSpace(llmResp.Choices[0].Message.Content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	var result struct {
+		OptimizedScript string `json:"optimized_script"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return "", fmt.Errorf("parse optimized script json: %w", err)
+	}
+	if strings.TrimSpace(result.OptimizedScript) == "" {
+		return "", errors.New("optimizer returned empty optimized_script")
+	}
+	return strings.TrimSpace(result.OptimizedScript), nil
+}
+
 type polishedEpisode struct {
 	Title         string `json:"title"`
 	Summary       string `json:"summary"`
@@ -1878,21 +2064,44 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		s.autoCreateCharacterSkills(skillCtx, projectID, kwLib.CharacterProfiles)
 		cancelSkills()
 	}
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	autoSplitAfterOptimization := runtimeCfg.AutoSplitAfterOptimization || strings.EqualFold(project.Mode, "script")
+	optimizedScriptText := strings.TrimSpace(scriptText)
+	if autoSplitAfterOptimization {
+		s.updateProgress(projectID, ProgressInfo{
+			Stage:        "episode_splitting",
+			Message:      "正在按所选风格优化广告文案，为自动切分做准备…",
+			EpisodeSplit: &StageProgress{Status: "running"},
+		})
+		if improved, err := s.optimizeProjectScriptForAutoSplit(ctx, project, scriptText); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("project-level script optimization before auto split failed; fallback to original script",
+					zap.Uint64("project_id", projectID),
+					zap.Error(err),
+				)
+			}
+		} else if strings.TrimSpace(improved) != "" {
+			optimizedScriptText = strings.TrimSpace(improved)
+			project.ScriptText = optimizedScriptText
+			_ = s.projectRepo.Update(project)
+		}
+	}
+
 	// Priority: user keywords → chapter markers → LLM → simple fallback
 	// ══════════════════════════════════════════════════════════════════════════
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
-		Message:      "正在拆分剧本为集数…",
+		Message:      "正在按优化后文案自动拆分剧本为集数…",
 		EpisodeSplit: &StageProgress{Status: "running"},
 	})
 
 	// Try user-provided split keywords first
-	episodes := splitByUserKeywords(scriptText, kwLib.SplitKeywords)
+	episodes := splitByUserKeywords(optimizedScriptText, kwLib.SplitKeywords)
 	splitMethod := "user_keywords"
 
 	// Fallback to chapter markers
 	if len(episodes) == 0 {
-		episodes = splitByChapters(scriptText)
+		episodes = splitByChapters(optimizedScriptText)
 		splitMethod = "chapters"
 	}
 
@@ -1904,32 +2113,29 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			zap.String("method", splitMethod),
 			zap.Bool("success", chapterSplit),
 			zap.Int("episodes_found", len(episodes)),
-			zap.Int("script_length", utf8.RuneCountInString(scriptText)),
+			zap.Int("script_length", utf8.RuneCountInString(optimizedScriptText)),
+			zap.Int("requested_target_episodes", project.TargetEpisodes),
+			zap.Int("runtime_duration", runtimeCfg.Duration),
+			zap.String("runtime_video_model", runtimeCfg.VideoModel),
+			zap.String("runtime_style_preset", runtimeCfg.StylePreset),
 		)
 	}
 
 	if !chapterSplit {
-		targetEpisodes := project.TargetEpisodes
-		if targetEpisodes <= 0 {
-			wordCount := utf8.RuneCountInString(scriptText)
-			targetEpisodes = wordCount / 2000
-			if targetEpisodes < 1 {
-				targetEpisodes = 1
-			}
-			if targetEpisodes > 200 {
-				targetEpisodes = 200
-			}
+		targetEpisodes := estimateAutoSplitTargetEpisodes(optimizedScriptText, runtimeCfg)
+		if project.TargetEpisodes > 0 {
+			targetEpisodes = project.TargetEpisodes
 		}
 		if targetEpisodes <= 1 {
-			episodes = s.simpleSplit(scriptText, targetEpisodes)
+			episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
 		} else {
 			splitCtx, cancelSplit := context.WithTimeout(ctx, episodeSplitTimeout)
 			var err error
 			writingHints := s.fetchWritingSkillHints(splitCtx, projectID)
-			episodes, err = s.callLLMSplit(splitCtx, scriptText, targetEpisodes, &kwLib, writingHints)
+			episodes, err = s.callLLMSplit(splitCtx, optimizedScriptText, targetEpisodes, &kwLib, writingHints)
 			cancelSplit()
 			if err != nil {
-				episodes = s.simpleSplit(scriptText, targetEpisodes)
+				episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
 			}
 		}
 	}
@@ -2926,14 +3132,14 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 		CharacterAppearance string `json:"character_appearance,omitempty"` // injected from kwLib (prefer English)
 		CharacterEmotions   string `json:"character_emotions,omitempty"`   // emotion states per character
 		Action              string `json:"action"`
-		Items               string `json:"items,omitempty"`           // visible props/objects in scene
-		PropVisual          string `json:"prop_visual,omitempty"`     // visual descriptions of key props from kwLib
-		LightingNote        string `json:"lighting_note,omitempty"`   // from [灯光:] annotations
-		ArtNote             string `json:"art_note,omitempty"`        // from [美术:] annotations
-		PropNote            string `json:"prop_note,omitempty"`       // from [道具:] annotations
-		SpatialAnchor       string `json:"spatial_anchor,omitempty"`  // extracted spatial anchor hints from scene description
+		Items               string `json:"items,omitempty"`             // visible props/objects in scene
+		PropVisual          string `json:"prop_visual,omitempty"`       // visual descriptions of key props from kwLib
+		LightingNote        string `json:"lighting_note,omitempty"`     // from [灯光:] annotations
+		ArtNote             string `json:"art_note,omitempty"`          // from [美术:] annotations
+		PropNote            string `json:"prop_note,omitempty"`         // from [道具:] annotations
+		SpatialAnchor       string `json:"spatial_anchor,omitempty"`    // extracted spatial anchor hints from scene description
 		SubjectPositions    string `json:"subject_positions,omitempty"` // extracted left/center/right or facing hints
-		TransitionNote      string `json:"transition_note,omitempty"` // extracted visible transition / movement hints
+		TransitionNote      string `json:"transition_note,omitempty"`   // extracted visible transition / movement hints
 	}
 
 	var inputs []sceneInput
@@ -4719,7 +4925,6 @@ func (s *EpisodeService) OptimizeEpisode(ctx context.Context, id, projectID uint
 			}
 		}
 	}
-
 
 	writingHints := s.fetchWritingSkillHints(ctx, projectID)
 	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib)

@@ -105,8 +105,7 @@ export default function AdVideoWorkbenchPage() {
   const [workflowForm, setWorkflowForm] = useState({
     title: '口播广告工作台项目',
     description: '在广告工作台内独立创建、生成、后处理，不再依赖单个项目页。',
-    targetEpisodes: '9',
-    stylePreset: 'realistic',
+    stylePreset: 'live-action-short',
     aspectRatio: '',
     resolution: '',
     duration: '',
@@ -298,7 +297,6 @@ export default function AdVideoWorkbenchPage() {
         title: workflowForm.title.trim(),
         description: workflowForm.description.trim(),
         project_type: 'video',
-        target_episodes: Math.max(1, Number(workflowForm.targetEpisodes) || 1),
         text_model_id: parseModelId(workflowForm.textModelId),
         image_model_id: parseModelId(workflowForm.imageModelId),
         video_model_id: parseModelId(workflowForm.videoModelId),
@@ -315,6 +313,7 @@ export default function AdVideoWorkbenchPage() {
           style_preset: workflowForm.stylePreset,
           motion_mode: 'gentle',
           generate_audio: nativeAudioSupported ? workflowForm.generateAudio : false,
+          auto_split_after_optimization: true,
           ...(selectedVideoModel?.model_key ? { video_model: selectedVideoModel.model_key } : {}),
         },
       })
@@ -465,15 +464,6 @@ export default function AdVideoWorkbenchPage() {
                 placeholder="例如：李恩泽口播广告 0527"
               />
             </div>
-            <div className="space-y-2">
-              <Label className="text-slate-200">目标片段数 / 分集数</Label>
-              <Input
-                type="number"
-                min={1}
-                value={workflowForm.targetEpisodes}
-                onChange={(e) => setWorkflowForm((prev) => ({ ...prev, targetEpisodes: e.target.value }))}
-              />
-            </div>
             <div className="space-y-2 md:col-span-2">
               <Label className="text-slate-200">项目说明</Label>
               <Textarea
@@ -490,8 +480,10 @@ export default function AdVideoWorkbenchPage() {
                 onChange={(e) => setWorkflowForm((prev) => ({ ...prev, stylePreset: e.target.value }))}
                 className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
               >
-                <option value="realistic">真实环境 / 写实风格</option>
-                <option value="anime">动漫风格</option>
+                <option value="live-action-short">真实环境 / 写实短视频风格</option>
+                <option value="live-action-film">真实环境 / 电影感风格</option>
+                <option value="anime-2d">动漫风格（2D）</option>
+                <option value="anime-3d">动漫风格（3D）</option>
               </select>
             </div>
             <div className="space-y-2">
@@ -711,7 +703,7 @@ export default function AdVideoWorkbenchPage() {
             <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">
               <li>在这里直接创建广告项目载体，而不是先去项目页手工新建。</li>
               <li>在这里直接粘贴脚本并上传到该广告项目。</li>
-              <li>在这里直接启动分集 + 自动分镜基础流程。</li>
+              <li>在这里直接启动“文案优化 → 自动分集 → 自动分镜”基础流程。</li>
               <li>后续再继续把资产生成、视频生成、排序、合成彻底前移到本页。</li>
             </ul>
           </div>
@@ -726,7 +718,7 @@ export default function AdVideoWorkbenchPage() {
           {workflowProject ? (
             <>
               <div>项目：#{workflowProject.id} · {workflowProject.title}</div>
-              <div>状态：{workflowProject.status || '-'} · 目标片段数：{workflowProject.target_episodes ?? '-'}</div>
+              <div>状态：{workflowProject.status || '-'} · 当前已生成分集数：{workflowEpisodes.length || '-'}</div>
               <div>
                 当前进度：
                 {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
@@ -742,7 +734,7 @@ export default function AdVideoWorkbenchPage() {
                   ))}
                 </div>
               ) : (
-                <div className="text-xs text-slate-400">当前还没有分集记录；启动基础生成后这里会开始出现内容。</div>
+                <div className="text-xs text-slate-400">当前还没有分集记录；系统会在文案优化完成后，按所选视频模型时长自动切分并在这里出现内容。</div>
               )}
             </>
           ) : (
