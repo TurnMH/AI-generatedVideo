@@ -670,79 +670,33 @@ export default function AdVideoHistoryDetailPage() {
                   <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="copy" className="space-y-4">
-                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                    <div className="font-medium">文案工作区</div>
-                    <div className="mt-1 text-xs text-emerald-100/80">这里集中看优化前后文案、一致性前提，以及当前自动分集结果；步骤 1 仍在上方流水线执行。</div>
-                  </div>
-                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4 text-sm text-slate-200">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-white">优化后的文案</div>
-                        <div className="mt-1 text-xs text-slate-400">支持和原文对照查看；这里保留当前用于步骤 1 重拆分的最终广告文案，可继续编辑。</div>
+                <TabsContent value="copy">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium text-white">原文</div>
+                        <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || project.script_text || '').trim().length} 字</div>
                       </div>
-                      <div className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-200">
-                        {editableOptimizedScript.trim().length} 字
+                      <div className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words text-sm text-slate-100">
+                        {autoSplit?.original_script || project.script_text || '暂无'}
                       </div>
                     </div>
 
-                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
                         <div>
-                          <div className="mb-2 text-xs font-medium text-emerald-200">优化后的文案（当前用于拆分）</div>
-                          <div className="text-[11px] text-emerald-200/75">先在这里快速修正文案，再按上方步骤 1 的视频配置重新拆分。</div>
+                          <div className="text-sm font-medium text-white">优化后的文案</div>
+                          <div className="mt-1 text-[11px] text-emerald-200/75">右侧直接编辑，保存当前用于步骤 1 重拆分的最终版本。</div>
                         </div>
                         <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
                       </div>
                       <Textarea
                         value={editableOptimizedScript}
                         onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                        className="min-h-[140px] max-h-[220px] border-emerald-500/20 bg-black/20 text-slate-100"
+                        className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100"
                         placeholder="这里保留当前要进入流水线的广告文案。"
                       />
                     </div>
-
-                    <div className="grid gap-4 xl:grid-cols-2">
-                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className="text-xs font-medium text-slate-300">原文对照</div>
-                          <div className="text-[11px] text-slate-500">{String(autoSplit?.original_script || project.script_text || '').trim().length} 字</div>
-                        </div>
-                        <div className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-slate-100">{autoSplit?.original_script || project.script_text || '暂无'}</div>
-                      </div>
-
-                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className="text-xs font-medium text-emerald-200">优化后对照</div>
-                          <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length} 字</div>
-                        </div>
-                        <div className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words text-slate-100">{editableOptimizedScript.trim() || '暂无'}</div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                      <div className="mb-2 text-xs font-medium text-amber-200">一致性前提</div>
-                      <div className="whitespace-pre-wrap break-words text-slate-100">{autoSplit?.consistency_premise || '当前运行态尚未返回一致性前提。'}</div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-white">自动分集结果</div>
-                        <div className="mt-1 text-xs text-slate-400">这里展示步骤 1 拆分后的片段载体，方便对照优化文案查看。</div>
-                      </div>
-                      <div className="text-[11px] text-slate-400">共 {episodes.length} 集</div>
-                    </div>
-
-                    {episodes.length === 0 ? (
-                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有分集记录。</div>
-                    ) : episodes.map((episode) => (
-                      <div key={episode.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
-                        <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
-                        <div className="mt-2 whitespace-pre-wrap break-words text-slate-400">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
-                      </div>
-                    ))}
                   </div>
                 </TabsContent>
 
