@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
-import { assetAPI, modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
+import { modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 import type { Storyboard } from '@/types'
 
 const DEFAULT_IDS = '150,151,152,153,159,160,161,162,163'
@@ -131,10 +131,6 @@ export default function AdVideoWorkbenchPage() {
   const [savingStoryboardId, setSavingStoryboardId] = useState<number | null>(null)
   const [savingAllStoryboards, setSavingAllStoryboards] = useState(false)
   const [storyboardDrafts, setStoryboardDrafts] = useState<Record<number, { scene_description: string; dialogue: string }>>({})
-  const [generationAction, setGenerationAction] = useState<string | null>(null)
-  const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
-  const [editableOptimizedScript, setEditableOptimizedScript] = useState('')
-  const [rerunAction, setRerunAction] = useState<string | null>(null)
 
   const [idsText, setIdsText] = useState(DEFAULT_IDS)
   const [orderedIds, setOrderedIds] = useState<number[]>(parseIds(DEFAULT_IDS))
@@ -229,18 +225,18 @@ export default function AdVideoWorkbenchPage() {
     },
   )
 
-  const tasks = data || []
-  const workflowEpisodes = workflowEpisodesData || []
+  const tasks = useMemo(() => data || [], [data])
+  const workflowEpisodes = useMemo(() => workflowEpisodesData || [], [workflowEpisodesData])
   const workflowStoryboards = useMemo(
     () => (workflowStoryboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number),
     [workflowStoryboardsData],
   )
   const workflowProgress = workflowProgressData || null
   const workflowProject = workflowProjectData || null
-  const textModels = workflowModelData?.text || []
-  const imageModels = workflowModelData?.image || []
-  const videoModels = workflowModelData?.video || []
-  const videoModelStatuses = workflowModelData?.videoStatus || []
+  const textModels = useMemo(() => workflowModelData?.text || [], [workflowModelData])
+  const imageModels = useMemo(() => workflowModelData?.image || [], [workflowModelData])
+  const videoModels = useMemo(() => workflowModelData?.video || [], [workflowModelData])
+  const videoModelStatuses = useMemo(() => workflowModelData?.videoStatus || [], [workflowModelData])
   const selectedVideoModel = useMemo(() => {
     const selectedId = Number(workflowForm.videoModelId)
     if (!Number.isFinite(selectedId) || selectedId <= 0) return null
@@ -275,14 +271,6 @@ export default function AdVideoWorkbenchPage() {
   const durationOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'duration'), [selectedVideoStatus])
   const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
   const autoSplitInfo = workflowProgress?.auto_split || null
-  const selectedEpisodeNumber = useMemo(() => {
-    const value = Number(selectedEpisodeId)
-    return Number.isFinite(value) && value > 0 ? value : null
-  }, [selectedEpisodeId])
-  const selectedEpisode = useMemo(
-    () => workflowEpisodes.find((episode) => episode.id === selectedEpisodeNumber) || null,
-    [workflowEpisodes, selectedEpisodeNumber],
-  )
 
   useEffect(() => {
     if (!selectedVideoModel) return
@@ -473,132 +461,6 @@ export default function AdVideoWorkbenchPage() {
       return
     }
     router.push(`/ad-video/history/${workflowProjectId}`)
-  }
-
-  const runGenerationAction = async (action: string, runner: () => Promise<unknown>, successTitle: string) => {
-    if (!workflowProjectId) {
-      toast({ title: '请先创建广告项目', variant: 'destructive' })
-      return
-    }
-    setGenerationAction(action)
-    try {
-      await runner()
-      await Promise.all([
-        mutateProject(),
-        mutateEpisodes(),
-        mutateStoryboards(),
-        mutateProgress(),
-      ])
-      toast({ title: successTitle, variant: 'success' })
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '触发生成失败', variant: 'destructive' })
-    } finally {
-      setGenerationAction(null)
-    }
-  }
-
-  const triggerAssetExtraction = async (scope: 'all' | 'episode') => {
-    if (!workflowProjectId) return
-    if (scope === 'episode') {
-      if (!selectedEpisodeNumber) {
-        toast({ title: '请先选择一个分集，再提取该集的人物/素材', variant: 'destructive' })
-        return
-      }
-      await runGenerationAction(
-        `asset-episode-${selectedEpisodeNumber}`,
-        () => assetAPI.extractEpisode(workflowProjectId, selectedEpisodeNumber),
-        `已触发 episode ${selectedEpisode?.episode_number || selectedEpisodeNumber} 的人物/素材提取`,
-      )
-      return
-    }
-    await runGenerationAction(
-      'asset-all',
-      () => assetAPI.extract(workflowProjectId),
-      '已触发全项目人物/素材提取',
-    )
-  }
-
-  const triggerStoryboardExtraction = async (scope: 'all' | 'episode') => {
-    if (!workflowProjectId) return
-    if (scope === 'episode') {
-      if (!selectedEpisodeNumber) {
-        toast({ title: '请先选择一个分集，再重建该集分镜文本', variant: 'destructive' })
-        return
-      }
-      await runGenerationAction(
-        `storyboard-episode-${selectedEpisodeNumber}`,
-        () => projectAPI.extractEpisodeStoryboards(workflowProjectId, selectedEpisodeNumber),
-        `已触发 episode ${selectedEpisode?.episode_number || selectedEpisodeNumber} 的分镜文本重建`,
-      )
-      return
-    }
-    await runGenerationAction(
-      'storyboard-all',
-      () => projectAPI.extractStoryboards(workflowProjectId),
-      '已触发全项目分镜文本重建',
-    )
-  }
-
-  const triggerStoryboardImageGeneration = async (scope: 'all' | 'episode') => {
-    if (!workflowProjectId) return
-    const modelKey = selectedImageModel?.model_key
-    if (scope === 'episode') {
-      if (!selectedEpisodeNumber) {
-        toast({ title: '请先选择一个分集，再生成该集分镜图', variant: 'destructive' })
-        return
-      }
-      await runGenerationAction(
-        `storyboard-image-episode-${selectedEpisodeNumber}`,
-        () => storyboardAPI.generateAll(workflowProjectId, selectedEpisodeNumber, modelKey),
-        `已触发 episode ${selectedEpisode?.episode_number || selectedEpisodeNumber} 的分镜图生成`,
-      )
-      return
-    }
-    await runGenerationAction(
-      'storyboard-image-all',
-      () => storyboardAPI.generateAll(workflowProjectId, undefined, modelKey),
-      '已触发全项目分镜图生成',
-    )
-  }
-
-  const rerunEpisodePipeline = async (mode: 'episodes' | 'episodes+storyboards') => {
-    if (!workflowProjectId) {
-      toast({ title: '请先创建广告项目', variant: 'destructive' })
-      return
-    }
-    const scriptText = editableOptimizedScript.trim()
-    if (!scriptText) {
-      toast({ title: '请先填写或保留一版优化后的广告词，再重跑自动分集', variant: 'destructive' })
-      return
-    }
-    if (workflowProject?.status === 'script_processing' || workflowProgress?.stage === 'episode_splitting') {
-      toast({ title: '当前项目仍在自动分集中，请等本轮完成后再重跑，避免再次触发 409', variant: 'destructive' })
-      return
-    }
-    const action = mode === 'episodes+storyboards' ? 'rerun-episodes-storyboards' : 'rerun-episodes'
-    setRerunAction(action)
-    try {
-      const filenameBase = (workflowProject?.title || workflowForm.title || `ad-project-${workflowProjectId}`).trim() || `ad-project-${workflowProjectId}`
-      const file = new File([scriptText], `${filenameBase}-optimized.txt`, { type: 'text/plain' })
-      await projectAPI.uploadScript(workflowProjectId, file)
-      await projectAPI.generateEpisodes(workflowProjectId, undefined, { autoStoryboard: mode === 'episodes+storyboards' })
-      await Promise.all([
-        mutateProject(),
-        mutateEpisodes(),
-        mutateStoryboards(),
-        mutateProgress(),
-      ])
-      toast({
-        title: mode === 'episodes+storyboards'
-          ? '已用当前广告词重新上传脚本，并开始重跑自动分集 + 自动分镜'
-          : '已用当前广告词重新上传脚本，并开始重跑自动分集',
-        variant: 'success',
-      })
-    } catch (error) {
-      toast({ title: error instanceof Error ? error.message : '重跑自动分集失败', variant: 'destructive' })
-    } finally {
-      setRerunAction(null)
-    }
   }
 
   const loadIds = () => {
@@ -991,44 +853,29 @@ export default function AdVideoWorkbenchPage() {
                       <div>
                         <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
                         <div className="mt-1 text-xs text-emerald-200/80">
-                          这里现在支持直接编辑。你改完后，可以用这版文案重新上传项目脚本，并重跑自动分集 / 自动分镜。
+                          首页只展示当前结果，不再承担继续生成 / 重跑。后续一律进入该项目详情页按流水线继续执行。
                         </div>
                       </div>
-                      <div className="text-[11px] text-emerald-200/75">
-                        {editableOptimizedScript.trim().length} 字
-                      </div>
+                      <Button size="sm" onClick={openCurrentProgress} disabled={!workflowProjectId}>
+                        去详情页继续
+                      </Button>
                     </div>
-                    <Textarea
-                      value={editableOptimizedScript}
-                      onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                      className="min-h-[220px] border-emerald-500/20 bg-black/20 text-slate-100"
-                      placeholder="优化后的广告词会出现在这里；你可以继续人工改写，再重跑自动分集 / 自动分镜。"
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={rerunAction !== null || generationAction !== null || !editableOptimizedScript.trim()}
-                        onClick={() => void rerunEpisodePipeline('episodes')}
-                      >
-                        {rerunAction === 'rerun-episodes' ? '重跑中…' : '用当前文案重新自动分集'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={rerunAction !== null || generationAction !== null || !editableOptimizedScript.trim()}
-                        onClick={() => void rerunEpisodePipeline('episodes+storyboards')}
-                      >
-                        {rerunAction === 'rerun-episodes-storyboards' ? '重跑中…' : '用当前文案重新自动分集 + 自动分镜'}
-                      </Button>
+                    <div className="max-h-[220px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-3 text-slate-100">
+                      {autoSplitInfo.optimized_script}
                     </div>
                     <div className="text-[11px] text-emerald-200/75">
-                      注意：重新自动分集会基于当前文案重建后续结果；若你选择“自动分镜”，旧分镜也会被替换。
+                      说明：重跑文案拆分、上传人物图、刷新分镜图、启动视频生成，现已统一收口到 `/ad-video/history/[projectId]`。
                     </div>
                   </div>
                 )}
                 {autoSplitInfo?.consistency_premise && (
                   <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                    <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-amber-100">一致性前提（后续分镜 / 图片 / 视频必须继承）</div>
+                      <Button size="sm" variant="outline" disabled={!workflowProjectId} onClick={openCurrentProgress}>
+                        在详情页继续执行
+                      </Button>
+                    </div>
                     <div className="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
                       {autoSplitInfo.consistency_premise}
                     </div>
@@ -1037,102 +884,18 @@ export default function AdVideoWorkbenchPage() {
                 <div className="space-y-3 rounded-xl border border-sky-500/20 bg-sky-500/10 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-medium text-sky-100">文案优化完成后的后续生成操作区</div>
+                      <div className="text-sm font-medium text-sky-100">后续生成已迁入项目详情页</div>
                       <div className="mt-1 text-xs text-sky-200/80">
-                        这里补上广告工作台缺失的“人物 / 分镜 / 分镜图”继续生成入口。你可以按单集重跑，也可以整项目重跑。
+                        首页现在只负责创建广告项目、查看本轮结果与跳转。真正的后续生产动作，请进入详情页按“文本拆分 → 人物图上传 → 视频生成”的流水线继续。
                       </div>
                     </div>
-                    <Button size="sm" variant="outline" disabled={!workflowProjectId} onClick={() => void mutateProgress()}>
-                      刷新当前进度
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,280px)_1fr]">
-                    <div className="space-y-2">
-                      <Label className="text-slate-200">选择要继续处理的分集</Label>
-                      <select
-                        value={selectedEpisodeId}
-                        onChange={(e) => setSelectedEpisodeId(e.target.value)}
-                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-                      >
-                        <option value="all">整项目（全部分集）</option>
-                        {workflowEpisodes.map((episode) => (
-                          <option key={episode.id} value={String(episode.id)}>
-                            episode #{episode.episode_number} · {episode.title || '未命名片段'}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="text-[11px] text-sky-200/75">
-                        当前选择：{selectedEpisode ? `episode #${selectedEpisode.episode_number} · ${selectedEpisode.title || '未命名片段'}` : '整项目'}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div className="text-sm font-medium text-white">1）人物 / 素材</div>
-                        <div className="mt-1 text-xs text-slate-400">从优化后的文案 / 已切分片段里提取人物、场景、物件等素材载体。</div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={generationAction !== null || !workflowProjectId}
-                            onClick={() => triggerAssetExtraction('all')}
-                          >
-                            {generationAction === 'asset-all' ? '提取中…' : '整项目提取人物/素材'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={generationAction !== null || !selectedEpisodeNumber}
-                            onClick={() => triggerAssetExtraction('episode')}
-                          >
-                            {generationAction === `asset-episode-${selectedEpisodeNumber}` ? '提取中…' : '提取当前分集人物/素材'}
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div className="text-sm font-medium text-white">2）分镜文本</div>
-                        <div className="mt-1 text-xs text-slate-400">把优化文案 / 分集重新下沉成 scene_description、dialogue 等真实分镜字段。</div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={generationAction !== null || !workflowProjectId}
-                            onClick={() => triggerStoryboardExtraction('all')}
-                          >
-                            {generationAction === 'storyboard-all' ? '重建中…' : '整项目重建分镜文本'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={generationAction !== null || !selectedEpisodeNumber}
-                            onClick={() => triggerStoryboardExtraction('episode')}
-                          >
-                            {generationAction === `storyboard-episode-${selectedEpisodeNumber}` ? '重建中…' : '重建当前分集分镜文本'}
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                        <div className="text-sm font-medium text-white">3）分镜图</div>
-                        <div className="mt-1 text-xs text-slate-400">按当前图片模型真实生成分镜图。{selectedImageModel?.model_key ? `当前图片模型：${selectedImageModel.model_key}` : '当前使用系统默认图片模型。'}</div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={generationAction !== null || !workflowProjectId}
-                            onClick={() => triggerStoryboardImageGeneration('all')}
-                          >
-                            {generationAction === 'storyboard-image-all' ? '生成中…' : '整项目生成分镜图'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={generationAction !== null || !selectedEpisodeNumber}
-                            onClick={() => triggerStoryboardImageGeneration('episode')}
-                          >
-                            {generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '生成中…' : '生成当前分集分镜图'}
-                          </Button>
-                        </div>
-                      </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" disabled={!workflowProjectId} onClick={() => void mutateProgress()}>
+                        刷新当前进度
+                      </Button>
+                      <Button size="sm" disabled={!workflowProjectId} onClick={openCurrentProgress}>
+                        打开项目详情工作台
+                      </Button>
                     </div>
                   </div>
                 </div>
