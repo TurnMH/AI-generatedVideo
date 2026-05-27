@@ -644,21 +644,6 @@ export default function AdVideoHistoryDetailPage() {
         <>
           <Card className="border-white/10 bg-slate-900/60 text-slate-100">
             <CardHeader>
-              <CardTitle>项目总览</CardTitle>
-              <CardDescription className="text-slate-400">project #{project.id} · {project.title}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm text-slate-200">
-              <div>状态：{project.status || '-'} · 当前阶段：{humanStage(project)}</div>
-              <div>style_tags：{Array.isArray(project.style_tags) && project.style_tags.length > 0 ? project.style_tags.join(' / ') : '-'}</div>
-              <div>文案长度：{autoSplit?.script_length || (project.script_text || '').length || '-'} · 预估分集：{autoSplit?.estimated_episodes || episodes.length || '-'}</div>
-              <div>当前处理范围：{scopeLabel}</div>
-              {resultUrl && <div className="break-all">最新完整视频：<a className="text-cyan-300 underline" href={resultUrl} target="_blank" rel="noreferrer">{resultUrl}</a></div>}
-              {latestTask?.error_msg && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-rose-200">最新视频任务错误：{latestTask.error_msg}</div>}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-            <CardHeader>
               <CardTitle>广告详情内容</CardTitle>
               <CardDescription className="text-slate-400">把文案、分镜、视频分开查看；优化后的文案固定放在“文案”页签中。</CardDescription>
             </CardHeader>
