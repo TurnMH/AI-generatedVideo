@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/toast'
 import { modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Model, type Project, type VideoTaskDetailResponse } from '@/lib/api'
 import type { Storyboard } from '@/types'
@@ -783,249 +784,260 @@ export default function AdVideoWorkbenchPage() {
 
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
         <CardHeader>
-          <CardTitle className="text-white">当前广告工作项目状态</CardTitle>
+          <CardTitle className="text-white">二、广告工作项目任务区</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-slate-300">
+        <CardContent className="space-y-4 text-sm text-slate-300">
           {workflowProject ? (
-            <>
-              <div>项目：#{workflowProject.id} · {workflowProject.title}</div>
-              <div>状态：{workflowProject.status || '-'} · 当前已生成分集数：{workflowEpisodes.length || '-'}</div>
-              <div>
-                当前进度：
-                {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
-              </div>
-              {autoSplitInfo?.enabled && (
-                <div className="space-y-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-xs text-cyan-100">
-                  <div>
-                    <div className="font-medium text-cyan-50">本次自动切分依据</div>
-                    <div className="mt-1 break-all">
-                      模型：{autoSplitInfo.video_model || selectedVideoModel?.model_key || '未记录'}
-                      {' · '}时长：{autoSplitInfo.duration || workflowForm.duration || '-'} 秒
-                      {' · '}风格：{autoSplitInfo.style_preset || workflowForm.stylePreset || '-'}
-                    </div>
-                    <div className="mt-1 break-all text-cyan-200/90">
-                      文案长度：{autoSplitInfo.script_length || '-'} 字
-                      {' · '}目标每集承载：{autoSplitInfo.target_chars_per_episode || '-'} 字
-                      {' · '}最终分集数：{autoSplitInfo.estimated_episodes || workflowEpisodes.length || '-'}
-                    </div>
-                  </div>
-                  {autoSplitInfo.original_script && (
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                      <div className="font-medium text-cyan-50">优化前全文</div>
-                      <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-slate-200">
-                        {autoSplitInfo.original_script}
+            <Tabs defaultValue="copy" className="space-y-4">
+              <TabsList className="bg-black/30">
+                <TabsTrigger value="copy">文案</TabsTrigger>
+                <TabsTrigger value="storyboards">分镜图</TabsTrigger>
+                <TabsTrigger value="videos">视频</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="copy" className="space-y-3">
+                <div>项目：#{workflowProject.id} · {workflowProject.title}</div>
+                <div>状态：{workflowProject.status || '-'} · 当前已生成分集数：{workflowEpisodes.length || '-'}</div>
+                <div>
+                  当前进度：
+                  {workflowProgress?.stage || workflowProgress?.phase_label || workflowProgress?.message || '暂无'}
+                </div>
+                {autoSplitInfo?.enabled && (
+                  <div className="space-y-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-xs text-cyan-100">
+                    <div>
+                      <div className="font-medium text-cyan-50">本次自动切分依据</div>
+                      <div className="mt-1 break-all">
+                        模型：{autoSplitInfo.video_model || selectedVideoModel?.model_key || '未记录'}
+                        {' · '}时长：{autoSplitInfo.duration || workflowForm.duration || '-'} 秒
+                        {' · '}风格：{autoSplitInfo.style_preset || workflowForm.stylePreset || '-'}
+                      </div>
+                      <div className="mt-1 break-all text-cyan-200/90">
+                        文案长度：{autoSplitInfo.script_length || '-'} 字
+                        {' · '}目标每集承载：{autoSplitInfo.target_chars_per_episode || '-'} 字
+                        {' · '}最终分集数：{autoSplitInfo.estimated_episodes || workflowEpisodes.length || '-'}
                       </div>
                     </div>
-                  )}
-                  {autoSplitInfo.optimized_script && (
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                      <div className="font-medium text-cyan-50">优化后全文</div>
-                      <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-slate-100">
-                        {autoSplitInfo.optimized_script}
+                    {autoSplitInfo.original_script && (
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="font-medium text-cyan-50">优化前全文</div>
+                        <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-slate-200">
+                          {autoSplitInfo.original_script}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              {autoSplitInfo?.optimized_script && (
-                <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
-                  <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
-                  <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
-                    {autoSplitInfo.optimized_script}
+                    )}
+                    {autoSplitInfo.optimized_script && (
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div className="font-medium text-cyan-50">优化后全文</div>
+                        <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap text-slate-100">
+                          {autoSplitInfo.optimized_script}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
-
-              {workflowEpisodes.length > 0 ? (
-                <div className="space-y-2">
-                  <div className="text-slate-200">已生成的分集 / 片段载体</div>
-                  {workflowEpisodes.map((episode) => (
-                    <div key={episode.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
-                      <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
-                      <div className="mt-1 text-xs text-slate-400 line-clamp-2">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
+                )}
+                {autoSplitInfo?.optimized_script && (
+                  <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+                    <div className="text-sm font-medium text-emerald-100">当前优化后的广告词</div>
+                    <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-slate-100">
+                      {autoSplitInfo.optimized_script}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-slate-400">当前还没有分集记录；系统会在文案优化完成后，按所选视频模型时长自动切分并在这里出现内容。</div>
-              )}
+                  </div>
+                )}
+                {workflowEpisodes.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="text-slate-200">已生成的分集 / 片段载体</div>
+                    {workflowEpisodes.map((episode) => (
+                      <div key={episode.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
+                        <div>episode #{episode.episode_number} · {episode.title || '未命名片段'} · {episode.status}</div>
+                        <div className="mt-1 text-xs text-slate-400 line-clamp-2">{episode.summary || episode.script_excerpt || '暂无摘要'}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400">当前还没有分集记录；系统会在文案优化完成后，按所选视频模型时长自动切分并在这里出现内容。</div>
+                )}
+              </TabsContent>
 
-              {workflowStoryboards.length > 0 ? (
+              <TabsContent value="storyboards" className="space-y-3">
+                {workflowStoryboards.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
+                    {workflowStoryboards.map((storyboard) => {
+                      const draft = storyboardDrafts[storyboard.id] || {
+                        scene_description: storyboard.scene_description || '',
+                        dialogue: storyboard.dialogue || '',
+                      }
+                      return (
+                        <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm text-slate-100">
+                              分镜 #{storyboard.sequence_number}
+                              {storyboard.episode_id ? ` · episode ${storyboard.episode_id}` : ''}
+                              {' · '}
+                              {storyboard.status || '-'}
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={savingStoryboardId === storyboard.id}
+                              onClick={() => saveStoryboardDraft(storyboard.id)}
+                            >
+                              {savingStoryboardId === storyboard.id ? '保存中…' : '确认并保存修改'}
+                            </Button>
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label className="text-slate-200">场景描述</Label>
+                              <Textarea
+                                value={draft.scene_description}
+                                onChange={(e) => updateStoryboardDraft(storyboard.id, 'scene_description', e.target.value)}
+                                className="min-h-[180px]"
+                                placeholder="这里是该分镜真实提交链里的 scene_description，可直接改。"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-slate-200">台词 / 旁白</Label>
+                              <Textarea
+                                value={draft.dialogue}
+                                onChange={(e) => updateStoryboardDraft(storyboard.id, 'dialogue', e.target.value)}
+                                className="min-h-[180px]"
+                                placeholder="这里是该分镜真实提交链里的 dialogue，可直接改。"
+                              />
+                            </div>
+                          </div>
+                          {(storyboard.prompt_used || storyboard.location || storyboard.camera_movement) && (
+                            <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-400">
+                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 md:col-span-2">
+                                <div className="text-slate-500">当前 prompt_used</div>
+                                <div className="mt-1 whitespace-pre-wrap break-words text-slate-300">{storyboard.prompt_used || '暂无'}</div>
+                              </div>
+                              <div className="space-y-3">
+                                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                                  <div className="text-slate-500">地点</div>
+                                  <div className="mt-1 text-slate-300">{storyboard.location || '未填写'}</div>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
+                                  <div className="text-slate-500">镜头运动</div>
+                                  <div className="mt-1 text-slate-300">{storyboard.camera_movement || '未填写'}</div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-400">当前还没有分镜记录；启动基础生成后，这里会出现每个分镜的场景描述与台词确认区。</div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="videos" className="space-y-4">
+                <Card className="border-white/10 bg-black/20 text-slate-100">
+                  <CardHeader>
+                    <CardTitle className="text-base text-white">广告后处理与整片合成</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <Input value={idsText} onChange={(e) => setIdsText(e.target.value)} placeholder="150,151,152..." />
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={loadIds}>加载任务</Button>
+                      <Button variant="outline" disabled={busy || orderedIds.length === 0} onClick={compose}>
+                        {busy ? '合成中…' : '合成一个广告视频'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setIdsText(DEFAULT_IDS)
+                          setOrderedIds(parseIds(DEFAULT_IDS))
+                          setResultUrl('')
+                          setResultTaskId(null)
+                        }}
+                      >
+                        恢复默认
+                      </Button>
+                    </div>
+                    <div className="text-xs text-slate-400">当前顺序：{orderedIds.length > 0 ? orderedIds.join(' → ') : '未选择任务'}</div>
+                  </CardContent>
+                </Card>
+
                 <div className="space-y-3">
-                  <div className="text-slate-200">分镜逐条确认区（场景描述 / 台词可编辑）</div>
-                  {workflowStoryboards.map((storyboard) => {
-                    const draft = storyboardDrafts[storyboard.id] || {
-                      scene_description: storyboard.scene_description || '',
-                      dialogue: storyboard.dialogue || '',
-                    }
-                    return (
-                      <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm text-slate-100">
-                            分镜 #{storyboard.sequence_number}
-                            {storyboard.episode_id ? ` · episode ${storyboard.episode_id}` : ''}
-                            {' · '}
-                            {storyboard.status || '-'}
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={savingStoryboardId === storyboard.id}
-                            onClick={() => saveStoryboardDraft(storyboard.id)}
-                          >
-                            {savingStoryboardId === storyboard.id ? '保存中…' : '确认并保存修改'}
+                  {isLoading ? (
+                    <div className="text-slate-300">加载中…</div>
+                  ) : tasks.length === 0 ? (
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-slate-300">当前没有可展示的视频任务。</div>
+                  ) : (
+                    tasks.map((task, idx) => {
+                      const url = getResultUrl(task)
+                      const subtitle = String(task.subtitle_text || task.render_config?.subtitle_text || '').trim()
+                      const subtitleStatus = String(task.render_config?.subtitle_compose_status || '').trim()
+                      return (
+                        <Card key={task.id} className="border-white/10 bg-black/20 text-slate-100">
+                          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium">task #{task.id} · {task.status || '-'}</div>
+                              <div className="mt-1 text-xs text-slate-400">project={task.project_id} · subtitle={subtitleStatus || '-'}</div>
+                              <div className="mt-1 break-all text-xs text-slate-400">{url || '无结果 URL'}</div>
+                              {subtitle && <div className="mt-2 line-clamp-2 text-xs text-violet-200">{subtitle}</div>}
+                              {task.error_msg && <div className="mt-2 text-xs text-rose-300">{task.error_msg}</div>}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button size="sm" variant="outline" onClick={() => move(idx, -1)}>
+                                上移
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => move(idx, 1)}>
+                                下移
+                              </Button>
+                              <Button size="sm" variant="outline" disabled={busyTaskId !== null} onClick={() => composeSubtitle(task.id)}>
+                                {busyTaskId === task.id ? '处理中…' : '添加字幕'}
+                              </Button>
+                              <Button size="sm" variant="outline" asChild>
+                                <Link href={`/video/history/${task.id}`}>详情</Link>
+                              </Button>
+                              {url ? (
+                                <Button size="sm" variant="outline" asChild>
+                                  <a href={url} target="_blank" rel="noreferrer">打开结果</a>
+                                </Button>
+                              ) : (
+                                <Button size="sm" variant="outline" disabled>
+                                  打开结果
+                                </Button>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })
+                  )}
+                </div>
+
+                {resultUrl && (
+                  <Card className="border-white/10 bg-black/20 text-slate-100">
+                    <CardHeader>
+                      <CardTitle className="text-white">合成结果</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="break-all text-sm text-slate-300">{resultUrl}</div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" asChild>
+                          <a href={resultUrl} target="_blank" rel="noreferrer">打开合成结果</a>
+                        </Button>
+                        {resultTaskId && (
+                          <Button variant="outline" asChild>
+                            <Link href={`/video/history/${resultTaskId}`}>查看合成任务详情</Link>
                           </Button>
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label className="text-slate-200">场景描述</Label>
-                            <Textarea
-                              value={draft.scene_description}
-                              onChange={(e) => updateStoryboardDraft(storyboard.id, 'scene_description', e.target.value)}
-                              className="min-h-[180px]"
-                              placeholder="这里是该分镜真实提交链里的 scene_description，可直接改。"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-slate-200">台词 / 旁白</Label>
-                            <Textarea
-                              value={draft.dialogue}
-                              onChange={(e) => updateStoryboardDraft(storyboard.id, 'dialogue', e.target.value)}
-                              className="min-h-[180px]"
-                              placeholder="这里是该分镜真实提交链里的 dialogue，可直接改。"
-                            />
-                          </div>
-                        </div>
-                        {(storyboard.prompt_used || storyboard.location || storyboard.camera_movement) && (
-                          <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-400">
-                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3 md:col-span-2">
-                              <div className="text-slate-500">当前 prompt_used</div>
-                              <div className="mt-1 whitespace-pre-wrap break-words text-slate-300">{storyboard.prompt_used || '暂无'}</div>
-                            </div>
-                            <div className="space-y-3">
-                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                                <div className="text-slate-500">地点</div>
-                                <div className="mt-1 text-slate-300">{storyboard.location || '未填写'}</div>
-                              </div>
-                              <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">
-                                <div className="text-slate-500">镜头运动</div>
-                                <div className="mt-1 text-slate-300">{storyboard.camera_movement || '未填写'}</div>
-                              </div>
-                            </div>
-                          </div>
                         )}
                       </div>
-                    )
-                  })}
-                </div>
-              ) : workflowProject ? (
-                <div className="text-xs text-slate-400">当前还没有分镜记录；启动基础生成后，这里会出现每个分镜的场景描述与台词确认区。</div>
-              ) : null}
-            </>
+                      <video className="w-full rounded-lg bg-black" controls src={resultUrl} />
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
           ) : (
             <div className="text-xs text-slate-400">还没创建广告工作项目。先在上面完成“创建项目 → 上传脚本 → 启动基础生成”。</div>
           )}
         </CardContent>
       </Card>
-
-      <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-        <CardHeader>
-          <CardTitle className="text-white">二、广告后处理与整片合成</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Input value={idsText} onChange={(e) => setIdsText(e.target.value)} placeholder="150,151,152..." />
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={loadIds}>加载任务</Button>
-            <Button variant="outline" disabled={busy || orderedIds.length === 0} onClick={compose}>
-              {busy ? '合成中…' : '合成一个广告视频'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIdsText(DEFAULT_IDS)
-                setOrderedIds(parseIds(DEFAULT_IDS))
-                setResultUrl('')
-                setResultTaskId(null)
-              }}
-            >
-              恢复默认
-            </Button>
-          </div>
-          <div className="text-xs text-slate-400">当前顺序：{orderedIds.length > 0 ? orderedIds.join(' → ') : '未选择任务'}</div>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-3">
-        {isLoading ? (
-          <div className="text-slate-300">加载中…</div>
-        ) : tasks.length === 0 ? (
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 p-4 text-sm text-slate-300">当前没有可展示的任务。</div>
-        ) : (
-          tasks.map((task, idx) => {
-            const url = getResultUrl(task)
-            const subtitle = String(task.subtitle_text || task.render_config?.subtitle_text || '').trim()
-            const subtitleStatus = String(task.render_config?.subtitle_compose_status || '').trim()
-            return (
-              <Card key={task.id} className="border-white/10 bg-slate-900/60 text-slate-100">
-                <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium">task #{task.id} · {task.status || '-'}</div>
-                    <div className="mt-1 text-xs text-slate-400">project={task.project_id} · subtitle={subtitleStatus || '-'}</div>
-                    <div className="mt-1 break-all text-xs text-slate-400">{url || '无结果 URL'}</div>
-                    {subtitle && <div className="mt-2 line-clamp-2 text-xs text-violet-200">{subtitle}</div>}
-                    {task.error_msg && <div className="mt-2 text-xs text-rose-300">{task.error_msg}</div>}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => move(idx, -1)}>
-                      上移
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => move(idx, 1)}>
-                      下移
-                    </Button>
-                    <Button size="sm" variant="outline" disabled={busyTaskId !== null} onClick={() => composeSubtitle(task.id)}>
-                      {busyTaskId === task.id ? '处理中…' : '添加字幕'}
-                    </Button>
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href={`/video/history/${task.id}`}>详情</Link>
-                    </Button>
-                    {url ? (
-                      <Button size="sm" variant="outline" asChild>
-                        <a href={url} target="_blank" rel="noreferrer">打开结果</a>
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="outline" disabled>
-                        打开结果
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })
-        )}
-      </div>
-
-      {resultUrl && (
-        <Card className="border-white/10 bg-slate-900/60 text-slate-100">
-          <CardHeader>
-            <CardTitle className="text-white">合成结果</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="break-all text-sm text-slate-300">{resultUrl}</div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" asChild>
-                <a href={resultUrl} target="_blank" rel="noreferrer">打开合成结果</a>
-              </Button>
-              {resultTaskId && (
-                <Button variant="outline" asChild>
-                  <Link href={`/video/history/${resultTaskId}`}>查看合成任务详情</Link>
-                </Button>
-              )}
-            </div>
-            <video className="w-full rounded-lg bg-black" controls src={resultUrl} />
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }
