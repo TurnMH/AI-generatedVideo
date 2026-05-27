@@ -172,6 +172,7 @@ export default function AdVideoHistoryDetailPage() {
   const [editableOriginalScript, setEditableOriginalScript] = useState('')
   const [editableOptimizationPrompt, setEditableOptimizationPrompt] = useState('')
   const [optimizingCopy, setOptimizingCopy] = useState(false)
+  const [savingCopyDraft, setSavingCopyDraft] = useState(false)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
   const [generationAction, setGenerationAction] = useState<string | null>(null)
   const [rerunAction, setRerunAction] = useState<string | null>(null)
@@ -281,12 +282,6 @@ export default function AdVideoHistoryDetailPage() {
     }
   }, [scopeStoryboards])
 
-  const displayStoryboards = useMemo(() => {
-    if (scopeStoryboards.length > 0) return scopeStoryboards
-    if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
-    return []
-  }, [scopeStoryboards, step1Running])
-
   const scopeStoryboardAssetIds = useMemo(() => {
     const ids = new Set<number>()
     for (const storyboard of scopeStoryboards) {
@@ -303,11 +298,6 @@ export default function AdVideoHistoryDetailPage() {
     const referenced = base.filter((item) => scopeStoryboardAssetIds.has(item.id))
     return referenced.length > 0 ? referenced : base
   }, [assets, scopeStoryboardAssetIds, selectedEpisodeNumber])
-
-  const completedStoryboardImages = useMemo(
-    () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
-    [displayStoryboards],
-  )
 
   const uploadedScopeAssets = useMemo(
     () => scopeAssets.filter((item) => String(item.image_url || '').trim()).length,
@@ -330,13 +320,25 @@ export default function AdVideoHistoryDetailPage() {
   )
 
   const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
+  const step1Running = rerunAction === 'pipeline' || project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting'
+
+  const displayStoryboards = useMemo(() => {
+    if (scopeStoryboards.length > 0) return scopeStoryboards
+    if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
+    return []
+  }, [scopeStoryboards, step1Running])
+
+  const completedStoryboardImages = useMemo(
+    () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
+    [displayStoryboards],
+  )
+
   const storyboardScopeReady = displayStoryboards.length > 0
   const assetScopeReady = scopeAssets.length > 0
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
   const storyboardImagesReady = storyboardScopeReady && completedStoryboardImages > 0
   const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === displayStoryboards.length
 
-  const step1Running = rerunAction === 'pipeline' || project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting'
   const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
@@ -360,37 +362,38 @@ export default function AdVideoHistoryDetailPage() {
           : '先执行这一步，产出新的分集与分镜文本。'
 
   const step2Hint = !step2Enabled
-    ? '请先完成步骤 1，先得到当前视频配置下的分镜文本。'
+    ? '先完成步骤 1，先让这一轮视频配置真正产出新的分集和分镜文案。'
     : step2Running
-      ? '当前正在准备人物槽位 / 上传素材 / 刷新分镜图。'
+      ? '当前正在执行步骤 2：准备素材槽位或刷新分镜图，请等这一轮回流。'
       : !assetScopeReady
-        ? '先点击“准备人物槽位”，让当前范围出现可上传素材。'
+        ? '当前范围还没有可上传的人物 / 素材槽位，先点“准备人物槽位”。'
         : !allScopeAssetsUploaded
-          ? '当前还有人物 / 素材图未上传，先补齐再刷新分镜图。'
+          ? '先把当前范围需要的参考图补齐；没上传完之前，不建议刷新分镜图。'
           : !storyboardImagesReady
-            ? '人物图已就绪，但还没生成出可用分镜图，请继续刷新分镜图。'
+            ? '参考图已经齐了，下一步就是刷新当前范围的分镜图。'
             : storyboardImagesComplete
-              ? '当前范围分镜图已经齐了，可以进入下一步。'
-              : '已有部分分镜图，建议继续补齐。'
+              ? '当前范围的分镜图已经齐了，步骤 2 可以视为完成。'
+              : '当前范围已有部分分镜图，但还没补齐，建议继续刷新。'
 
   const step3Hint = !step3Enabled
-    ? '请先完成步骤 2：人物图上传完，并把当前范围的分镜图补齐。'
+    ? '先完成步骤 2：把当前范围需要的参考图补齐，并生成出可用分镜图。'
     : step3Running
-      ? '当前已经有视频任务在执行中。'
-      : !storyboardImagesReady
-        ? '当前还没有可用分镜图。'
+      ? '当前已经有视频任务在执行，先等这一轮结果。'
+      : completedStoryboardImages === 0
+        ? '当前范围还没有可用分镜图，所以现在不能提交视频。'
         : step3Done
-          ? '当前已经产出完整视频，可继续按需重生。'
-          : '当前可以提交视频生成。'
+          ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
+          : '当前范围已经有可用分镜图，可以开始提交视频任务。'
 
   useEffect(() => {
+    if (!realOptimizedScript) return
     setEditableOptimizedScript((prev) => {
       if (!prev.trim()) return realOptimizedScript
       if (prev.trim() === realOptimizedScript) return prev
-      if (!realOptimizedScript) return prev
+      if (step1Running) return prev
       return realOptimizedScript
     })
-  }, [realOptimizedScript])
+  }, [realOptimizedScript, step1Running])
 
   useEffect(() => {
     setEditableOriginalScript((prev) => {
@@ -454,6 +457,30 @@ export default function AdVideoHistoryDetailPage() {
       toast({ title: error instanceof Error ? error.message : '操作失败', variant: 'destructive' })
     } finally {
       setGenerationAction(null)
+    }
+  }
+
+  const saveAdCopyDraft = async () => {
+    setSavingCopyDraft(true)
+    try {
+      const res = await projectAPI.saveAdCopyDraft(projectId, {
+        original_script: editableOriginalScript.trim(),
+        optimization_prompt: editableOptimizationPrompt.trim(),
+        optimized_script: editableOptimizedScript.trim(),
+        persist_original: true,
+      })
+      const payload = unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
+      if (payload) {
+        setEditableOriginalScript(payload.original_script || '')
+        setEditableOptimizationPrompt(payload.optimization_prompt || '')
+        setEditableOptimizedScript(payload.optimized_script || '')
+      }
+      await refreshAll()
+      toast({ title: '已保存当前文案工作区', variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '保存文案失败', variant: 'destructive' })
+    } finally {
+      setSavingCopyDraft(false)
     }
   }
 
@@ -762,9 +789,14 @@ export default function AdVideoHistoryDetailPage() {
                         <div className="text-sm font-medium text-cyan-100">文案优化提示词</div>
                         <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。点击按钮后支持首次优化，也支持基于当前原文和当前提示词多次重新优化。</div>
                       </div>
-                      <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || pipelineBusy}>
-                        {optimizingCopy ? '优化中…' : realOptimizedScript ? '重新优化' : '开始优化'}
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || pipelineBusy}>
+                          {savingCopyDraft ? '保存中…' : '保存文案'}
+                        </Button>
+                        <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || savingCopyDraft || pipelineBusy}>
+                          {optimizingCopy ? '优化中…' : realOptimizedScript ? '重新优化' : '开始优化'}
+                        </Button>
+                      </div>
                     </div>
                     <Textarea
                       value={editableOptimizationPrompt}
@@ -936,47 +968,26 @@ export default function AdVideoHistoryDetailPage() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
+              <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
                   <div>流水线状态：{pipelineBusy ? '执行中' : '空闲'}</div>
                   <div>步骤 1：{stepLabel(step1Status)} / 步骤 2：{stepLabel(step2Status)} / 步骤 3：{stepLabel(step3Status)}</div>
                 </div>
-                <div className="grid gap-4 lg:grid-cols-[minmax(0,280px)_1fr]">
-                  <div className="space-y-2">
-                    <Label className="text-slate-200">当前处理范围</Label>
-                    <select
-                      value={selectedEpisodeId}
-                      onChange={(e) => setSelectedEpisodeId(e.target.value)}
-                      className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-                    >
-                      <option value="all">整项目（全部分集）</option>
-                      {episodes.map((episode) => (
-                        <option key={episode.id} value={String(episode.id)}>
-                          episode #{episode.episode_number} · {episode.title || '未命名片段'}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="text-[11px] text-slate-400">步骤 2 和步骤 3 将按这个范围执行；步骤 1 始终基于当前全文重拆分。</div>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
-                      <div className="text-xs text-slate-400">已拆出的分镜</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{displayStoryboards.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
-                      <div className="text-xs text-slate-400">已上传人物/素材图</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{uploadedScopeAssets}/{scopeAssets.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
-                      <div className="text-xs text-slate-400">已就绪分镜图</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{completedStoryboardImages}/{displayStoryboards.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
-                      <div className="text-xs text-slate-400">进行中视频任务</div>
-                      <div className="mt-2 text-2xl font-semibold text-white">{processingVideoTaskCount}</div>
-                    </div>
-                  </div>
+                <div className="space-y-2">
+                  <Label className="text-slate-200">当前处理范围</Label>
+                  <select
+                    value={selectedEpisodeId}
+                    onChange={(e) => setSelectedEpisodeId(e.target.value)}
+                    className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                  >
+                    <option value="all">整项目（全部分集）</option>
+                    {episodes.map((episode) => (
+                      <option key={episode.id} value={String(episode.id)}>
+                        episode #{episode.episode_number} · {episode.title || '未命名片段'}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-[11px] text-slate-400">这个范围只影响步骤 2 和步骤 3；步骤 1 始终基于当前全文重新拆分。</div>
                 </div>
               </div>
 
@@ -1066,7 +1077,7 @@ export default function AdVideoHistoryDetailPage() {
                   )}
 
                   <Button
-                    disabled={pipelineBusy || !editableOptimizedScript.trim() || !splitConfigReady}
+                    disabled={pipelineBusy || !(editableOptimizedScript.trim() || editableOriginalScript.trim()) || !splitConfigReady}
                     onClick={() => void rerunStoryboardPipeline()}
                   >
                     {rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按当前视频配置重拆分'}
@@ -1079,8 +1090,15 @@ export default function AdVideoHistoryDetailPage() {
 
                 <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
                   <div>
-                    <div className="text-sm font-medium text-violet-100">步骤 2：准备人物图 / 刷新分镜图</div>
-                    <div className="mt-1 text-xs text-violet-100/80">真实链路是：先生成可上传的人物 / 素材槽位，再上传参考图，最后刷新当前范围的分镜图。</div>
+                    <div className="text-sm font-medium text-violet-100">步骤 2：准备参考图并刷新分镜图</div>
+                    <div className="mt-1 text-xs text-violet-100/80">这一块只做三件事：先生成当前范围需要的素材槽位，再上传参考图，最后刷新这一范围的分镜图。</div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85 space-y-1">
+                    <div>当前范围：{scopeLabel}</div>
+                    <div>素材槽位：{scopeAssets.length} 个</div>
+                    <div>已上传参考图：{uploadedScopeAssets} / {scopeAssets.length}</div>
+                    <div>可用分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -1090,14 +1108,14 @@ export default function AdVideoHistoryDetailPage() {
                       disabled={pipelineBusy || !step2Enabled}
                       onClick={() => void triggerAssetExtraction()}
                     >
-                      {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '准备中…' : '先准备人物槽位'}
+                      {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
                     </Button>
                     <Button
                       size="sm"
                       disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
                       onClick={() => void triggerStoryboardImageGeneration()}
                     >
-                      {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '刷新中…' : '上传完成后刷新分镜图'}
+                      {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '正在刷新分镜图…' : '3）刷新当前范围分镜图'}
                     </Button>
                   </div>
 
@@ -1108,7 +1126,7 @@ export default function AdVideoHistoryDetailPage() {
                   <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
                     {scopeAssets.length === 0 ? (
                       <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
-                        当前范围还没有人物 / 素材槽位。先点“准备人物槽位”，再逐个上传参考图。
+                        当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
                       </div>
                     ) : scopeAssets.map((asset) => (
                       <div key={asset.id} className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
@@ -1121,7 +1139,7 @@ export default function AdVideoHistoryDetailPage() {
                             )}
                           </div>
                           <div className="text-[11px] text-violet-100/80">
-                            {String(asset.image_url || '').trim() ? '已上传参考图' : '待上传'}
+                            {String(asset.image_url || '').trim() ? '第 2 步已上传' : '第 2 步待上传'}
                           </div>
                         </div>
 
@@ -1134,7 +1152,7 @@ export default function AdVideoHistoryDetailPage() {
 
                         <div className="flex flex-wrap items-center gap-2">
                           <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
-                            {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '重新上传人物图' : '上传人物图'}
+                            {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '2）重新上传参考图' : '2）上传参考图'}
                             <input
                               type="file"
                               accept="image/*"
@@ -1143,7 +1161,7 @@ export default function AdVideoHistoryDetailPage() {
                               onChange={(event) => { void handleAssetUpload(asset.id, event) }}
                             />
                           </label>
-                          <div className="text-[11px] text-slate-400">建议按当前角色 / 物件的最终定稿图上传，后续再刷新分镜图。</div>
+                          <div className="text-[11px] text-slate-400">这里上传的是这轮分镜要参考的最终定稿图；上传完再点上面的“刷新当前范围分镜图”。</div>
                         </div>
                       </div>
                     ))}
@@ -1152,15 +1170,15 @@ export default function AdVideoHistoryDetailPage() {
 
                 <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
                   <div>
-                    <div className="text-sm font-medium text-emerald-100">步骤 3：用当前分镜图启动视频生成</div>
-                    <div className="mt-1 text-xs text-emerald-100/80">这里不会绕过前两步。当前范围必须至少有一批可用分镜图，才允许提交视频任务。</div>
+                    <div className="text-sm font-medium text-emerald-100">步骤 3：基于当前范围分镜图提交视频</div>
+                    <div className="mt-1 text-xs text-emerald-100/80">这里只有在当前范围已经有可用分镜图时才允许提交；人物图本身不会直接拿去生成视频。</div>
                   </div>
 
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-2">
-                    <div>当前模型：{selectedVideoModel || '未选择'}</div>
-                    <div>比例 / 分辨率 / 单分镜时长：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
+                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-1">
                     <div>当前范围：{scopeLabel}</div>
-                    <div>可用分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                    <div>目标模型：{selectedVideoModel || '未选择'}</div>
+                    <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
+                    <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                   </div>
 
                   <Button
@@ -1175,7 +1193,7 @@ export default function AdVideoHistoryDetailPage() {
                   </div>
 
                   <div className="text-[11px] text-emerald-100/75">
-                    视频生成真实读取的是分镜图 `image_url`、分镜文案、台词、镜头运动、人物 / 素材引用等字段；不是直接拿人物图就开跑。
+                    真正提交给视频服务的是当前范围内那些已经有 `image_url` 的分镜图，以及对应的分镜文案、台词、镜头运动、角色/素材引用等字段。
                   </div>
                 </div>
               </div>

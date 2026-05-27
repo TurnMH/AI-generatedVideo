@@ -438,6 +438,27 @@ func (h *EpisodeHandler) GetAdCopyOptimizationState(c *gin.Context) {
 	response.OK(c, payload)
 }
 
+// SaveAdCopyDraft —— 保存当前广告文案工作区（原文 / 提示词 / 优化稿）
+// PUT /api/v1/projects/:id/episodes/ad-copy-optimization
+func (h *EpisodeHandler) SaveAdCopyDraft(c *gin.Context) {
+	projectID, err := parseUint64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	var req service.AdCopySaveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	payload, err := h.svc.SaveAdCopyDraft(projectID, req)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.OK(c, payload)
+}
+
 // OptimizeAdCopy —— 用当前原文 + 提示词执行广告文案优化，可多次重跑
 // POST /api/v1/projects/:id/episodes/ad-copy-optimization
 func (h *EpisodeHandler) OptimizeAdCopy(c *gin.Context) {

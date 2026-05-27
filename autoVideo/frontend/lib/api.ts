@@ -131,6 +131,12 @@ export const projectAPI = {
   listEpisodes: (id: number) => api.get(`/api/v1/projects/${id}/episodes`),
   getAdCopyOptimizationState: (id: number) =>
     api.get<AdCopyOptimizationState>(`/api/v1/projects/${id}/episodes/ad-copy-optimization`),
+  saveAdCopyDraft: (id: number, data: {
+    original_script: string
+    optimization_prompt: string
+    optimized_script: string
+    persist_original?: boolean
+  }) => api.put<AdCopyOptimizationState>(`/api/v1/projects/${id}/episodes/ad-copy-optimization`, data),
   optimizeAdCopy: (id: number, data: {
     original_script: string
     optimization_prompt: string

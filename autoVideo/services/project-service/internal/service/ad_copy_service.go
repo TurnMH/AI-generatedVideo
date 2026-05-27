@@ -38,6 +38,13 @@ type AdCopyOptimizeRequest struct {
 	PersistOriginal    bool   `json:"persist_original"`
 }
 
+type AdCopySaveRequest struct {
+	OriginalScript     string `json:"original_script"`
+	OptimizationPrompt string `json:"optimization_prompt"`
+	OptimizedScript    string `json:"optimized_script"`
+	PersistOriginal    bool   `json:"persist_original"`
+}
+
 type AdCopyOptimizeResponse struct {
 	OriginalScript     string `json:"original_script"`
 	OptimizationPrompt string `json:"optimization_prompt"`
@@ -127,6 +134,48 @@ func (s *EpisodeService) updateAdCopyProgress(project *model.Project, originalSc
 	return nil
 }
 
+func (s *EpisodeService) saveAdCopyDraft(project *model.Project, originalScript, optimizationPrompt, optimizedScript string, keepConsistency string) error {
+	if project == nil {
+		return errors.New("project is nil")
+	}
+	var progress ProgressInfo
+	if len(project.Progress) > 0 {
+		_ = json.Unmarshal(project.Progress, &progress)
+	}
+	trimmedOriginal := strings.TrimSpace(originalScript)
+	trimmedPrompt := normalizeAdCopyPrompt(optimizationPrompt)
+	trimmedOptimized := strings.TrimSpace(optimizedScript)
+	trimmedConsistency := strings.TrimSpace(keepConsistency)
+	if progress.AutoSplit != nil && trimmedConsistency == "" {
+		trimmedConsistency = strings.TrimSpace(progress.AutoSplit.ConsistencyPremise)
+	}
+
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	meta := buildAutoSplitMeta(trimmedOptimized, runtimeCfg)
+	meta.Enabled = runtimeCfg.AutoSplitAfterOptimization
+	meta.VideoModel = runtimeCfg.VideoModel
+	meta.StylePreset = stylepreset.Canonical(runtimeCfg.StylePreset)
+	if meta.StylePreset == "" {
+		meta.StylePreset = stylepreset.Default
+	}
+	if runtimeCfg.Duration > 0 {
+		meta.Duration = runtimeCfg.Duration
+	}
+	meta.OriginalScript = trimmedOriginal
+	meta.OptimizedScript = trimmedOptimized
+	meta.ConsistencyPremise = trimmedConsistency
+	meta.ScriptLength = utf8.RuneCountInString(trimmedOptimized)
+	meta.OptimizationPrompt = trimmedPrompt
+
+	progress.AutoSplit = &meta
+	if progress.Stage == "" {
+		progress.Stage = "idle"
+	}
+	progress.UpdatedAt = ""
+	s.updateProgress(project.ID, progress)
+	return nil
+}
+
 func (s *EpisodeService) GetAdCopyOptimizationState(projectID uint64) (*AdCopyOptimizeResponse, error) {
 	project, err := s.projectRepo.FindByIDNoAuth(projectID)
 	if err != nil {
@@ -152,6 +201,46 @@ func (s *EpisodeService) GetAdCopyOptimizationState(projectID uint64) (*AdCopyOp
 		OptimizedScript:    optimized,
 		ConsistencyPremise: consistency,
 		ScriptLength:       utf8.RuneCountInString(optimized),
+	}, nil
+}
+
+func (s *EpisodeService) SaveAdCopyDraft(projectID uint64, req AdCopySaveRequest) (*AdCopyOptimizeResponse, error) {
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %w", err)
+	}
+	if err := s.hydrateScriptTextIfNeeded(project); err != nil {
+		return nil, err
+	}
+	originalScript := strings.TrimSpace(req.OriginalScript)
+	if originalScript == "" {
+		originalScript = strings.TrimSpace(project.ScriptText)
+	}
+	prompt := normalizeAdCopyPrompt(req.OptimizationPrompt)
+	optimizedScript := strings.TrimSpace(req.OptimizedScript)
+
+	if err := s.persistAdCopyOptimizationPrompt(project, prompt); err != nil {
+		return nil, err
+	}
+	if req.PersistOriginal {
+		project.ScriptText = originalScript
+		if err := s.projectRepo.Update(project); err != nil {
+			return nil, err
+		}
+	}
+	var progress ProgressInfo
+	if len(project.Progress) > 0 {
+		_ = json.Unmarshal(project.Progress, &progress)
+	}
+	if err := s.saveAdCopyDraft(project, originalScript, prompt, optimizedScript, progress.AutoSplit.GetConsistencyPremise()); err != nil {
+		return nil, err
+	}
+	return &AdCopyOptimizeResponse{
+		OriginalScript:     originalScript,
+		OptimizationPrompt: prompt,
+		OptimizedScript:    optimizedScript,
+		ConsistencyPremise: progress.AutoSplit.GetConsistencyPremise(),
+		ScriptLength:       utf8.RuneCountInString(optimizedScript),
 	}, nil
 }
 

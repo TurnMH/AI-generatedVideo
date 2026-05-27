@@ -183,6 +183,7 @@ func main() {
 
 		projects.GET("/:id/episodes", episodeHandler.ListEpisodes)
 		projects.GET("/:id/episodes/ad-copy-optimization", episodeHandler.GetAdCopyOptimizationState)
+		projects.PUT("/:id/episodes/ad-copy-optimization", episodeHandler.SaveAdCopyDraft)
 		projects.POST("/:id/episodes/ad-copy-optimization", episodeHandler.OptimizeAdCopy)
 		projects.POST("/:id/episodes", episodeHandler.CreateEpisode)
 		projects.POST("/:id/episodes/generate", episodeHandler.GenerateEpisodes)
