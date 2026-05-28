@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -40,6 +41,8 @@ type EpisodeService struct {
 	characterBaseURL string
 	scriptBaseURL    string // for fetching PromptTemplates
 	videoBaseURL     string // for cascade-deleting video tasks on episode delete
+	modelServiceBaseURL string
+	authServiceBaseURL  string
 	jwtSecret        string
 	httpClient       *http.Client
 	llmBaseURL       string
@@ -48,6 +51,31 @@ type EpisodeService struct {
 	storageBaseURL   string
 	auditor          *PromptAuditorService // prompt dedup + sensitive word + LLM review
 	logger           *zap.Logger
+}
+
+type projectLLMConfig struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+	Source  string
+}
+
+type remoteModelConfig struct {
+	ID          uint64  `json:"id"`
+	Provider    string  `json:"provider"`
+	Type        string  `json:"type"`
+	APIEndpoint string  `json:"api_endpoint"`
+	ModelKey    string  `json:"model_key"`
+	APIKeyRef   *string `json:"api_key_ref,omitempty"`
+	Name        string  `json:"name"`
+}
+
+type serviceRuntimeAPIKey struct {
+	Provider   string `json:"provider"`
+	KeyAlias   string `json:"key_alias"`
+	PlainKey   string `json:"plain_key"`
+	BaseURL    string `json:"base_url"`
+	ModelScope string `json:"model_scope"`
 }
 
 type episodeContextKey string
@@ -121,6 +149,115 @@ func (s *EpisodeService) SetScriptService(baseURL string) {
 // can cascade-delete associated VideoTask/DubbingTask records.
 func (s *EpisodeService) SetVideoService(baseURL string) {
 	s.videoBaseURL = strings.TrimRight(baseURL, "/")
+}
+
+func (s *EpisodeService) SetServiceEndpoints(modelBaseURL, authBaseURL, jwtSecret string) {
+	s.modelServiceBaseURL = strings.TrimRight(modelBaseURL, "/")
+	s.authServiceBaseURL = strings.TrimRight(authBaseURL, "/")
+	if strings.TrimSpace(jwtSecret) != "" {
+		s.jwtSecret = jwtSecret
+	}
+}
+
+func (s *EpisodeService) resolveProjectLLMConfig(ctx context.Context, project *model.Project) projectLLMConfig {
+	cfg := projectLLMConfig{BaseURL: s.llmBaseURL, APIKey: s.llmAPIKey, Model: s.llmModel, Source: "default"}
+	if project == nil || project.TextModelID == nil || *project.TextModelID == 0 || s.modelServiceBaseURL == "" || s.authServiceBaseURL == "" || s.jwtSecret == "" {
+		return cfg
+	}
+	modelMeta, err := s.fetchRemoteModel(ctx, *project.TextModelID)
+	if err != nil {
+		if s.logger != nil { s.logger.Warn("resolve project text model failed", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.Error(err)) }
+		return cfg
+	}
+	if strings.TrimSpace(modelMeta.Type) != "" && strings.TrimSpace(modelMeta.Type) != "llm" {
+		return cfg
+	}
+	keys, err := s.fetchRuntimeAPIKeys(ctx)
+	if err != nil {
+		if s.logger != nil { s.logger.Warn("fetch runtime api keys for project text model failed", zap.Uint64("project_id", project.ID), zap.Error(err)) }
+		return cfg
+	}
+	selected := matchRuntimeKeyForModel(keys, modelMeta)
+	if selected == nil {
+		if s.logger != nil { s.logger.Warn("no runtime key matched project text model", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.String("provider", modelMeta.Provider), zap.String("model_key", modelMeta.ModelKey)) }
+		return cfg
+	}
+	if strings.TrimSpace(modelMeta.APIEndpoint) != "" {
+		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(modelMeta.APIEndpoint), "/")
+	} else if strings.TrimSpace(selected.BaseURL) != "" {
+		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(selected.BaseURL), "/")
+	}
+	if strings.TrimSpace(modelMeta.ModelKey) != "" {
+		cfg.Model = strings.TrimSpace(modelMeta.ModelKey)
+	}
+	cfg.APIKey = strings.TrimSpace(selected.PlainKey)
+	cfg.Source = fmt.Sprintf("project.text_model_id=%d", *project.TextModelID)
+	return cfg
+}
+
+func (s *EpisodeService) fetchRemoteModel(ctx context.Context, id uint64) (*remoteModelConfig, error) {
+	token, err := s.buildServiceToken(0)
+	if err != nil { return nil, err }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/models/%d", s.modelServiceBaseURL, id), nil)
+	if err != nil { return nil, err }
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil { return nil, err }
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest { return nil, fmt.Errorf("model service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))) }
+	var payload struct { Data remoteModelConfig `json:"data"` }
+	if err := json.Unmarshal(body, &payload); err != nil { return nil, err }
+	return &payload.Data, nil
+}
+
+func (s *EpisodeService) fetchRuntimeAPIKeys(ctx context.Context) ([]serviceRuntimeAPIKey, error) {
+	token, err := s.buildServiceToken(0)
+	if err != nil { return nil, err }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.authServiceBaseURL+"/internal/runtime-api-keys", nil)
+	if err != nil { return nil, err }
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil { return nil, err }
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest { return nil, fmt.Errorf("auth service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))) }
+	var payload struct { Data []serviceRuntimeAPIKey `json:"data"` }
+	if err := json.Unmarshal(body, &payload); err != nil { return nil, err }
+	return payload.Data, nil
+}
+
+func matchRuntimeKeyForModel(keys []serviceRuntimeAPIKey, modelMeta *remoteModelConfig) *serviceRuntimeAPIKey {
+	if modelMeta == nil { return nil }
+	ref := ""
+	if modelMeta.APIKeyRef != nil { ref = strings.TrimSpace(*modelMeta.APIKeyRef) }
+	provider := strings.ToLower(strings.TrimSpace(modelMeta.Provider))
+	for i := range keys {
+		key := &keys[i]
+		if ref != "" && strings.Contains(strings.ToLower(strings.TrimSpace(key.KeyAlias)), strings.ToLower(ref)) { return key }
+	}
+	for i := range keys {
+		key := &keys[i]
+		kp := strings.ToLower(strings.TrimSpace(key.Provider))
+		if provider == "" { continue }
+		if strings.Contains(kp, "."+provider) || strings.HasSuffix(kp, provider) || providerMatchesEndpoint(provider, modelMeta.APIEndpoint, key.BaseURL) { return key }
+	}
+	for i := range keys {
+		key := &keys[i]
+		if strings.TrimSpace(key.PlainKey) != "" { return key }
+	}
+	return nil
+}
+
+func providerMatchesEndpoint(provider, modelEndpoint, runtimeBase string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" { return false }
+	for _, raw := range []string{modelEndpoint, runtimeBase} {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err == nil && strings.Contains(strings.ToLower(u.Host), provider) { return true }
+		if strings.Contains(strings.ToLower(strings.TrimSpace(raw)), provider) { return true }
+	}
+	return false
 }
 
 func (s *EpisodeService) autoAssetPipelineReady() bool {
@@ -671,6 +808,7 @@ func adWorkbenchPromptDirective() string {
 }
 
 func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string, customPrompt string) (*optimizedAdScriptResult, error) {
+	llmCfg := s.resolveProjectLLMConfig(ctx, project)
 	trimmed := strings.TrimSpace(scriptText)
 	if trimmed == "" {
 		return nil, errors.New("empty script text")
@@ -684,7 +822,7 @@ func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, 
 	userPrompt := s.buildDefaultAdCopyUserPrompt(project, trimmed)
 
 	reqBody := map[string]interface{}{
-		"model": s.llmModel,
+		"model": llmCfg.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userPrompt},
@@ -694,12 +832,12 @@ func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, 
 		"response_format": map[string]string{"type": "json_object"},
 	}
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmCfg.BaseURL+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+	req.Header.Set("Authorization", "Bearer "+llmCfg.APIKey)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("LLM request: %w", err)
@@ -1300,7 +1438,8 @@ func (s *EpisodeService) fetchScriptPrepSkillHints(ctx context.Context, projectI
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "storyboard_prep")
 }
 
-func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string, adDirective string) string {
+func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project *model.Project, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string, adDirective string) string {
+	llmCfg := s.resolveProjectLLMConfig(ctx, project)
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
@@ -1362,7 +1501,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 	}
 
 	reqBody := map[string]interface{}{
-		"model": s.llmModel,
+		"model": llmCfg.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": fmt.Sprintf("请对第 %d 集剧本进行分镜预处理优化，添加视觉标注后返回优化后的脚本。必须显式补齐并澄清：世界观/视觉宇宙、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容，以及最终给 AI 使用的视觉生成描述边界。\n\n%s", episodeNum, content)},
@@ -1374,12 +1513,12 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, content
 
 	prepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(prepCtx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(prepCtx, http.MethodPost, llmCfg.BaseURL+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return content
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+llmCfg.APIKey)
 
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
@@ -2522,7 +2661,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			// Pre-optimization: run a professional storyboard-prep pass before scene splitting
 			// to add explicit visual markers, camera suggestions and pacing cues.
 			_ = s.episodeRepo.UpdateStatus(epID, "script_prepping")
-			optimized := s.prepareScriptForStoryboard(ctx, epContent, epNum, kwLib, projectType, prepSkillHints, adDirective)
+			optimized := s.prepareScriptForStoryboard(ctx, nil, epContent, epNum, kwLib, projectType, prepSkillHints, adDirective)
 			if s.logger != nil && optimized != epContent {
 				s.logger.Info("script prep optimization applied",
 					zap.Int("episode", epNum),
