@@ -735,7 +735,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
       const filenameBase = (project?.title || `ad-project-${projectId}`).trim() || `ad-project-${projectId}`
       const file = new File([scriptText], `${filenameBase}-pipeline.txt`, { type: 'text/plain' })
       await projectAPI.uploadScript(projectId, file)
-      await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
+      await projectAPI.generateEpisodes(projectId, undefined, { rebuild: true, autoStoryboard: true })
       await refreshAll()
       toast({
         title: '已按当前文本模型，并参考所选视频时长约束，重跑“文本拆分 → 分镜文本”',

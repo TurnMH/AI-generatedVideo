@@ -148,11 +148,12 @@ export const projectAPI = {
   generateEpisodes: (
     id: number,
     keywords?: { characters?: string[]; locations?: string[]; events?: string[]; props?: string[]; split_keywords?: string[] },
-    options?: { force?: boolean; autoStoryboard?: boolean }
+    options?: { force?: boolean; rebuild?: boolean; autoStoryboard?: boolean }
   ) =>
     api.post(`/api/v1/projects/${id}/episodes/generate`, {
       ...(keywords ? { keywords } : {}),
       ...(options?.force ? { force: true } : {}),
+      ...(options?.rebuild ? { rebuild: true } : {}),
       ...(options?.autoStoryboard ? { auto_storyboard: true } : {}),
     }),
   updateEpisode: (id: number, eid: number, data: Partial<Episode>) =>

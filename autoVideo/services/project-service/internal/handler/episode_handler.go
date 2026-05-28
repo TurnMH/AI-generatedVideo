@@ -233,6 +233,7 @@ func (h *EpisodeHandler) GenerateEpisodes(c *gin.Context) {
 	var body struct {
 		Keywords       *service.KeywordLibrary `json:"keywords,omitempty"`
 		Force          bool                    `json:"force,omitempty"`
+		Rebuild        bool                    `json:"rebuild,omitempty"`
 		AutoStoryboard bool                    `json:"auto_storyboard,omitempty"`
 	}
 	_ = c.ShouldBindJSON(&body) // ignore errors — body is optional
@@ -253,7 +254,7 @@ func (h *EpisodeHandler) GenerateEpisodes(c *gin.Context) {
 			alreadyRunning = false
 		}
 	}
-	if alreadyRunning && !body.Force {
+	if alreadyRunning && !body.Force && !body.Rebuild {
 		h.genMu.Unlock()
 		response.Fail(c, http.StatusConflict, 409, "该项目正在生成集数，请勿重复提交")
 		return
@@ -274,7 +275,7 @@ func (h *EpisodeHandler) GenerateEpisodes(c *gin.Context) {
 			response.InternalError(c, "failed to inspect stalled progress: "+err.Error())
 			return
 		}
-		if !stalled {
+		if !stalled && !body.Rebuild {
 			if !alreadyRunning {
 				h.genMu.Lock()
 				delete(h.genRunning, projectID)
@@ -298,7 +299,7 @@ func (h *EpisodeHandler) GenerateEpisodes(c *gin.Context) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
 		defer cancel()
-		_, _ = h.svc.GenerateFromScriptWithOptions(ctx, projectID, body.Keywords, body.Force, body.AutoStoryboard)
+		_, _ = h.svc.GenerateFromScriptWithOptions(ctx, projectID, body.Keywords, body.Force || body.Rebuild, body.AutoStoryboard)
 	}()
 
 	response.OK(c, gin.H{

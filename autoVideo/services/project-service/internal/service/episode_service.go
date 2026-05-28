@@ -1807,6 +1807,10 @@ func (s *EpisodeService) GenerateFromScriptWithOptions(ctx context.Context, proj
 		progressMessage = "服务恢复后已重新开始分集生成…"
 		phaseLabel = "已自动恢复分集生成"
 		nextStep = "系统会重新分析剧本并恢复分集结构，完成后自动进入后续剧本准备流程"
+	} else if force {
+		progressMessage = "已按当前最新文本重新开始分集拆分…"
+		phaseLabel = "按最新文本重建中"
+		nextStep = "系统会清空旧分集结果，并基于当前原文 / 优化稿重新生成新的分集结构"
 	}
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
