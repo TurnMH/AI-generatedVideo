@@ -720,12 +720,40 @@ func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, 
 
 // updateProgress —— 将进度信息序列化并持久化到项目的 progress 字段
 func (s *EpisodeService) updateProgress(projectID uint64, info ProgressInfo) {
+	var previous ProgressInfo
+	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil && len(project.Progress) > 0 {
+		_ = json.Unmarshal(project.Progress, &previous)
+	}
+	if info.Stage == "" {
+		info.Stage = previous.Stage
+	}
+	if info.Message == "" {
+		info.Message = previous.Message
+	}
+	if info.PhaseLabel == "" {
+		info.PhaseLabel = previous.PhaseLabel
+	}
+	if info.NextStep == "" {
+		info.NextStep = previous.NextStep
+	}
+	if info.CurrentEpisode == 0 {
+		info.CurrentEpisode = previous.CurrentEpisode
+	}
+	if info.TotalEpisodes == 0 {
+		info.TotalEpisodes = previous.TotalEpisodes
+	}
+	if info.EpisodeSplit == nil {
+		info.EpisodeSplit = previous.EpisodeSplit
+	}
+	if info.SceneSplit == nil {
+		info.SceneSplit = previous.SceneSplit
+	}
+	if info.AutoSplit == nil {
+		info.AutoSplit = previous.AutoSplit
+	}
 	if info.StartedAt == "" {
-		if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil && len(project.Progress) > 0 {
-			var previous ProgressInfo
-			if err := json.Unmarshal(project.Progress, &previous); err == nil && previous.Stage == info.Stage {
-				info.StartedAt = previous.StartedAt
-			}
+		if previous.Stage == info.Stage {
+			info.StartedAt = previous.StartedAt
 		}
 	}
 	if info.StartedAt == "" {
