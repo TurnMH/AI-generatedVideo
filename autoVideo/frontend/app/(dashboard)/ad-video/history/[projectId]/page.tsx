@@ -245,6 +245,10 @@ export default function AdVideoHistoryDetailPage() {
     () => String(adCopyState?.optimized_script || autoSplit?.optimized_script || '').trim(),
     [adCopyState?.optimized_script, autoSplit?.optimized_script],
   )
+  const displayedOptimizedScript = useMemo(
+    () => editableOptimizedScript.trim() || realOptimizedScript,
+    [editableOptimizedScript, realOptimizedScript],
+  )
   const realOriginalScript = useMemo(
     () => String(adCopyState?.original_script || autoSplit?.original_script || project?.script_text || '').trim(),
     [adCopyState?.original_script, autoSplit?.original_script, project?.script_text],
@@ -557,7 +561,7 @@ export default function AdVideoHistoryDetailPage() {
         setEditableOptimizedScript(payload.optimized_script || '')
       }
       await refreshAll()
-      toast({ title: realOptimizedScript ? '已按当前提示词重新优化文案' : '已完成首次文案优化', variant: 'success' })
+      toast({ title: displayedOptimizedScript ? '已按当前提示词重新优化文案' : '已完成首次文案优化', variant: 'success' })
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '文案优化失败', variant: 'destructive' })
     } finally {
@@ -839,7 +843,7 @@ export default function AdVideoHistoryDetailPage() {
             <CardContent>
               <Tabs defaultValue="copy" className="space-y-4">
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
-                  <TabsTrigger value="copy">文案 · {realOptimizedScript.length} 字 / {episodes.length} 集</TabsTrigger>
+                  <TabsTrigger value="copy">文案 · {displayedOptimizedScript.length} 字 / {episodes.length} 集</TabsTrigger>
                   <TabsTrigger value="storyboard">分镜 · {displayStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
                   <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
                 </TabsList>
@@ -856,7 +860,7 @@ export default function AdVideoHistoryDetailPage() {
                           {savingCopyDraft ? '保存中…' : '保存文案'}
                         </Button>
                         <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || savingCopyDraft || pipelineBusy}>
-                          {optimizingCopy ? '优化中…' : realOptimizedScript ? '重新优化' : '开始优化'}
+                          {optimizingCopy ? '优化中…' : displayedOptimizedScript ? '重新优化' : '开始优化'}
                         </Button>
                       </div>
                     </div>
@@ -875,9 +879,9 @@ export default function AdVideoHistoryDetailPage() {
                           <div className="text-sm font-medium text-white">优化后的文案</div>
                           <div className="mt-1 text-[11px] text-emerald-200/75">这里固定放真正的优化稿，真实来源仍是 `project.progress.auto_split.optimized_script`。</div>
                         </div>
-                        <div className="text-[11px] text-emerald-200/75">{editableOptimizedScript.trim().length || realOptimizedScript.length} 字</div>
+                        <div className="text-[11px] text-emerald-200/75">{displayedOptimizedScript.length} 字</div>
                       </div>
-                      {realOptimizedScript ? (
+                      {displayedOptimizedScript ? (
                         <Textarea
                           value={editableOptimizedScript}
                           onChange={(e) => setEditableOptimizedScript(e.target.value)}
