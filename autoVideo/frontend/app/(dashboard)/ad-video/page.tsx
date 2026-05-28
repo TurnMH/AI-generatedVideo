@@ -149,6 +149,20 @@ export default function AdVideoWorkbenchPage() {
   const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
 
   useEffect(() => {
+    if (!textModels.length) return
+    const currentId = Number(workflowForm.textModelId)
+    if (Number.isFinite(currentId) && currentId > 0 && textModels.some((item) => item.id === currentId)) return
+    setWorkflowForm((prev) => ({ ...prev, textModelId: String(textModels[0]?.id || 'default') }))
+  }, [textModels, workflowForm.textModelId])
+
+  useEffect(() => {
+    if (!imageModels.length) return
+    const currentId = Number(workflowForm.imageModelId)
+    if (Number.isFinite(currentId) && currentId > 0 && imageModels.some((item) => item.id === currentId)) return
+    setWorkflowForm((prev) => ({ ...prev, imageModelId: String(imageModels[0]?.id || 'default') }))
+  }, [imageModels, workflowForm.imageModelId])
+
+  useEffect(() => {
     if (!creatableVideoModels.length) return
     const currentId = Number(workflowForm.videoModelId)
     if (Number.isFinite(currentId) && currentId > 0 && creatableVideoModels.some((item) => item.id === currentId)) return
@@ -190,6 +204,16 @@ export default function AdVideoWorkbenchPage() {
     }
     if (!workflowForm.scriptText.trim()) {
       toast({ title: '请先填写广告文案，再开始创建与优化', variant: 'destructive' })
+      return
+    }
+    const textModelIdNum = Number(workflowForm.textModelId)
+    if (!Number.isFinite(textModelIdNum) || textModelIdNum <= 0) {
+      toast({ title: '请先选择文本模型', variant: 'destructive' })
+      return
+    }
+    const imageModelIdNum = Number(workflowForm.imageModelId)
+    if (!Number.isFinite(imageModelIdNum) || imageModelIdNum <= 0) {
+      toast({ title: '请先选择图片模型', variant: 'destructive' })
       return
     }
     if (!selectedVideoModel) {
