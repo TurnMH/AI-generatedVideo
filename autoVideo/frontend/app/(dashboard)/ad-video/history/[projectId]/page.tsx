@@ -416,10 +416,10 @@ export default function AdVideoHistoryDetailPage() {
     setEditableOptimizedScript((prev) => {
       if (!prev.trim()) return realOptimizedScript
       if (prev.trim() === realOptimizedScript) return prev
-      if (step1Running) return prev
+      if (step1Running || optimizingCopy) return prev
       return realOptimizedScript
     })
-  }, [realOptimizedScript, step1Running])
+  }, [realOptimizedScript, step1Running, optimizingCopy])
 
   useEffect(() => {
     setEditableOriginalScript((prev) => {
@@ -441,20 +441,18 @@ export default function AdVideoHistoryDetailPage() {
 
   useEffect(() => {
     if (!availableModels.length) return
-    setSelectedVideoModel((prev) => {
-      if (prev && availableModels.some((item) => item.key === prev)) return prev
-      const preferred = String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim()
-      if (preferred && availableModels.some((item) => item.key === preferred)) {
-        setVideoModelMismatch('')
-        return preferred
-      }
-      if (preferred) {
-        setVideoModelMismatch(preferred)
-      } else {
-        setVideoModelMismatch('')
-      }
-      return availableModels[0]?.key || ''
-    })
+    const preferred = String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim()
+    if (preferred && availableModels.some((item) => item.key === preferred)) {
+      setVideoModelMismatch('')
+      setSelectedVideoModel(preferred)
+      return
+    }
+    if (preferred) {
+      setVideoModelMismatch(preferred)
+    } else {
+      setVideoModelMismatch('')
+    }
+    setSelectedVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : availableModels[0]?.key || ''))
   }, [availableModels, project?.storyboard_config?.video_model, autoSplit?.video_model])
 
   useEffect(() => {
@@ -558,7 +556,7 @@ export default function AdVideoHistoryDetailPage() {
       if (payload) {
         setEditableOriginalScript(payload.original_script || originalScript)
         setEditableOptimizationPrompt(payload.optimization_prompt || optimizationPrompt)
-        setEditableOptimizedScript(payload.optimized_script || '')
+        setEditableOptimizedScript(String(payload.optimized_script || '').trim())
       }
       await refreshAll()
       toast({ title: displayedOptimizedScript ? '已按当前提示词重新优化文案' : '已完成首次文案优化', variant: 'success' })
