@@ -186,6 +186,8 @@ export default function AdVideoHistoryDetailPage() {
   const [selectedDuration, setSelectedDuration] = useState('')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
   const [videoModelMismatch, setVideoModelMismatch] = useState('')
+  const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
+  const [focusedStoryboardId, setFocusedStoryboardId] = useState<number | null>(null)
 
   const { data: projectData, mutate: mutateProject, isLoading } = useSWR(projectId ? ['ad-video-history-project', projectId] : null, async () => {
     const res = await projectAPI.get(projectId)
@@ -376,6 +378,16 @@ export default function AdVideoHistoryDetailPage() {
     }
     return map
   }, [displayStoryboards, scopeAssets, assets])
+
+  const focusedStoryboardIds = useMemo(() => {
+    if (focusedAssetId == null) return new Set<number>()
+    return new Set((assetToStoryboardMap.get(focusedAssetId) || []).map((storyboard) => storyboard.id))
+  }, [assetToStoryboardMap, focusedAssetId])
+
+  const focusedAssetIds = useMemo(() => {
+    if (focusedStoryboardId == null) return new Set<number>()
+    return new Set((storyboardAssetDetailMap.get(focusedStoryboardId) || []).map((asset) => asset.id))
+  }, [storyboardAssetDetailMap, focusedStoryboardId])
 
   const storyboardScopeReady = displayStoryboards.length > 0
   const assetScopeReady = scopeAssets.length > 0
@@ -1244,7 +1256,15 @@ export default function AdVideoHistoryDetailPage() {
                               当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
                             </div>
                           ) : scopeAssets.map((asset) => (
-                            <div key={asset.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-3 space-y-3">
+                            <button
+                              key={asset.id}
+                              type="button"
+                              onClick={() => {
+                                setFocusedAssetId((prev) => (prev === asset.id ? null : asset.id))
+                                setFocusedStoryboardId(null)
+                              }}
+                              className={`w-full rounded-lg border p-3 text-left space-y-3 transition ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-cyan-400/40 bg-cyan-500/10 ring-1 ring-cyan-400/30' : 'border-white/10 bg-slate-950/40 hover:bg-white/5'}`}
+                            >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1">
                                   <div className="text-sm font-medium text-white">#{asset.id} · {asset.name || '未命名素材'}</div>
@@ -1270,7 +1290,7 @@ export default function AdVideoHistoryDetailPage() {
                                 <div className="space-y-3">
                                   <div className="flex flex-wrap gap-1">
                                     {(assetToStoryboardMap.get(asset.id) || []).length > 0 ? (assetToStoryboardMap.get(asset.id) || []).map((storyboard) => (
-                                      <span key={`asset-${asset.id}-storyboard-${storyboard.id}`} className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100">
+                                      <span key={`asset-${asset.id}-storyboard-${storyboard.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-300/40 bg-cyan-400/20 text-cyan-50' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
                                         分镜 #{storyboard.sequence_number}
                                       </span>
                                     )) : (
@@ -1285,12 +1305,12 @@ export default function AdVideoHistoryDetailPage() {
                                       accept="image/*"
                                       className="hidden"
                                       disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
-                                      onChange={(event) => { void handleAssetUpload(asset.id, event) }}
+                                      onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
                                     />
                                   </label>
                                 </div>
                               </div>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -1307,7 +1327,15 @@ export default function AdVideoHistoryDetailPage() {
                               {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜记录。'}
                             </div>
                           ) : displayStoryboards.map((storyboard) => (
-                            <div key={storyboard.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-3 space-y-3">
+                            <button
+                              key={storyboard.id}
+                              type="button"
+                              onClick={() => {
+                                setFocusedStoryboardId((prev) => (prev === storyboard.id ? null : storyboard.id))
+                                setFocusedAssetId(null)
+                              }}
+                              className={`w-full rounded-lg border p-3 text-left space-y-3 transition ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-violet-400/40 bg-violet-500/10 ring-1 ring-violet-400/30' : 'border-white/10 bg-slate-950/40 hover:bg-white/5'}`}
+                            >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1">
                                   <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number}</div>
@@ -1323,7 +1351,10 @@ export default function AdVideoHistoryDetailPage() {
                                     variant="outline"
                                     className="h-7 rounded-lg border-violet-400/30 bg-violet-500/10 px-2 text-[11px] text-violet-100 hover:bg-violet-500/20"
                                     disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0 || step2Running}
-                                    onClick={() => void regenerateSingleStoryboardImage(storyboard.id, storyboard.sequence_number)}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      void regenerateSingleStoryboardImage(storyboard.id, storyboard.sequence_number)
+                                    }}
                                   >
                                     重新生成
                                   </Button>
@@ -1345,7 +1376,7 @@ export default function AdVideoHistoryDetailPage() {
                                 <div className="space-y-3">
                                   <div className="flex flex-wrap gap-1">
                                     {(storyboardAssetDetailMap.get(storyboard.id) || []).length > 0 ? (storyboardAssetDetailMap.get(storyboard.id) || []).map((asset) => (
-                                      <span key={`storyboard-${storyboard.id}-asset-${asset.id}`} className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-100">
+                                      <span key={`storyboard-${storyboard.id}-asset-${asset.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-violet-300/40 bg-violet-400/20 text-violet-50' : 'border-violet-400/20 bg-violet-500/10 text-violet-100'}`}>
                                         #{asset.id} {asset.name || '未命名素材'}
                                       </span>
                                     )) : (
@@ -1365,7 +1396,7 @@ export default function AdVideoHistoryDetailPage() {
                                   </div>
                                 </div>
                               </div>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       </div>
