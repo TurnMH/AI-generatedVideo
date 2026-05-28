@@ -1213,19 +1213,37 @@ ${custom}` : storyboardSplitBuiltinPrompt
                     </div>
                   )}
 
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <div className="flex items-center justify-between gap-3">
                       <Label className="text-slate-100">分镜拆分提示词</Label>
                       <span className="text-[11px] text-cyan-100/75">就在开始步骤 1 之前修改；保存后会在下次重跑时生效</span>
                     </div>
-                    <Textarea
-                      value={editableStoryboardSplitPrompt}
-                      onChange={(event) => setEditableStoryboardSplitPrompt(event.target.value)}
-                      className="min-h-[180px] border-white/10 bg-black/20 text-slate-100"
-                      placeholder="这里填写项目级分镜拆分补充规则，例如：同一段口播尽量合并、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
-                    />
+
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-medium text-cyan-100/85">步骤 1 内置分镜拆分规则（只读）</div>
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-[11px] text-cyan-50 whitespace-pre-wrap break-words">{storyboardSplitBuiltinPrompt}</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[11px] font-medium text-slate-200">项目级补充规则（可编辑）</div>
+                        <span className="text-[11px] text-slate-400">只保存你额外追加的规则，不覆盖系统底座</span>
+                      </div>
+                      <Textarea
+                        value={editableStoryboardSplitPrompt}
+                        onChange={(event) => setEditableStoryboardSplitPrompt(event.target.value)}
+                        className="min-h-[180px] border-white/10 bg-black/20 text-slate-100"
+                        placeholder="这里填写项目级分镜拆分补充规则，例如：同一段口播尽量合并、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-medium text-emerald-100/85">本次实际生效预览</div>
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-[11px] text-emerald-50 whitespace-pre-wrap break-words">{storyboardSplitPromptPreview}</div>
+                    </div>
+
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-slate-300">
-                      {adCopyState?.storyboard_split_prompt_hint || '这里展示并编辑“步骤 1 文本重拆分前，给分镜拆分模型的附加规则”。系统内置广告口播拆分规则仍会保留；你在这里写的是项目级补充规则。'}
+                      {adCopyState?.storyboard_split_prompt_hint || '上方已拆成两层：步骤 1 内置分镜拆分规则（只读） + 项目级补充规则（可编辑）。最下方绿色区域展示的是本次真正会生效的完整“步骤 1 分镜拆分提示词”预览。'}
                     </div>
                   </div>
 
