@@ -1034,20 +1034,23 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         </div>
                       )}
                       <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium text-violet-200">台词 / 口播</div>
+                            <div className="text-[11px] text-violet-200/75">目标时长：{storyboard.duration || '-'} 秒</div>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                        </div>
                         <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
                           <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
                           <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
-                        </div>
-                        <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
-                          <div className="mb-2 text-xs font-medium text-violet-200">台词</div>
-                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
                         </div>
                       </div>
                       <div className="grid gap-2 text-xs text-slate-400 md:grid-cols-4">
                         <div>location：{storyboard.location || '-'}</div>
                         <div>camera：{storyboard.camera_movement || '-'}</div>
-                        <div>duration：{storyboard.duration || '-'} 秒</div>
                         <div>asset_ids：{storyboard.asset_ids?.length ? storyboard.asset_ids.join(', ') : '-'}</div>
+                        <div>状态：{storyboard.status || '-'}</div>
                       </div>
                     </div>
                   ))}
