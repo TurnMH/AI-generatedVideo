@@ -1186,6 +1186,22 @@ export default function AdVideoHistoryDetailPage() {
                     </div>
                   )}
 
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label className="text-slate-100">分镜拆分提示词</Label>
+                      <span className="text-[11px] text-cyan-100/75">就在开始步骤 1 之前修改；保存后会在下次重跑时生效</span>
+                    </div>
+                    <Textarea
+                      value={editableStoryboardSplitPrompt}
+                      onChange={(event) => setEditableStoryboardSplitPrompt(event.target.value)}
+                      className="min-h-[180px] border-white/10 bg-black/20 text-slate-100"
+                      placeholder="这里填写项目级分镜拆分补充规则，例如：同一段口播尽量合并、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
+                    />
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-slate-300">
+                      {adCopyState?.storyboard_split_prompt_hint || '这里展示并编辑“步骤 1 文本重拆分前，给分镜拆分模型的附加规则”。系统内置广告口播拆分规则仍会保留；你在这里写的是项目级补充规则。'}
+                    </div>
+                  </div>
+
                   <div className="flex flex-wrap items-center gap-3">
                     <Button
                       disabled={pipelineBusy || step1Running || !editableOriginalScript.trim() || !splitConfigReady}
