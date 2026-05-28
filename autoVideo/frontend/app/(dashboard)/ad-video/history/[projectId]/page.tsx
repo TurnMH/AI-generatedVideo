@@ -259,6 +259,20 @@ export default function AdVideoHistoryDetailPage() {
   const episodes = (episodesData || []).slice().sort((a, b) => a.episode_number - b.episode_number)
   const storyboards = (storyboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
   const tasks = useMemo(() => taskData || [], [taskData])
+  const textModelOptions = useMemo(() => {
+    const base = (textModels || []).map((item) => ({
+      id: item.id,
+      label: `${item.name} · ${item.model_key}`,
+    }))
+    const persistedId = project?.text_model_id
+    if (persistedId && !base.some((item) => item.id === persistedId)) {
+      base.unshift({
+        id: persistedId,
+        label: `当前项目已选模型 #${persistedId}（未出现在当前可用列表中）`,
+      })
+    }
+    return base
+  }, [project?.text_model_id, textModels])
   const assets = (assetsData || []).slice().sort((a, b) => Number(a.id) - Number(b.id))
   const availableModels = (videoModelStatus || []).filter((item) => item.available)
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
@@ -541,7 +555,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
 
   useEffect(() => {
     const persistedTextModelId = project?.text_model_id ? String(project.text_model_id) : 'default'
-    setSelectedTextModelId((prev) => (prev && prev !== 'default' ? prev : persistedTextModelId))
+    setSelectedTextModelId(persistedTextModelId)
   }, [project?.text_model_id])
 
   useEffect(() => {
@@ -1151,8 +1165,8 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
                       >
                         <option value="default">系统默认</option>
-                        {(textModels || []).map((item) => (
-                          <option key={item.id} value={String(item.id)}>{item.name} · {item.model_key}</option>
+                        {textModelOptions.map((item) => (
+                          <option key={item.id} value={String(item.id)}>{item.label}</option>
                         ))}
                       </select>
                       <div className="text-[11px] text-cyan-100/75">这里选择的是步骤 1 文案优化 / 台词拆分实际使用的文本模型。默认回填创建项目时选中的文本模型；重跑前会先写回项目。</div>
