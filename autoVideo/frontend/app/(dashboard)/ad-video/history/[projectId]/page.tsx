@@ -179,10 +179,13 @@ export default function AdVideoHistoryDetailPage() {
   const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('')
+  const [activePipelineStep, setActivePipelineStep] = useState<'step1' | 'step2' | 'step3'>('step1')
   const previousStoryboardsRef = useRef<Storyboard[]>([])
+  const actionLocksRef = useRef<Set<string>>(new Set())
   const [selectedResolution, setSelectedResolution] = useState('')
   const [selectedDuration, setSelectedDuration] = useState('')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
+  const [videoModelMismatch, setVideoModelMismatch] = useState('')
 
   const { data: projectData, mutate: mutateProject, isLoading } = useSWR(projectId ? ['ad-video-history-project', projectId] : null, async () => {
     const res = await projectAPI.get(projectId)
@@ -320,7 +323,11 @@ export default function AdVideoHistoryDetailPage() {
   )
 
   const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
-  const step1Running = rerunAction === 'pipeline' || project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting'
+  const step1Running = rerunAction === 'pipeline'
+    || project?.status === 'script_processing'
+    || project?.progress?.stage === 'episode_splitting'
+    || project?.progress?.stage === 'scene_splitting'
+    || project?.progress?.stage === 'script_prepping'
 
   const displayStoryboards = useMemo(() => {
     if (scopeStoryboards.length > 0) return scopeStoryboards
@@ -350,6 +357,21 @@ export default function AdVideoHistoryDetailPage() {
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
   const step2Status: 'pending' | 'active' | 'done' | 'blocked' = !step2Enabled ? 'blocked' : step2Running ? 'active' : step2Done ? 'done' : 'pending'
   const step3Status: 'pending' | 'active' | 'done' | 'blocked' = !step3Enabled ? 'blocked' : step3Running ? 'active' : step3Done ? 'done' : 'pending'
+
+  useEffect(() => {
+    if (step1Running) {
+      setActivePipelineStep('step1')
+      return
+    }
+    if (step2Running) {
+      setActivePipelineStep('step2')
+      return
+    }
+    if (step3Running) {
+      setActivePipelineStep('step3')
+      return
+    }
+  }, [step1Running, step2Running, step3Running])
 
   const step1Hint = step1Running
     ? '当前正在重跑文本拆分 / 自动分镜，请先等这一轮结束。'
@@ -417,11 +439,19 @@ export default function AdVideoHistoryDetailPage() {
     if (!availableModels.length) return
     setSelectedVideoModel((prev) => {
       if (prev && availableModels.some((item) => item.key === prev)) return prev
-      const preferred = String(autoSplit?.video_model || project?.storyboard_config?.video_model || '').trim()
-      if (preferred && availableModels.some((item) => item.key === preferred)) return preferred
+      const preferred = String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim()
+      if (preferred && availableModels.some((item) => item.key === preferred)) {
+        setVideoModelMismatch('')
+        return preferred
+      }
+      if (preferred) {
+        setVideoModelMismatch(preferred)
+      } else {
+        setVideoModelMismatch('')
+      }
       return availableModels[0]?.key || ''
     })
-  }, [availableModels, autoSplit?.video_model, project?.storyboard_config?.video_model])
+  }, [availableModels, project?.storyboard_config?.video_model, autoSplit?.video_model])
 
   useEffect(() => {
     const nextAspect = pickAllowedValue(aspectRatioOptions, project?.storyboard_config?.aspect_ratio)
@@ -434,10 +464,10 @@ export default function AdVideoHistoryDetailPage() {
   }, [resolutionOptions, project?.storyboard_config?.resolution])
 
   useEffect(() => {
-    const preferredDuration = autoSplit?.duration || project?.storyboard_config?.duration || ''
+    const preferredDuration = project?.storyboard_config?.duration || autoSplit?.duration || ''
     const nextDuration = pickAllowedValue(durationOptions, preferredDuration)
     setSelectedDuration((prev) => (prev && durationOptions.some((item) => item.value === prev) ? prev : nextDuration))
-  }, [durationOptions, autoSplit?.duration, project?.storyboard_config?.duration])
+  }, [durationOptions, project?.storyboard_config?.duration, autoSplit?.duration])
 
   useEffect(() => {
     setSelectedGenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
@@ -447,7 +477,21 @@ export default function AdVideoHistoryDetailPage() {
     await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateAssets(), mutateAdCopyState()])
   }
 
+  const acquireActionLock = (action: string) => {
+    if (actionLocksRef.current.has(action)) return false
+    actionLocksRef.current.add(action)
+    return true
+  }
+
+  const releaseActionLock = (action: string) => {
+    actionLocksRef.current.delete(action)
+  }
+
   const runScopedAction = async (action: string, runner: () => Promise<unknown>, successTitle: string) => {
+    if (!acquireActionLock(action)) {
+      toast({ title: '当前操作正在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
     setGenerationAction(action)
     try {
       await runner()
@@ -457,6 +501,7 @@ export default function AdVideoHistoryDetailPage() {
       toast({ title: error instanceof Error ? error.message : '操作失败', variant: 'destructive' })
     } finally {
       setGenerationAction(null)
+      releaseActionLock(action)
     }
   }
 
@@ -521,17 +566,25 @@ export default function AdVideoHistoryDetailPage() {
   }
 
   const rerunStoryboardPipeline = async () => {
+    if (!acquireActionLock('pipeline')) {
+      toast({ title: '步骤 1 已在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+
     const scriptText = editableOriginalScript.trim()
     if (!scriptText) {
-      toast({ title: '请先保留一版可用的原文，再开始按当前视频配置重拆分', variant: 'destructive' })
+      toast({ title: '请先保留一版可用的原文，再开始按文本模型重拆分', variant: 'destructive' })
+      releaseActionLock('pipeline')
       return
     }
     if (!splitConfigReady) {
       toast({ title: '当前模型没有完整声明 aspect_ratio / resolution / duration，不能启动这条广告流水线', variant: 'destructive' })
+      releaseActionLock('pipeline')
       return
     }
     if (project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting') {
       toast({ title: '当前项目仍在拆分中，请等本轮完成后再重跑，避免再次触发 409', variant: 'destructive' })
+      releaseActionLock('pipeline')
       return
     }
 
@@ -552,13 +605,14 @@ export default function AdVideoHistoryDetailPage() {
       await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
       await refreshAll()
       toast({
-        title: '已按当前视频模型与单分镜时长重跑“文本拆分 → 分镜文本”',
+        title: '已按当前文本模型，并参考所选视频时长约束，重跑“文本拆分 → 分镜文本”',
         variant: 'success',
       })
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '重跑拆分失败', variant: 'destructive' })
     } finally {
       setRerunAction(null)
+      releaseActionLock('pipeline')
     }
   }
 
@@ -608,8 +662,14 @@ export default function AdVideoHistoryDetailPage() {
   }
 
   const startScopedVideoGeneration = async () => {
+    if (!acquireActionLock('video-start')) {
+      toast({ title: '步骤 3 已在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+
     if (!splitConfigReady) {
       toast({ title: '当前模型没有完整声明 aspect_ratio / resolution / duration，不能直接提交视频生成', variant: 'destructive' })
+      releaseActionLock('video-start')
       return
     }
 
@@ -620,6 +680,7 @@ export default function AdVideoHistoryDetailPage() {
 
     if (storyboardPool.length === 0) {
       toast({ title: '当前范围还没有可用的分镜图，请先上传人物图并刷新分镜图', variant: 'destructive' })
+      releaseActionLock('video-start')
       return
     }
 
@@ -740,6 +801,7 @@ export default function AdVideoHistoryDetailPage() {
       toast({ title: error instanceof Error ? error.message : '视频生成失败', variant: 'destructive' })
     } finally {
       setGenerationAction(null)
+      releaseActionLock('video-start')
     }
   }
 
@@ -939,135 +1001,135 @@ export default function AdVideoHistoryDetailPage() {
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="grid gap-3 md:grid-cols-3">
-                <div className={`rounded-xl border p-4 ${stepTone(step1Status)}`}>
+                <button type="button" onClick={() => setActivePipelineStep('step1')} className={`rounded-xl border p-4 text-left transition ${stepTone(step1Status)} ${activePipelineStep === 'step1' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 1</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">按视频配置重拆分文本</div>
                   <div className="mt-2 text-xs text-current/80">先确定视频模型、比例、分辨率、单分镜时长，再把当前文案重跑为分镜文本。</div>
-                  <div className="mt-3 text-[11px] text-current/80">{step1Hint}</div>
-                </div>
-                <div className={`rounded-xl border p-4 ${stepTone(step2Status)}`}>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
+                <button type="button" onClick={() => setActivePipelineStep('step2')} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 2</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step2Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">上传人物图 / 刷新分镜图</div>
                   <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为当前范围逐个上传真实参考图，最后刷新分镜图。</div>
-                  <div className="mt-3 text-[11px] text-current/80">{step2Hint}</div>
-                </div>
-                <div className={`rounded-xl border p-4 ${stepTone(step3Status)}`}>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step2' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
+                <button type="button" onClick={() => setActivePipelineStep('step3')} className={`rounded-xl border p-4 text-left transition ${stepTone(step3Status)} ${activePipelineStep === 'step3' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 3</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step3Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">开始生成视频</div>
                   <div className="mt-2 text-xs text-current/80">只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。</div>
-                  <div className="mt-3 text-[11px] text-current/80">{step3Hint}</div>
-                </div>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step3' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
               </div>
 
-              <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/40 p-3 text-xs text-slate-300">
-                  <div>流水线状态：{pipelineBusy ? '执行中' : '空闲'}</div>
-                  <div>步骤 1：{stepLabel(step1Status)} / 步骤 2：{stepLabel(step2Status)} / 步骤 3：{stepLabel(step3Status)}</div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-slate-200">当前处理范围</Label>
-                  <select
-                    value={selectedEpisodeId}
-                    onChange={(e) => setSelectedEpisodeId(e.target.value)}
-                    className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-                  >
-                    <option value="all">整项目（全部分集）</option>
-                    {episodes.map((episode) => (
-                      <option key={episode.id} value={String(episode.id)}>
-                        episode #{episode.episode_number} · {episode.title || '未命名片段'}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="text-[11px] text-slate-400">这个范围只影响步骤 2 和步骤 3；步骤 1 始终基于当前全文重新拆分。</div>
-                </div>
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-3">
-                <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+              <div className="grid gap-4">
+                {activePipelineStep === 'step1' && (
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
                   <div>
-                    <div className="text-sm font-medium text-cyan-100">步骤 1：按目标视频配置重跑“文本 → 分镜文本”</div>
-                    <div className="mt-1 text-xs text-cyan-100/80">这里决定后续的分镜粒度。单分镜时长直接来自所选视频模型的真实声明。</div>
+                    <div className="text-sm font-medium text-cyan-100">步骤 1：按文本模型重跑“文本 → 分镜文本”</div>
+                    <div className="mt-1 text-xs text-cyan-100/80">这里用文本模型完成广告文案优化与自动分集；下方视频模型只用于提供单分镜时长和后续视频能力约束，不是文本拆分模型。</div>
+                    {step1Running && (
+                      <div className="mt-2 inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-100">
+                        当前进行中：正在用文本模型重跑文本拆分 / 自动分镜，请勿重复点击
+                      </div>
+                    )}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-slate-100">生成视频模型</Label>
-                    <select
-                      value={selectedVideoModel}
-                      onChange={(e) => setSelectedVideoModel(e.target.value)}
-                      className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
-                    >
-                      <option value="">请选择模型</option>
-                      {availableModels.map((item) => (
-                        <option key={item.key} value={item.key}>{item.key}</option>
-                      ))}
-                    </select>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="space-y-2 xl:col-span-2">
+                      <Label className="text-slate-100">视频模型（用于时长/能力约束）</Label>
+                      <select
+                        value={selectedVideoModel}
+                        onChange={(e) => setSelectedVideoModel(e.target.value)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        <option value="">请选择模型</option>
+                        {availableModels.map((item) => (
+                          <option key={item.key} value={item.key}>{item.key}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">画面比例</Label>
+                      <select
+                        value={selectedAspectRatio}
+                        onChange={(e) => setSelectedAspectRatio(e.target.value)}
+                        disabled={aspectRatioOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择比例</option>
+                        {aspectRatioOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">分辨率</Label>
+                      <select
+                        value={selectedResolution}
+                        onChange={(e) => setSelectedResolution(e.target.value)}
+                        disabled={resolutionOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择分辨率</option>
+                        {resolutionOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">单分镜时长</Label>
+                      <select
+                        value={selectedDuration}
+                        onChange={(e) => setSelectedDuration(e.target.value)}
+                        disabled={durationOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择时长</option>
+                        {durationOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-slate-100">画面比例</Label>
-                    <select
-                      value={selectedAspectRatio}
-                      onChange={(e) => setSelectedAspectRatio(e.target.value)}
-                      disabled={aspectRatioOptions.length === 0}
-                      className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">请选择比例</option>
-                      {aspectRatioOptions.map((item) => (
-                        <option key={item.value} value={item.value}>{item.label || item.value}</option>
-                      ))}
-                    </select>
-                  </div>
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">语音输出</Label>
+                      <select
+                        value={selectedModelMeta?.native_audio ? (selectedGenerateAudio ? 'enabled' : 'disabled') : 'unsupported'}
+                        onChange={(e) => setSelectedGenerateAudio(e.target.value === 'enabled')}
+                        disabled={!selectedModelMeta?.native_audio}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {selectedModelMeta?.native_audio ? (
+                          <>
+                            <option value="disabled">不生成语音</option>
+                            <option value="enabled">生成语音（原生）</option>
+                          </>
+                        ) : (
+                          <option value="unsupported">当前模型不支持语音</option>
+                        )}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">
+                        {selectedModelMeta?.native_audio ? '当前模型已声明 native_audio，可选择是否继续透传原生语音能力。' : '当前模型未声明 native_audio，因此这里不可开启语音。'}
+                      </div>
+                    </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-slate-100">分辨率</Label>
-                    <select
-                      value={selectedResolution}
-                      onChange={(e) => setSelectedResolution(e.target.value)}
-                      disabled={resolutionOptions.length === 0}
-                      className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">请选择分辨率</option>
-                      {resolutionOptions.map((item) => (
-                        <option key={item.value} value={item.value}>{item.label || item.value}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-slate-100">单分镜时长</Label>
-                    <select
-                      value={selectedDuration}
-                      onChange={(e) => setSelectedDuration(e.target.value)}
-                      disabled={durationOptions.length === 0}
-                      className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <option value="">请选择时长</option>
-                      {durationOptions.map((item) => (
-                        <option key={item.value} value={item.value}>{item.label || item.value}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {selectedModelMeta?.native_audio ? (
-                    <label className="flex items-center gap-2 text-xs text-cyan-100/85">
-                      <input
-                        type="checkbox"
-                        checked={selectedGenerateAudio}
-                        onChange={(e) => setSelectedGenerateAudio(e.target.checked)}
-                      />
-                      同步记住该模型的原生音频能力（若后端支持，将继续透传）
-                    </label>
-                  ) : (
-                    <div className="text-[11px] text-cyan-100/75">当前模型未声明 native_audio，音频开关不会透传。</div>
+                  {videoModelMismatch && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
+                    </div>
                   )}
 
                   {!splitConfigReady && (
@@ -1076,126 +1138,142 @@ export default function AdVideoHistoryDetailPage() {
                     </div>
                   )}
 
-                  <Button
-                    disabled={pipelineBusy || !editableOriginalScript.trim() || !splitConfigReady}
-                    onClick={() => void rerunStoryboardPipeline()}
-                  >
-                    {rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按当前视频配置重拆分'}
-                  </Button>
-
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-cyan-100/80">
-                    {step1Hint}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
-                  <div>
-                    <div className="text-sm font-medium text-violet-100">步骤 2：准备参考图并刷新分镜图</div>
-                    <div className="mt-1 text-xs text-violet-100/80">这一块只做三件事：先生成当前范围需要的素材槽位，再上传参考图，最后刷新这一范围的分镜图。</div>
-                  </div>
-
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85 space-y-1">
-                    <div>当前范围：{scopeLabel}</div>
-                    <div>素材槽位：{scopeAssets.length} 个</div>
-                    <div>已上传参考图：{uploadedScopeAssets} / {scopeAssets.length}</div>
-                    <div>可用分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-3">
                     <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={pipelineBusy || !step2Enabled}
-                      onClick={() => void triggerAssetExtraction()}
+                      disabled={pipelineBusy || step1Running || !editableOriginalScript.trim() || !splitConfigReady}
+                      onClick={() => void rerunStoryboardPipeline()}
                     >
-                      {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
+                      {step1Running ? '步骤 1 进行中…' : rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按文本模型重拆分（参考视频时长约束）'}
                     </Button>
-                    <Button
-                      size="sm"
-                      disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
-                      onClick={() => void triggerStoryboardImageGeneration()}
-                    >
-                      {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '正在刷新分镜图…' : '3）刷新当前范围分镜图'}
-                    </Button>
+                    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-cyan-100/80">
+                      {step1Hint}
+                    </div>
                   </div>
-
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
-                    {step2Hint}
                   </div>
+                )}
 
-                  <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
-                    {scopeAssets.length === 0 ? (
-                      <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
-                        当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
-                      </div>
-                    ) : scopeAssets.map((asset) => (
-                      <div key={asset.id} className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium text-white">#{asset.id} · {asset.name || '未命名素材'}</div>
-                            <div className="mt-1 text-[11px] text-slate-400">类型：{asset.type || '-'} · 状态：{asset.status || '-'}</div>
-                            {!!asset.episode_ids?.length && (
-                              <div className="mt-1 text-[11px] text-slate-500">关联分集：{asset.episode_ids.join(' / ')}</div>
-                            )}
+                {activePipelineStep === 'step2' && (
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-medium text-violet-100">步骤 2：准备参考图并刷新分镜图</div>
+                      <div className="mt-1 text-xs text-violet-100/80">这一块只做三件事：先生成当前范围需要的素材槽位，再上传参考图，最后刷新这一范围的分镜图。</div>
+                      {step2Running && (
+                        <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
+                          当前进行中：正在准备素材槽位 / 上传参考图 / 刷新分镜图，请勿重复点击
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85 space-y-1">
+                      <div>当前范围：{scopeLabel}</div>
+                      <div>素材槽位：{scopeAssets.length} 个</div>
+                      <div>已上传参考图：{uploadedScopeAssets} / {scopeAssets.length}</div>
+                      <div>可用分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pipelineBusy || !step2Enabled}
+                        onClick={() => void triggerAssetExtraction()}
+                      >
+                        {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
+                        onClick={() => void triggerStoryboardImageGeneration()}
+                      >
+                        {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '正在刷新分镜图…' : '3）刷新当前范围分镜图'}
+                      </Button>
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
+                      {step2Hint}
+                    </div>
+
+                    <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
+                      {scopeAssets.length === 0 ? (
+                        <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
+                          当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
+                        </div>
+                      ) : scopeAssets.map((asset) => (
+                        <div key={asset.id} className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-white">#{asset.id} · {asset.name || '未命名素材'}</div>
+                              <div className="mt-1 text-[11px] text-slate-400">类型：{asset.type || '-'} · 状态：{asset.status || '-'}</div>
+                              {!!asset.episode_ids?.length && (
+                                <div className="mt-1 text-[11px] text-slate-500">关联分集：{asset.episode_ids.join(' / ')}</div>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-violet-100/80">
+                              {String(asset.image_url || '').trim() ? '第 2 步已上传' : '第 2 步待上传'}
+                            </div>
                           </div>
-                          <div className="text-[11px] text-violet-100/80">
-                            {String(asset.image_url || '').trim() ? '第 2 步已上传' : '第 2 步待上传'}
+
+                          {String(asset.image_url || '').trim() && (
+                            <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={asset.image_url} alt={asset.name || `asset-${asset.id}`} className="h-32 w-full object-cover" />
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                              {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '2）重新上传参考图' : '2）上传参考图'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
+                                onChange={(event) => { void handleAssetUpload(asset.id, event) }}
+                              />
+                            </label>
+                            <div className="text-[11px] text-slate-400">这里上传的是这轮分镜要参考的最终定稿图；上传完再点上面的“刷新当前范围分镜图”。</div>
                           </div>
                         </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-                        {String(asset.image_url || '').trim() && (
-                          <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={asset.image_url} alt={asset.name || `asset-${asset.id}`} className="h-32 w-full object-cover" />
-                          </div>
-                        )}
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
-                            {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '2）重新上传参考图' : '2）上传参考图'}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
-                              onChange={(event) => { void handleAssetUpload(asset.id, event) }}
-                            />
-                          </label>
-                          <div className="text-[11px] text-slate-400">这里上传的是这轮分镜要参考的最终定稿图；上传完再点上面的“刷新当前范围分镜图”。</div>
+                {activePipelineStep === 'step3' && (
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-medium text-emerald-100">步骤 3：基于当前范围分镜图提交视频</div>
+                      <div className="mt-1 text-xs text-emerald-100/80">这里只有在当前范围已经有可用分镜图时才允许提交；人物图本身不会直接拿去生成视频。</div>
+                      {step3Running && (
+                        <div className="mt-2 inline-flex rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-100">
+                          当前进行中：正在提交视频任务，请勿重复点击
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                      )}
+                    </div>
 
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
-                  <div>
-                    <div className="text-sm font-medium text-emerald-100">步骤 3：基于当前范围分镜图提交视频</div>
-                    <div className="mt-1 text-xs text-emerald-100/80">这里只有在当前范围已经有可用分镜图时才允许提交；人物图本身不会直接拿去生成视频。</div>
-                  </div>
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-1">
+                      <div>当前范围：{scopeLabel}</div>
+                      <div>目标模型：{selectedVideoModel || '未选择'}</div>
+                      <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
+                      <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                    </div>
 
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-1">
-                    <div>当前范围：{scopeLabel}</div>
-                    <div>目标模型：{selectedVideoModel || '未选择'}</div>
-                    <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
-                    <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
-                  </div>
+                    <Button
+                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || completedStoryboardImages === 0}
+                      onClick={() => void startScopedVideoGeneration()}
+                    >
+                      {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
+                    </Button>
 
-                  <Button
-                    disabled={pipelineBusy || !step3Enabled || !splitConfigReady || completedStoryboardImages === 0}
-                    onClick={() => void startScopedVideoGeneration()}
-                  >
-                    {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
-                  </Button>
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
+                      {step3Hint}
+                    </div>
 
-                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
-                    {step3Hint}
+                    <div className="text-[11px] text-emerald-100/75">
+                      真正提交给视频服务的是当前范围内那些已经有 `image_url` 的分镜图，以及对应的分镜文案、台词、镜头运动、角色/素材引用等字段。
+                    </div>
                   </div>
-
-                  <div className="text-[11px] text-emerald-100/75">
-                    真正提交给视频服务的是当前范围内那些已经有 `image_url` 的分镜图，以及对应的分镜文案、台词、镜头运动、角色/素材引用等字段。
-                  </div>
-                </div>
+                )}
               </div>
             </CardContent>
           </Card>

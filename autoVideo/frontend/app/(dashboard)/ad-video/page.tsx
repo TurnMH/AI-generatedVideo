@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -49,6 +50,7 @@ const extractParamOptionValues = (status: VideoModelStatus | null | undefined, k
 }
 
 export default function AdVideoWorkbenchPage() {
+  const router = useRouter()
   const { toast } = useToast()
 
   const [workflowForm, setWorkflowForm] = useState({
@@ -109,11 +111,19 @@ export default function AdVideoWorkbenchPage() {
   const imageModels = useMemo(() => workflowModelData?.image || [], [workflowModelData])
   const videoModels = useMemo(() => workflowModelData?.video || [], [workflowModelData])
   const videoModelStatuses = useMemo(() => workflowModelData?.videoStatus || [], [workflowModelData])
+  const availableVideoModelKeys = useMemo(
+    () => new Set(videoModelStatuses.filter((item) => item.available).map((item) => item.key)),
+    [videoModelStatuses],
+  )
+  const creatableVideoModels = useMemo(
+    () => videoModels.filter((item) => availableVideoModelKeys.has(String(item.model_key || '').trim())),
+    [availableVideoModelKeys, videoModels],
+  )
   const selectedVideoModel = useMemo(() => {
     const selectedId = Number(workflowForm.videoModelId)
     if (!Number.isFinite(selectedId) || selectedId <= 0) return null
-    return videoModels.find((item) => item.id === selectedId) || null
-  }, [videoModels, workflowForm.videoModelId])
+    return creatableVideoModels.find((item) => item.id === selectedId) || null
+  }, [creatableVideoModels, workflowForm.videoModelId])
   const selectedVideoStatus = useMemo(() => {
     const modelKey = String(selectedVideoModel?.model_key || '').trim()
     if (!modelKey) return null
@@ -137,6 +147,14 @@ export default function AdVideoWorkbenchPage() {
   const resolutionOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'resolution'), [selectedVideoStatus])
   const durationOptions = useMemo(() => extractParamOptionValues(selectedVideoStatus, 'duration'), [selectedVideoStatus])
   const nativeAudioSupported = Boolean(selectedVideoStatus?.native_audio)
+
+  useEffect(() => {
+    if (!creatableVideoModels.length) return
+    const currentId = Number(workflowForm.videoModelId)
+    if (Number.isFinite(currentId) && currentId > 0 && creatableVideoModels.some((item) => item.id === currentId)) return
+    setWorkflowForm((prev) => ({ ...prev, videoModelId: String(creatableVideoModels[0]?.id || 'default') }))
+  }, [creatableVideoModels, workflowForm.videoModelId])
+
   useEffect(() => {
     if (!selectedVideoModel) return
     if (!aspectRatioOptions.includes(workflowForm.aspectRatio)) {
@@ -232,6 +250,7 @@ export default function AdVideoWorkbenchPage() {
       setWorkflowProjectId(project.id)
       toast({ title: `广告项目 #${project.id} 已创建，并已开始文案优化与自动分镜流程`, variant: 'success' })
       await mutateProject()
+      router.push(`/ad-video/history/${project.id}`)
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '创建广告项目并启动优化失败', variant: 'destructive' })
     } finally {
@@ -328,7 +347,7 @@ export default function AdVideoWorkbenchPage() {
                 className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
               >
                 <option value="default">系统默认</option>
-                {videoModels.map((model) => (
+                {creatableVideoModels.map((model) => (
                   <option key={model.id} value={String(model.id)}>
                     {model.name} · {model.model_key}
                   </option>
