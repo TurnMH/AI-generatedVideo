@@ -59,6 +59,11 @@ const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导�
 - 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。
 - 要明确区分：哪些是画面信息、哪些是台词/配音、哪些是屏幕字幕、哪些是最终喂给模型的视觉 Prompt 重点。`
 
+const DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT = `- 广告分镜的最高优先级是“先满足当前目标单分镜时长，再决定是否继续拆分”；如果同一段口播/卖点在当前时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜，禁止为了追求最小动作单位而过度拆镜。
+- 只有在以下情况才允许继续拆分：1）明确切换到新空间/新场景；2）明确进入新卖点/新产品信息；3）说话主体发生变化；4）当前段内容明显超过当前单分镜时长可承载的信息量；5）确实需要一个极短强调镜头，但数量必须严格受限。
+- 广告口播项目中，大多数分镜都应承载明确的 dialogue / 字幕 / 卖点信息；无 dialogue 镜头只能作为极短辅助镜头，不能连续出现，也不能成为主体。
+- 轻微的表情变化、手部动作变化、视线变化、镜头轻推拉，不足以单独拆成新分镜；若不引入新的信息点，应继续留在当前分镜内完成表达。`
+
 function unwrap<T>(payload: unknown): T | null {
   if (!payload || typeof payload !== 'object') return null
   const maybe = payload as { data?: T }
@@ -260,6 +265,17 @@ export default function AdVideoHistoryDetailPage() {
     () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || DEFAULT_AD_COPY_OPTIMIZATION_PROMPT).trim(),
     [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
   )
+  const storyboardSplitBuiltinPrompt = useMemo(
+    () => String(adCopyState?.storyboard_split_prompt_builtin || DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT).trim(),
+    [adCopyState?.storyboard_split_prompt_builtin],
+  )
+  const storyboardSplitPromptPreview = useMemo(() => {
+    const custom = editableStoryboardSplitPrompt.trim()
+    return custom ? `${storyboardSplitBuiltinPrompt}
+
+# 项目级补充规则
+${custom}` : storyboardSplitBuiltinPrompt
+  }, [editableStoryboardSplitPrompt, storyboardSplitBuiltinPrompt])
   const resultUrl = taskResultUrl(latestTask)
 
   const selectedEpisodeNumber = useMemo(() => {

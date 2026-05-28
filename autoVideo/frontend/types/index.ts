@@ -136,6 +136,7 @@ export interface AdCopyOptimizationState {
   script_length?: number
   storyboard_split_prompt?: string
   storyboard_split_prompt_hint?: string
+  storyboard_split_prompt_builtin?: string
 }
 
 export interface Project {
