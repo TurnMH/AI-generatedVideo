@@ -690,11 +690,6 @@ func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) A
 	if meta.StylePreset == "" {
 		meta.StylePreset = stylepreset.Default
 	}
-	if scriptLength <= 0 {
-		meta.EstimatedEpisodes = 1
-		meta.TargetCharsPerEpisode = meta.Duration * 7
-		return meta
-	}
 
 	clipDuration := meta.Duration
 	if clipDuration < 3 {
@@ -727,12 +722,27 @@ func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) A
 		charsPerSecond = 4
 	}
 
-	meta.TargetCharsPerEpisode = clipDuration * charsPerSecond
-	if meta.TargetCharsPerEpisode < 80 {
-		meta.TargetCharsPerEpisode = 80
+	baseTargetChars := clipDuration * charsPerSecond
+	if baseTargetChars < 80 {
+		baseTargetChars = 80
 	}
-	if meta.TargetCharsPerEpisode > 4000 {
-		meta.TargetCharsPerEpisode = 4000
+	if isAdWorkbenchRuntimeConfig(runtimeCfg) {
+		adMinChars := clipDuration * 14
+		if adMinChars < 140 {
+			adMinChars = 140
+		}
+		if baseTargetChars < adMinChars {
+			baseTargetChars = adMinChars
+		}
+	}
+	if baseTargetChars > 4000 {
+		baseTargetChars = 4000
+	}
+	meta.TargetCharsPerEpisode = baseTargetChars
+
+	if scriptLength <= 0 {
+		meta.EstimatedEpisodes = 1
+		return meta
 	}
 
 	meta.EstimatedEpisodes = (scriptLength + meta.TargetCharsPerEpisode - 1) / meta.TargetCharsPerEpisode
@@ -743,6 +753,10 @@ func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) A
 		meta.EstimatedEpisodes = 200
 	}
 	return meta
+}
+
+func isAdWorkbenchRuntimeConfig(runtimeCfg storyboardRuntimeConfig) bool {
+	return runtimeCfg.AutoSplitAfterOptimization
 }
 
 func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
