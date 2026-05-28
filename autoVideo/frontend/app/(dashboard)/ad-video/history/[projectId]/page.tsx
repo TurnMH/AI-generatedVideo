@@ -656,6 +656,15 @@ export default function AdVideoHistoryDetailPage() {
     await runScopedAction('storyboard-image-all', () => storyboardAPI.generateAll(projectId), '已按整项目人物图继续生成分镜图')
   }
 
+  const regenerateSingleStoryboardImage = async (storyboardId: number, sequenceNumber: number) => {
+    const action = `storyboard-regenerate-${storyboardId}`
+    await runScopedAction(
+      action,
+      () => storyboardAPI.generate(projectId, storyboardId),
+      `已重新提交分镜 #${sequenceNumber} 的分镜图生成`,
+    )
+  }
+
   const handleAssetUpload = async (assetId: number, event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1262,7 +1271,7 @@ export default function AdVideoHistoryDetailPage() {
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div>
                             <div className="text-sm font-medium text-white">当前范围分镜</div>
-                            <div className="mt-1 text-[11px] text-slate-400">右侧直接核对分镜文案和分镜图是否已经齐了。</div>
+                            <div className="mt-1 text-[11px] text-slate-400">右侧直接核对分镜文案和分镜图是否已经齐了；单条不满意时可直接点“重新生成”。</div>
                           </div>
                           <div className="text-[11px] text-violet-100/80">分镜图 {completedStoryboardImages} / {displayStoryboards.length}</div>
                         </div>
@@ -1276,8 +1285,20 @@ export default function AdVideoHistoryDetailPage() {
                             <div key={storyboard.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-3 space-y-3">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number} · episode {storyboard.episode_id || '-'}</div>
-                                <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(storyboard.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
-                                  {String(storyboard.image_url || '').trim() ? '分镜图已就绪' : '待生成分镜图'}
+                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                  <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(storyboard.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                    {String(storyboard.image_url || '').trim() ? '分镜图已就绪' : '待生成分镜图'}
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-lg border-violet-400/30 bg-violet-500/10 px-2 text-[11px] text-violet-100 hover:bg-violet-500/20"
+                                    disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0 || step2Running}
+                                    onClick={() => void regenerateSingleStoryboardImage(storyboard.id, storyboard.sequence_number)}
+                                  >
+                                    重新生成
+                                  </Button>
                                 </div>
                               </div>
 
