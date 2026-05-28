@@ -103,13 +103,13 @@ function getParamOptions(model: VideoModelMeta | null, key: string): VideoModelP
   return Array.isArray(param?.values) ? param!.values : []
 }
 
-function pickAllowedValue(options: VideoModelParamOption[], preferred?: string | number | null) {
+function pickAllowedValue(options: VideoModelParamOption[], preferred?: string | number | null, fallbackToFirst = true) {
   if (!options.length) return ''
   const normalizedPreferred = String(preferred ?? '').trim()
   if (normalizedPreferred && options.some((item) => item.value === normalizedPreferred)) {
     return normalizedPreferred
   }
-  return options[0]?.value || ''
+  return fallbackToFirst ? (options[0]?.value || '') : normalizedPreferred
 }
 
 function humanStage(project: Project | null) {
@@ -317,6 +317,14 @@ ${custom}` : storyboardSplitBuiltinPrompt
   const aspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
   const resolutionOptions = useMemo(() => getParamOptions(selectedModelMeta, 'resolution'), [selectedModelMeta])
   const durationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'duration'), [selectedModelMeta])
+  const persistedDuration = useMemo(
+    () => String(project?.storyboard_config?.duration || autoSplit?.duration || '').trim(),
+    [project?.storyboard_config?.duration, autoSplit?.duration],
+  )
+  const durationMismatch = useMemo(
+    () => Boolean(persistedDuration && durationOptions.length > 0 && !durationOptions.some((item) => item.value === persistedDuration)),
+    [durationOptions, persistedDuration],
+  )
 
   const scopeStoryboards = useMemo(() => {
     if (!selectedEpisodeNumber) return storyboards
@@ -539,10 +547,12 @@ ${custom}` : storyboardSplitBuiltinPrompt
   }, [resolutionOptions, project?.storyboard_config?.resolution])
 
   useEffect(() => {
-    const preferredDuration = project?.storyboard_config?.duration || autoSplit?.duration || ''
-    const nextDuration = pickAllowedValue(durationOptions, preferredDuration)
-    setSelectedDuration((prev) => (prev && durationOptions.some((item) => item.value === prev) ? prev : nextDuration))
-  }, [durationOptions, project?.storyboard_config?.duration, autoSplit?.duration])
+    const nextDuration = pickAllowedValue(durationOptions, persistedDuration, false)
+    setSelectedDuration((prev) => {
+      if (prev && (durationOptions.some((item) => item.value === prev) || prev === persistedDuration)) return prev
+      return nextDuration
+    })
+  }, [durationOptions, persistedDuration])
 
   useEffect(() => {
     setSelectedGenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
@@ -1213,6 +1223,12 @@ ${custom}` : storyboardSplitBuiltinPrompt
                   {!splitConfigReady && (
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
                       当前模型必须同时声明 aspect_ratio / resolution / duration，才能进入这条广告流水线。
+                    </div>
+                  )}
+
+                  {durationMismatch && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      当前项目创建时保存的单分镜时长是 `{persistedDuration}` 秒，但它不在当前模型声明的时长列表里；页面会优先保留项目持久化值，不再静默回退成默认的 5 秒。请确认运行态模型参数是否变更。
                     </div>
                   )}
 
