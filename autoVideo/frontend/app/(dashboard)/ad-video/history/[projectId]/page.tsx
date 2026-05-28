@@ -846,14 +846,13 @@ export default function AdVideoHistoryDetailPage() {
           <Card className="border-white/10 bg-slate-900/60 text-slate-100">
             <CardHeader>
               <CardTitle>广告详情内容</CardTitle>
-              <CardDescription className="text-slate-400">把文案、分镜、视频分开查看；优化后的文案固定放在“文案”页签中。</CardDescription>
             </CardHeader>
             <CardContent>
               <Tabs defaultValue="copy" className="space-y-4">
                 <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
-                  <TabsTrigger value="copy">文案 · {displayedOptimizedScript.length} 字 / {episodes.length} 集</TabsTrigger>
-                  <TabsTrigger value="storyboard">分镜 · {displayStoryboards.length} 条 / {completedStoryboardImages} 张图</TabsTrigger>
-                  <TabsTrigger value="video">视频 · {tasks.length} 个任务{resultUrl ? ' / 有成片' : ''}</TabsTrigger>
+                  <TabsTrigger value="copy">文案</TabsTrigger>
+                  <TabsTrigger value="storyboard">分镜</TabsTrigger>
+                  <TabsTrigger value="video">视频</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="copy" className="space-y-4">
@@ -922,17 +921,10 @@ export default function AdVideoHistoryDetailPage() {
                 </TabsContent>
 
                 <TabsContent value="storyboard" className="space-y-4">
-                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 text-sm text-violet-100">
-                    <div className="font-medium">分镜工作区</div>
-                    <div className="mt-1 text-xs text-violet-100/80">这里集中看当前范围分镜、场景描述、台词和分镜图补齐情况；步骤 2 的人物图上传与分镜图刷新仍在上方流水线执行。</div>
-                  </div>
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-white">当前范围分镜</div>
-                        <div className="mt-1 text-xs text-slate-400">这里直接看当前范围的 scene_description / dialogue / 分镜图是否齐了。</div>
-                      </div>
-                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel} · 分镜 {displayStoryboards.length} 条{step1Running && scopeStoryboards.length === 0 && previousStoryboardsRef.current.length > 0 ? ' · 正在重建，先显示上一版' : ''}</div>
+                      <div className="text-sm font-medium text-white">当前范围分镜</div>
+                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel}{step1Running && scopeStoryboards.length === 0 && previousStoryboardsRef.current.length > 0 ? ' · 正在重建，先显示上一版' : ''}</div>
                     </div>
                   </div>
 
@@ -971,18 +963,8 @@ export default function AdVideoHistoryDetailPage() {
                 </TabsContent>
 
                 <TabsContent value="video" className="space-y-4">
-                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-cyan-100">
-                    <div className="font-medium">视频工作区</div>
-                    <div className="mt-1 text-xs text-cyan-100/80">这里集中看当前视频任务、报错、结果链接与成片预览；步骤 3 的提交动作仍在上方流水线执行。</div>
-                  </div>
                   <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-white">视频任务 / 完整视频</div>
-                        <div className="mt-1 text-xs text-slate-400">广告历史详情内直接查看当前视频生成进度与完整视频结果。</div>
-                      </div>
-                      <div className="text-[11px] text-slate-400">当前任务数：{tasks.length}</div>
-                    </div>
+                    <div className="text-sm font-medium text-white">视频任务 / 完整视频</div>
 
                     {tasks.length === 0 ? (
                       <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有视频任务记录。</div>
