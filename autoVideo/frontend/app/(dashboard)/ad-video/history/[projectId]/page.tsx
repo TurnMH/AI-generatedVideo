@@ -240,8 +240,15 @@ export default function AdVideoHistoryDetailPage() {
 
   const { data: textModels } = useSWR(projectId ? ['ad-video-history-text-models'] : null, async () => {
     const res = await modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' })
-    const payload = res as { data?: { items?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> } }
-    return (payload?.data?.items || []).filter((item) => item.is_active !== false)
+    const payload = res as {
+      data?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> | { items?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> }
+    }
+    const rawItems = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.data?.items)
+        ? payload.data.items
+        : []
+    return rawItems.filter((item) => item.is_active !== false)
   }, { revalidateOnFocus: false })
 
   const { data: videoModelStatus } = useSWR(projectId ? ['ad-video-history-video-model-status'] : null, async () => {
