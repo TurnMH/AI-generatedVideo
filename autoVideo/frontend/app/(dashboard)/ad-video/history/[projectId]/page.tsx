@@ -1146,6 +1146,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                           <option key={item.value} value={item.value}>{item.label || item.value}</option>
                         ))}
                       </select>
+                      <div className="text-[11px] text-cyan-100/75">画面比例不只是输出参数，也会参与步骤 1 的构图约束：它会影响主体排布、左右留白、景别选择和空间层次。</div>
                     </div>
 
                     <div className="space-y-2">
@@ -1161,6 +1162,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                           <option key={item.value} value={item.value}>{item.label || item.value}</option>
                         ))}
                       </select>
+                      <div className="text-[11px] text-cyan-100/75">分辨率会影响单镜细节密度。分辨率较低时，步骤 1 会倾向减少同镜头里的小字、复杂背景和过多主体，优先保证卖点清晰。</div>
                     </div>
 
                     <div className="space-y-2">
@@ -1176,6 +1178,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                           <option key={item.value} value={item.value}>{item.label || item.value}</option>
                         ))}
                       </select>
+                      <div className="text-[11px] text-cyan-100/75">单分镜时长会直接约束单镜承载的信息量、口播长度和动作阶段数；步骤 1 会据此判断该合并还是继续拆分。</div>
                     </div>
                   </div>
 

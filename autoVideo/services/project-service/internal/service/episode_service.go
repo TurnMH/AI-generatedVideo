@@ -484,6 +484,8 @@ type storyboardRuntimeConfig struct {
 	Duration                   int    `json:"duration"`
 	VideoModel                 string `json:"video_model"`
 	StylePreset                string `json:"style_preset"`
+	AspectRatio                string `json:"aspect_ratio"`
+	Resolution                 string `json:"resolution"`
 	AutoSplitAfterOptimization bool   `json:"auto_split_after_optimization"`
 }
 
@@ -630,8 +632,16 @@ func (s *EpisodeService) buildDefaultAdCopyUserPrompt(project *model.Project, tr
 	if videoModel == "" {
 		videoModel = "default"
 	}
-	return fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标单片时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述时长自动切分，并单独输出后续必须继承的一致性前提。\n\n请围绕这 14 个方向补全并写实：\n1. 世界观 / 故事发生的视觉宇宙\n2. 空间 / 在哪里\n3. 时间 / 几点、白天还是夜晚\n4. 人物 / 谁在说、谁在动\n5. 服装 / 穿什么\n6. 动作 / 做什么\n7. 核心物件 / 镜头重点\n8. 光线 / 怎么打光\n9. 色彩 / 什么色调\n10. 材质 / 表面质感是什么\n11. 镜头运动 / 怎么拍\n12. 情绪 / 传达什么感觉\n13. 转场 / 怎么切\n14. 字幕 / 屏幕文字、配音 / 口播内容、以及最终给 AI 的 Prompt 描述\n\n一致性前提必须至少覆盖：\n1. 人物身份/外观/服装/年龄感/口播身份\n2. 世界观、核心场景与空间锚点（室内外、前后左右、景别、机位）\n3. 关键道具、品牌信息与镜头重点\n4. 光线/色调/材质的稳定风格\n5. 时间线、动作链与转场约束\n6. 台词/旁白/字幕/CTA 收束方式\n7. 最终给 AI 生成时必须保留的 Prompt 关键元素\n\n原始广告文案如下：\n\n%s",
-		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, duration, trimmed)
+	aspectRatio := strings.TrimSpace(runtimeCfg.AspectRatio)
+	if aspectRatio == "" {
+		aspectRatio = "未指定"
+	}
+	resolution := strings.TrimSpace(runtimeCfg.Resolution)
+	if resolution == "" {
+		resolution = "未指定"
+	}
+	return fmt.Sprintf("项目标题：%s\n目标风格：%s（canonical=%s）\n目标视频模型：%s\n目标画面比例：%s\n目标分辨率：%s\n目标单分镜时长：%d 秒\n\n请先优化下面这篇广告文案，使其更适合后续按上述视频约束自动切分，并单独输出后续必须继承的一致性前提。\n\n其中：\n- 画面比例会直接影响主体排布、左右留白、前景/中景/后景层次与镜头构图，请不要忽略。\n- 分辨率会影响单镜可承载的细节密度；分辨率较低时避免在一个镜头里塞入过多主体、过多小字、过多细碎动作。\n- 单分镜时长决定单镜能承载的信息量；不要把明显超出该时长的信息硬塞进同一镜头，也不要把本可在该时长内说完的一句口播拆成多个空镜。\n\n请围绕这 14 个方向补全并写实：\n1. 世界观 / 故事发生的视觉宇宙\n2. 空间 / 在哪里\n3. 时间 / 几点、白天还是夜晚\n4. 人物 / 谁在说、谁在动\n5. 服装 / 穿什么\n6. 动作 / 做什么\n7. 核心物件 / 镜头重点\n8. 光线 / 怎么打光\n9. 色彩 / 什么色调\n10. 材质 / 表面质感是什么\n11. 镜头运动 / 怎么拍\n12. 情绪 / 传达什么感觉\n13. 转场 / 怎么切\n14. 字幕 / 屏幕文字、配音 / 口播内容、以及最终给 AI 的 Prompt 描述\n\n一致性前提必须至少覆盖：\n1. 人物身份/外观/服装/年龄感/口播身份\n2. 世界观、核心场景与空间锚点（室内外、前后左右、景别、机位）\n3. 关键道具、品牌信息与镜头重点\n4. 光线/色调/材质的稳定风格\n5. 时间线、动作链与转场约束\n6. 台词/旁白/字幕/CTA 收束方式\n7. 最终给 AI 生成时必须保留的 Prompt 关键元素\n\n原始广告文案如下：\n\n%s",
+		strings.TrimSpace(project.Title), styleLabel, stylePreset, videoModel, aspectRatio, resolution, duration, trimmed)
 }
 
 func isAdWorkbenchProject(project *model.Project) bool {
@@ -1014,7 +1024,8 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 		}
 	}
 
-	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, project.ProjectType, startSequence)
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, project.ProjectType, startSequence)
 	patchedContinuity := 0
 	if created > 0 && s.storyboardSvc != nil && s.storyboardSvc.continuityAuditor != nil {
 		auditCtx, cancelAudit := context.WithTimeout(ctx, 90*time.Second)
@@ -2269,7 +2280,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 					videoModel = cfg.VideoModel
 				}
 			}
-			return s.generateStoryboardsParallel(ctx, projectID, project.UserID, dbEpisodes, &kwLib, clipDuration, videoModel, project.ProjectType)
+			return s.generateStoryboardsParallel(ctx, projectID, project.UserID, dbEpisodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, project.ProjectType)
 		}()
 
 		if s.logger != nil {
@@ -2397,11 +2408,11 @@ type llmScene struct {
 // generateStoryboardsParallel —— 使用工作池并行为所有剧集创建分镜，返回总分镜数
 // generateStoryboardsParallel creates storyboards for all episodes using a worker pool
 // for LLM scene breakdown. Reports per-episode progress and updates episode status.
-func (s *EpisodeService) generateStoryboardsParallel(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) int {
-	return s.generateStoryboardsParallelWithOffset(ctx, projectID, userID, dbEpisodes, kwLib, clipDuration, videoModel, projectType, 0)
+func (s *EpisodeService) generateStoryboardsParallel(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string) int {
+	return s.generateStoryboardsParallelWithOffset(ctx, projectID, userID, dbEpisodes, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, 0)
 }
 
-func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, startSequence int) int {
+func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, startSequence int) int {
 	projectRef, _ := s.projectRepo.FindByIDNoAuth(projectID)
 	type episodeScenes struct {
 		idx    int
@@ -2521,7 +2532,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			}
 
 			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -2722,7 +2733,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
 	}
@@ -2742,7 +2753,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
 			return scenes
 		}
@@ -2758,7 +2769,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -2767,15 +2778,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -2814,7 +2825,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -2830,7 +2841,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	// clipDuration is the user-configured default; we still expose it as a soft reference
 	// but allow the LLM to deviate based on actual scene complexity.
 	refDuration := clipDuration
@@ -2839,6 +2850,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 	}
 	// Build model-specific duration constraint hint for the LLM.
 	modelDurationHint := videoModelDurationHint(videoModel, refDuration)
+	visualHint := visualConstraintHint(aspectRatio, resolution, refDuration)
 
 	var prompt string
 	if projectType == "comics" {
@@ -2909,6 +2921,8 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 - location 描述场景发生的地点环境（2-20字）
 - duration 该分镜的视频时长（秒数，整数），必须优先贴近并服务于当前目标单分镜时长：
 %s
+- 构图/画面约束（必须同步遵守）：
+%s
 - dialogue 该场景中的对白（保持原文语言；如无则留空字符串）
 
 **内联标注识别（优先级最高）：**
@@ -2942,7 +2956,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 ]}
 
 第 %d 集内容：
-%s`, episodeNum, modelDurationHint, refDuration, episodeNum, content)
+%s`, episodeNum, modelDurationHint, visualHint, refDuration, episodeNum, content)
 	}
 
 	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先满足当前目标单分镜时长，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少四项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置。广告口播项目中，应避免连续无 dialogue 的空白分镜，除非它们是极短且必要的辅助强调镜头。"
@@ -3530,6 +3544,18 @@ func videoModelStyleHint(videoModel string) string {
 
 // videoModelDurationHint returns the LLM prompt text describing valid duration values for the given video model.
 // refDuration is the user-configured default and is used as fallback guidance when no specific model is set.
+func visualConstraintHint(aspectRatio, resolution string, refDuration int) string {
+	ar := strings.TrimSpace(aspectRatio)
+	if ar == "" {
+		ar = "未指定"
+	}
+	res := strings.TrimSpace(resolution)
+	if res == "" {
+		res = "未指定"
+	}
+	return fmt.Sprintf("  目标画面比例：%s。构图、主体数量、左右留白、前景/中景/后景层次必须适配该比例，不要沿用默认构图。\n  目标分辨率：%s。若分辨率较低，避免单镜塞入过多主体、小字或复杂微动作，优先保证主体清晰、卖点突出。\n  目标单分镜时长参考：%d 秒。单镜承载的信息量、口播长度、动作阶段数都必须服务于这个时长。", ar, res, refDuration)
+}
+
 func videoModelDurationHint(videoModel string, refDuration int) string {
 	family := videoModelFamilyFromName(videoModel)
 	switch family {
