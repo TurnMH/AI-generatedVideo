@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
-import { assetAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Project } from '@/lib/api'
+import { assetAPI, modelAPI, projectAPI, storyboardAPI, videoAPI, type Episode, type Project } from '@/lib/api'
 import type { AdCopyOptimizationState, Asset, Storyboard } from '@/types'
 
 type VideoTask = {
@@ -61,20 +61,15 @@ const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导�
 
 const DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT = `你是一位专业的广告分镜师和摄影指导。当前步骤 1 的分镜拆分必须遵守以下内置规则：
 
-1. 核心原则：时长优先。优先满足当前目标单分镜时长，并追求视觉单位的连贯性、空间方位一致性与整体表达稳定性，而不是追求最小视觉单位。
-2. 如果同一段口播、同一段卖点说明、同一段连续动作在当前目标时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜，不要过度拆镜。
-3. 只有在以下情况才允许继续拆分：
-   - 明确切换到新空间 / 新场景
-   - 明确进入新卖点 / 新产品信息 / 新展示重点
-   - 说话主体发生变化
-   - 当前段内容明显超过目标单分镜时长可承载的信息量
-   - 确实需要一个极短强调镜头，但必须严格控制数量
-4. 轻微的表情变化、手部动作变化、视线变化、镜头轻推拉，不足以单独拆成新分镜；如果没有新的信息点，继续留在当前分镜内。
-5. 广告口播项目中，分镜默认必须承载明确的 dialogue / 字幕 / 卖点信息；如果当前分镜没有台词，或者台词长度明显不足以支撑当前目标时长，就必须继续合并、重写或调整拆分，不能直接保留为空白镜头。
-6. 只有最后一个分镜允许在确有必要时作为收束镜头例外，但即便如此也应尽量带有一句完整收尾口播、CTA 或字幕，不要轻易留空。
-7. 若同一段文字主要是口播内容，应尽量让口播在一个完整分镜内说完；不要为了动作细节把一句完整口播拆散到多个空镜头中。
-8. dialogue 只能放真的会被念出来/打上字幕的文字；如果某段只有动作或镜头说明、没有可念文本，优先继续调整拆分，让它并回前后有台词的分镜，而不是直接保留。
-9. description 必须写观众能看见的画面，并尽量交代人物位置、景别与构图、光线氛围、环境细节、关键道具、空间锚点与动作延续。`
+1. 最高优先级：当规则发生冲突时，一律以“时长优先、台词 / 口播承载量优先”为最高准则。
+2. 本项目目标单分镜时长以当前用户所选值为准；如当前未显式指定，则按模型默认允许时长执行。
+3. 核心原则：优先判断一段台词 / 口播是否能在当前目标单分镜时长内完整表达，并同时追求视觉单位连贯性、空间方位一致性与整体表达稳定性，而不是追求最小视觉单位。
+4. 如果同一段卖点说明、同一段口播、同一段连续动作在当前目标时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜；即使进入新卖点，也只有在当前时长已经承载不下时才拆镜。
+5. 判断是否拆镜的唯一依据是：观众是否会在该镜头内获得新的信息或新的情绪锚点；若没有，则不拆。
+6. 口播内容必须在一个完整分镜内说完，不得为动作细节拆散口播。无 dialogue 分镜只能作为极短辅助镜头（建议不超过总分镜数的 20%），不可连续出现，不可单独承担卖点传达；除最后一个分镜外，若当前分镜没有台词，或台词长度明显不足以支撑当前目标时长，就必须继续合并、重写或调整拆分。
+7. 只有最后一个分镜允许在确有必要时作为收束镜头例外，但即便如此也应尽量带有一句完整收尾口播、CTA 或字幕，不要轻易留空。
+8. dialogue 只能放真的会被念出来或打上字幕的文字；如果某段只有动作或镜头说明、没有可念文本，优先继续调整拆分，让它并回前后有台词的分镜，而不是直接保留。
+9. description 必须使用结构化格式：[景别] + [人物/主体位置与动作] + [环境与光线] + [关键道具或视觉锚点]；每条尽量不超过 60 字。`
 
 function unwrap<T>(payload: unknown): T | null {
   if (!payload || typeof payload !== 'object') return null
@@ -195,6 +190,7 @@ export default function AdVideoHistoryDetailPage() {
   const [generationAction, setGenerationAction] = useState<string | null>(null)
   const [rerunAction, setRerunAction] = useState<string | null>(null)
   const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
+  const [selectedTextModelId, setSelectedTextModelId] = useState('default')
   const [selectedVideoModel, setSelectedVideoModel] = useState('')
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('')
   const [activePipelineStep, setActivePipelineStep] = useState<'step1' | 'step2' | 'step3'>('step1')
@@ -241,6 +237,12 @@ export default function AdVideoHistoryDetailPage() {
     const res = await assetAPI.list(projectId)
     return unwrapArray<Asset>((res as { data?: unknown }).data)
   }, { refreshInterval: 5000, revalidateOnFocus: true })
+
+  const { data: textModels } = useSWR(projectId ? ['ad-video-history-text-models'] : null, async () => {
+    const res = await modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' })
+    const payload = res as { data?: { items?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> } }
+    return (payload?.data?.items || []).filter((item) => item.is_active !== false)
+  }, { revalidateOnFocus: false })
 
   const { data: videoModelStatus } = useSWR(projectId ? ['ad-video-history-video-model-status'] : null, async () => {
     const res = await videoAPI.modelStatus()
@@ -538,6 +540,11 @@ ${custom}` : storyboardSplitBuiltinPrompt
   }, [availableModels, persistedVideoModel])
 
   useEffect(() => {
+    const persistedTextModelId = project?.text_model_id ? String(project.text_model_id) : 'default'
+    setSelectedTextModelId((prev) => (prev && prev !== 'default' ? prev : persistedTextModelId))
+  }, [project?.text_model_id])
+
+  useEffect(() => {
     const nextAspect = pickAllowedValue(aspectRatioOptions, project?.storyboard_config?.aspect_ratio)
     setSelectedAspectRatio((prev) => (prev && aspectRatioOptions.some((item) => item.value === prev) ? prev : nextAspect))
   }, [aspectRatioOptions, project?.storyboard_config?.aspect_ratio])
@@ -676,6 +683,9 @@ ${custom}` : storyboardSplitBuiltinPrompt
 
     setRerunAction('pipeline')
     try {
+      await projectAPI.update(projectId, {
+        text_model_id: selectedTextModelId === 'default' ? undefined : Number(selectedTextModelId),
+      })
       await storyboardAPI.updateConfig(projectId, {
         video_model: effectiveSelectedVideoModel,
         aspect_ratio: selectedAspectRatio,
@@ -1133,6 +1143,21 @@ ${custom}` : storyboardSplitBuiltinPrompt
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="space-y-2 xl:col-span-2">
+                      <Label className="text-slate-100">文本模型（步骤 1 实际使用）</Label>
+                      <select
+                        value={selectedTextModelId}
+                        onChange={(e) => setSelectedTextModelId(e.target.value)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        <option value="default">系统默认</option>
+                        {(textModels || []).map((item) => (
+                          <option key={item.id} value={String(item.id)}>{item.name} · {item.model_key}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">这里选择的是步骤 1 文案优化 / 台词拆分实际使用的文本模型。默认回填创建项目时选中的文本模型；重跑前会先写回项目。</div>
+                    </div>
+
                     <div className="space-y-2 xl:col-span-2">
                       <Label className="text-slate-100">视频模型（用于时长/能力约束）</Label>
                       <select
