@@ -35,7 +35,7 @@ const defaultStoryboardSplitBuiltinPrompt = `你是一位专业的广告分镜�
 7. dialogue 只能放真的会被念出来/打上字幕的文字；如果某段只有动作或镜头说明、没有可念文本，dialogue 可以留空，但广告项目中必须尽量减少此类分镜，并确保它只是服务主口播分镜的极短辅助镜头。
 8. description 必须写观众能看见的画面，并尽量交代人物位置、景别与构图、光线氛围、环境细节、关键道具、空间锚点与动作延续。`
 
-const defaultAdCopyOptimizationPrompt = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
+const defaultAdCopyOptimizationPrompt = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，而是先把整篇广告文案优化成更适合后续“按台词 / 口播为主自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
 
 必须遵守：
 - 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
@@ -43,7 +43,7 @@ const defaultAdCopyOptimizationPrompt = `你是广告短视频编剧、导演统
 - 必须主动补全并澄清以下 14 个维度：1）世界观/故事发生的视觉宇宙；2）空间（在哪里）；3）时间（几点/昼夜/时序）；4）人物（谁）；5）服装（穿什么）；6）动作（做什么）；7）核心物件/镜头重点；8）光线（怎么打光）；9）色彩（什么色调）；10）材质（表面质感）；11）镜头运动（怎么拍）；12）情绪（传达什么感觉）；13）转场（怎么切）；14）字幕/屏幕文字、配音/口播内容、以及最终给 AI 的生成 Prompt 描述。
 - optimized_script 必须是可直接用于后续自动分集的广告正文；但文中要自然包含这些维度所需的信息，不要只给抽象概念。
 - consistency_premise 必须单独总结以上 14 个维度里“后续不得漂移”的硬约束，写成清晰条目。
-- 把长段落整理成更自然的口播 / 画面节奏单元，让后续系统更容易按时长自动切分。
+- 把长段落整理成更自然的台词 / 口播句群，让后续系统更容易按单分镜时长进行台词拆分。
 - 段落之间要有清楚转场，避免一句话承载过多镜头。
 - 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
 - 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案。
@@ -237,7 +237,7 @@ func (s *EpisodeService) GetAdCopyOptimizationState(projectID uint64) (*AdCopyOp
 		ConsistencyPremise:           consistency,
 		ScriptLength:                 utf8.RuneCountInString(optimized),
 		StoryboardSplitPrompt:        s.currentStoryboardSplitPrompt(project),
-		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
+		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给台词 / 分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 		StoryboardSplitPromptBuiltin: defaultStoryboardSplitBuiltinPrompt,
 	}, nil
 }
@@ -280,7 +280,7 @@ func (s *EpisodeService) SaveAdCopyDraft(projectID uint64, req AdCopySaveRequest
 		ConsistencyPremise:           progress.AutoSplit.GetConsistencyPremise(),
 		ScriptLength:                 utf8.RuneCountInString(optimizedScript),
 		StoryboardSplitPrompt:        s.currentStoryboardSplitPrompt(project),
-		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
+		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给台词 / 分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 		StoryboardSplitPromptBuiltin: defaultStoryboardSplitBuiltinPrompt,
 	}, nil
 }
@@ -329,7 +329,7 @@ func (s *EpisodeService) OptimizeAdCopy(ctx context.Context, projectID uint64, r
 		ConsistencyPremise:           strings.TrimSpace(result.ConsistencyPremise),
 		ScriptLength:                 utf8.RuneCountInString(strings.TrimSpace(result.OptimizedScript)),
 		StoryboardSplitPrompt:        s.currentStoryboardSplitPrompt(project),
-		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
+		StoryboardSplitPromptHint:    "这里填写的是‘步骤 1 文本重拆分前，给台词 / 分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 		StoryboardSplitPromptBuiltin: defaultStoryboardSplitBuiltinPrompt,
 	}, nil
 }

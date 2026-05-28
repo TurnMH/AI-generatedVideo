@@ -951,7 +951,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <div className="text-sm font-medium text-cyan-100">文案优化提示词</div>
-                        <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。点击按钮后支持首次优化，也支持基于当前原文和当前提示词多次重新优化。</div>
+                        <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。前一步的目标不是泛化润色，而是把项目文案优化成更适合后续“按台词 / 口播为主进行拆分”的基准稿。</div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || pipelineBusy}>
@@ -1091,8 +1091,8 @@ ${custom}` : storyboardSplitBuiltinPrompt
                     <div className="text-xs font-medium">步骤 1</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
                   </div>
-                  <div className="mt-1 text-base font-semibold text-white">按视频配置重拆分文本</div>
-                  <div className="mt-2 text-xs text-current/80">先确定视频模型、比例、分辨率、单分镜时长，再把当前文案重跑为分镜文本。</div>
+                  <div className="mt-1 text-base font-semibold text-white">按台词时长重拆分文本</div>
+                  <div className="mt-2 text-xs text-current/80">先确定视频模型与单分镜时长，再按台词 / 口播承载量重跑当前文案；比例和分辨率用于同步约束构图与画面复杂度。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
                 <button type="button" onClick={() => setActivePipelineStep('step2')} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
@@ -1188,7 +1188,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                           <option key={item.value} value={item.value}>{item.label || item.value}</option>
                         ))}
                       </select>
-                      <div className="text-[11px] text-cyan-100/75">单分镜时长会直接约束单镜承载的信息量、口播长度和动作阶段数；步骤 1 会据此判断该合并还是继续拆分。</div>
+                      <div className="text-[11px] text-cyan-100/75">单分镜时长会直接约束单镜可承载的台词 / 口播长度；步骤 1 会优先按台词承载量判断该合并还是继续拆分，再补足动作与画面。</div>
                     </div>
                   </div>
 
@@ -1252,7 +1252,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         value={editableStoryboardSplitPrompt}
                         onChange={(event) => setEditableStoryboardSplitPrompt(event.target.value)}
                         className="min-h-[180px] border-white/10 bg-black/20 text-slate-100"
-                        placeholder="这里填写项目级分镜拆分补充规则，例如：同一段口播尽量合并、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
+                        placeholder="这里填写项目级台词拆分 / 分镜补充规则，例如：同一段口播尽量合并、以台词句群为主切分、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
                       />
                     </div>
 
