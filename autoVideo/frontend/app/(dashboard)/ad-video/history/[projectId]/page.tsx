@@ -955,7 +955,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || pipelineBusy}>
-                          {savingCopyDraft ? '保存中…' : '保存文案'}
+                          {savingCopyDraft ? '保存中…' : '保存原文 / 文案'}
                         </Button>
                         <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || savingCopyDraft || pipelineBusy}>
                           {optimizingCopy ? '优化中…' : displayedOptimizedScript ? '重新优化' : '开始优化'}
@@ -965,7 +965,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                     <Textarea
                       value={editableOptimizationPrompt}
                       onChange={(e) => setEditableOptimizationPrompt(e.target.value)}
-                      className="min-h-[180px] border-cyan-500/20 bg-black/20 text-slate-100"
+                      className="min-h-[180px] border-cyan-500/20 bg-black/20 text-slate-100 caret-cyan-300"
                       placeholder="请输入文案优化提示词。"
                     />
                   </div>
@@ -983,7 +983,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         <Textarea
                           value={editableOptimizedScript}
                           onChange={(e) => setEditableOptimizedScript(e.target.value)}
-                          className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100"
+                          className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100 caret-emerald-300"
                           placeholder="这里保留当前要进入流水线的广告文案。"
                         />
                       ) : (
@@ -997,14 +997,14 @@ ${custom}` : storyboardSplitBuiltinPrompt
                       <div className="mb-3 flex items-center justify-between gap-2">
                         <div>
                           <div className="text-sm font-medium text-white">原文</div>
-                          <div className="mt-1 text-[11px] text-slate-500">右侧原文支持直接调整；下次点击“开始优化 / 重新优化”会以这里的当前文本为准。</div>
+                          <div className="mt-1 text-[11px] text-slate-400">这里支持直接修改原文；点击上方“保存原文 / 文案”后会真实保存。下次点击“开始优化 / 重新优化”会以这里的当前文本为准。</div>
                         </div>
                         <div className="text-[11px] text-slate-500">{editableOriginalScript.trim().length || realOriginalScript.length} 字</div>
                       </div>
                       <Textarea
                         value={editableOriginalScript}
                         onChange={(e) => setEditableOriginalScript(e.target.value)}
-                        className="min-h-[520px] border-white/10 bg-black/20 text-slate-100"
+                        className="min-h-[520px] border-white/10 bg-black/20 text-slate-100 caret-cyan-300"
                         placeholder="请输入或调整当前原文。"
                       />
                     </div>
