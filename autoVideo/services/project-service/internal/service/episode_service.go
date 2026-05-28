@@ -1966,8 +1966,31 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 		defer cancel()
 		processedEpisodes := s.countPreparedEpisodes(eps)
 		timedOut := false
+		storyboardsTriggered := false
 		defer func() {
-			s.finishAutoPreparation(project.ID, project.UserID, len(eps), processedEpisodes, timedOut, resumed)
+			if !timedOut && processedEpisodes >= len(eps) && s.storyboardSvc != nil {
+				if s.logger != nil {
+					s.logger.Info("auto preparation finished; triggering storyboard extraction",
+						zap.Uint64("project_id", project.ID),
+						zap.Int("episode_count", len(eps)),
+						zap.Bool("resumed", resumed),
+					)
+				}
+				if _, err := s.ExtractStoryboards(autoCtx, project.ID, nil); err != nil {
+					if s.logger != nil {
+						s.logger.Warn("auto storyboard extraction after preparation failed",
+							zap.Uint64("project_id", project.ID),
+							zap.Bool("resumed", resumed),
+							zap.Error(err),
+						)
+					}
+				} else {
+					storyboardsTriggered = true
+				}
+			}
+			if !storyboardsTriggered {
+				s.finishAutoPreparation(project.ID, project.UserID, len(eps), processedEpisodes, timedOut, resumed)
+			}
 		}()
 
 		if processedEpisodes >= len(eps) {
