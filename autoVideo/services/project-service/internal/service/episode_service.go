@@ -2402,6 +2402,7 @@ func (s *EpisodeService) generateStoryboardsParallel(ctx context.Context, projec
 }
 
 func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, startSequence int) int {
+	projectRef, _ := s.projectRepo.FindByIDNoAuth(projectID)
 	type episodeScenes struct {
 		idx    int
 		scenes []llmScene
@@ -2519,7 +2520,8 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				)
 			}
 
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, projectType)
+			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -2720,7 +2722,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
 	}
@@ -2740,7 +2742,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
 			return scenes
 		}
@@ -2756,7 +2758,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -2765,15 +2767,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, projectType)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -2812,7 +2814,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, projectType, customStoryboardSplitPrompt)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -2828,7 +2830,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	// clipDuration is the user-configured default; we still expose it as a soft reference
 	// but allow the LLM to deviate based on actual scene complexity.
 	refDuration := clipDuration
@@ -2949,6 +2951,9 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 	}
 	if skillHints != "" {
 		sceneSystemPrompt += "\n\n**本项目专属分镜指引（请务必遵守）：**\n" + skillHints
+	}
+	if strings.TrimSpace(customStoryboardSplitPrompt) != "" {
+		sceneSystemPrompt += "\n\n**项目级分镜拆分补充规则（优先于通用经验，但不得违反系统硬约束）：**\n" + strings.TrimSpace(customStoryboardSplitPrompt)
 	}
 
 	// Inject consistency bible so the LLM writes visually grounded, consistent scene descriptions.

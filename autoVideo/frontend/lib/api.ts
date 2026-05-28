@@ -135,6 +135,7 @@ export const projectAPI = {
     original_script: string
     optimization_prompt: string
     optimized_script: string
+    storyboard_split_prompt?: string
     persist_original?: boolean
   }) => api.put<AdCopyOptimizationState>(`/api/v1/projects/${id}/episodes/ad-copy-optimization`, data),
   optimizeAdCopy: (id: number, data: {

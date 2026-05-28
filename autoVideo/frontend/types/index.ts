@@ -112,6 +112,7 @@ export interface StoryboardConfig {
   auto_split_after_optimization?: boolean
   video_model?: string  // runtime model key (e.g. "kling", "vidu", "wan") for director duration guidance
   ad_copy_optimization_prompt?: string
+  storyboard_split_prompt?: string
 }
 
 export interface WatermarkConfig {
@@ -133,6 +134,8 @@ export interface AdCopyOptimizationState {
   optimized_script: string
   consistency_premise?: string
   script_length?: number
+  storyboard_split_prompt?: string
+  storyboard_split_prompt_hint?: string
 }
 
 export interface Project {

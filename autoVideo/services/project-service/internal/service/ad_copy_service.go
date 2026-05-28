@@ -39,18 +39,21 @@ type AdCopyOptimizeRequest struct {
 }
 
 type AdCopySaveRequest struct {
-	OriginalScript     string `json:"original_script"`
-	OptimizationPrompt string `json:"optimization_prompt"`
-	OptimizedScript    string `json:"optimized_script"`
-	PersistOriginal    bool   `json:"persist_original"`
+	OriginalScript        string `json:"original_script"`
+	OptimizationPrompt    string `json:"optimization_prompt"`
+	OptimizedScript       string `json:"optimized_script"`
+	StoryboardSplitPrompt string `json:"storyboard_split_prompt"`
+	PersistOriginal       bool   `json:"persist_original"`
 }
 
 type AdCopyOptimizeResponse struct {
-	OriginalScript     string `json:"original_script"`
-	OptimizationPrompt string `json:"optimization_prompt"`
-	OptimizedScript    string `json:"optimized_script"`
-	ConsistencyPremise string `json:"consistency_premise,omitempty"`
-	ScriptLength       int    `json:"script_length,omitempty"`
+	OriginalScript            string `json:"original_script"`
+	OptimizationPrompt        string `json:"optimization_prompt"`
+	OptimizedScript           string `json:"optimized_script"`
+	ConsistencyPremise        string `json:"consistency_premise,omitempty"`
+	ScriptLength              int    `json:"script_length,omitempty"`
+	StoryboardSplitPrompt     string `json:"storyboard_split_prompt,omitempty"`
+	StoryboardSplitPromptHint string `json:"storyboard_split_prompt_hint,omitempty"`
 }
 
 func normalizeAdCopyPrompt(raw string) string {
@@ -60,29 +63,43 @@ func normalizeAdCopyPrompt(raw string) string {
 	return defaultAdCopyOptimizationPrompt
 }
 
-func (s *EpisodeService) currentAdCopyOptimizationPrompt(project *model.Project) string {
+func (s *EpisodeService) currentStoryboardConfigMap(project *model.Project) map[string]interface{} {
+	cfg := map[string]interface{}{}
 	if project == nil || len(project.StoryboardConfig) == 0 {
-		return defaultAdCopyOptimizationPrompt
+		return cfg
 	}
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(project.StoryboardConfig, &cfg); err != nil {
-		return defaultAdCopyOptimizationPrompt
-	}
+	_ = json.Unmarshal(project.StoryboardConfig, &cfg)
+	return cfg
+}
+
+func (s *EpisodeService) currentAdCopyOptimizationPrompt(project *model.Project) string {
+	cfg := s.currentStoryboardConfigMap(project)
 	if value, ok := cfg["ad_copy_optimization_prompt"].(string); ok {
 		return normalizeAdCopyPrompt(value)
 	}
 	return defaultAdCopyOptimizationPrompt
 }
 
-func (s *EpisodeService) persistAdCopyOptimizationPrompt(project *model.Project, prompt string) error {
+func (s *EpisodeService) currentStoryboardSplitPrompt(project *model.Project) string {
+	cfg := s.currentStoryboardConfigMap(project)
+	if value, ok := cfg["storyboard_split_prompt"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func (s *EpisodeService) persistStoryboardPromptConfig(project *model.Project, updates map[string]string) error {
 	if project == nil {
 		return errors.New("project is nil")
 	}
-	cfg := map[string]interface{}{}
-	if len(project.StoryboardConfig) > 0 {
-		_ = json.Unmarshal(project.StoryboardConfig, &cfg)
+	cfg := s.currentStoryboardConfigMap(project)
+	for key, value := range updates {
+		if key == "ad_copy_optimization_prompt" {
+			cfg[key] = normalizeAdCopyPrompt(value)
+			continue
+		}
+		cfg[key] = strings.TrimSpace(value)
 	}
-	cfg["ad_copy_optimization_prompt"] = normalizeAdCopyPrompt(prompt)
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
@@ -196,11 +213,13 @@ func (s *EpisodeService) GetAdCopyOptimizationState(projectID uint64) (*AdCopyOp
 		originalScript = strings.TrimSpace(project.ScriptText)
 	}
 	return &AdCopyOptimizeResponse{
-		OriginalScript:     originalScript,
-		OptimizationPrompt: prompt,
-		OptimizedScript:    optimized,
-		ConsistencyPremise: consistency,
-		ScriptLength:       utf8.RuneCountInString(optimized),
+		OriginalScript:            originalScript,
+		OptimizationPrompt:        prompt,
+		OptimizedScript:           optimized,
+		ConsistencyPremise:        consistency,
+		ScriptLength:              utf8.RuneCountInString(optimized),
+		StoryboardSplitPrompt:     s.currentStoryboardSplitPrompt(project),
+		StoryboardSplitPromptHint: "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 	}, nil
 }
 
@@ -219,7 +238,7 @@ func (s *EpisodeService) SaveAdCopyDraft(projectID uint64, req AdCopySaveRequest
 	prompt := normalizeAdCopyPrompt(req.OptimizationPrompt)
 	optimizedScript := strings.TrimSpace(req.OptimizedScript)
 
-	if err := s.persistAdCopyOptimizationPrompt(project, prompt); err != nil {
+	if err := s.persistStoryboardPromptConfig(project, map[string]string{"ad_copy_optimization_prompt": prompt, "storyboard_split_prompt": req.StoryboardSplitPrompt}); err != nil {
 		return nil, err
 	}
 	if req.PersistOriginal {
@@ -236,11 +255,13 @@ func (s *EpisodeService) SaveAdCopyDraft(projectID uint64, req AdCopySaveRequest
 		return nil, err
 	}
 	return &AdCopyOptimizeResponse{
-		OriginalScript:     originalScript,
-		OptimizationPrompt: prompt,
-		OptimizedScript:    optimizedScript,
-		ConsistencyPremise: progress.AutoSplit.GetConsistencyPremise(),
-		ScriptLength:       utf8.RuneCountInString(optimizedScript),
+		OriginalScript:            originalScript,
+		OptimizationPrompt:        prompt,
+		OptimizedScript:           optimizedScript,
+		ConsistencyPremise:        progress.AutoSplit.GetConsistencyPremise(),
+		ScriptLength:              utf8.RuneCountInString(optimizedScript),
+		StoryboardSplitPrompt:     s.currentStoryboardSplitPrompt(project),
+		StoryboardSplitPromptHint: "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 	}, nil
 }
 
@@ -268,7 +289,7 @@ func (s *EpisodeService) OptimizeAdCopy(ctx context.Context, projectID uint64, r
 	if req.PersistOriginal {
 		project.ScriptText = originalScript
 	}
-	if err := s.persistAdCopyOptimizationPrompt(project, prompt); err != nil {
+	if err := s.persistStoryboardPromptConfig(project, map[string]string{"ad_copy_optimization_prompt": prompt}); err != nil {
 		return nil, err
 	}
 	if req.PersistOriginal {
@@ -282,11 +303,13 @@ func (s *EpisodeService) OptimizeAdCopy(ctx context.Context, projectID uint64, r
 	}
 
 	return &AdCopyOptimizeResponse{
-		OriginalScript:     originalScript,
-		OptimizationPrompt: prompt,
-		OptimizedScript:    strings.TrimSpace(result.OptimizedScript),
-		ConsistencyPremise: strings.TrimSpace(result.ConsistencyPremise),
-		ScriptLength:       utf8.RuneCountInString(strings.TrimSpace(result.OptimizedScript)),
+		OriginalScript:            originalScript,
+		OptimizationPrompt:        prompt,
+		OptimizedScript:           strings.TrimSpace(result.OptimizedScript),
+		ConsistencyPremise:        strings.TrimSpace(result.ConsistencyPremise),
+		ScriptLength:              utf8.RuneCountInString(strings.TrimSpace(result.OptimizedScript)),
+		StoryboardSplitPrompt:     s.currentStoryboardSplitPrompt(project),
+		StoryboardSplitPromptHint: "这里填写的是‘步骤 1 文本重拆分前，给分镜拆分模型的附加规则’。默认会叠加系统内置的广告口播拆分规则；你在这里写的是项目级补充规则，会在真正 scene split 前注入。",
 	}, nil
 }
 

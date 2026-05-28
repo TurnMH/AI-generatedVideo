@@ -171,6 +171,7 @@ export default function AdVideoHistoryDetailPage() {
   const [editableOptimizedScript, setEditableOptimizedScript] = useState('')
   const [editableOriginalScript, setEditableOriginalScript] = useState('')
   const [editableOptimizationPrompt, setEditableOptimizationPrompt] = useState('')
+  const [editableStoryboardSplitPrompt, setEditableStoryboardSplitPrompt] = useState('')
   const [optimizingCopy, setOptimizingCopy] = useState(false)
   const [savingCopyDraft, setSavingCopyDraft] = useState(false)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
