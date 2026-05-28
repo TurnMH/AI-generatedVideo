@@ -354,6 +354,29 @@ export default function AdVideoHistoryDetailPage() {
     [displayStoryboards],
   )
 
+  const assetToStoryboardMap = useMemo(() => {
+    const map = new Map<number, Storyboard[]>()
+    for (const storyboard of displayStoryboards) {
+      for (const assetId of storyboard.asset_ids || []) {
+        const bucket = map.get(assetId) ?? []
+        bucket.push(storyboard)
+        map.set(assetId, bucket)
+      }
+    }
+    return map
+  }, [displayStoryboards])
+
+  const storyboardAssetDetailMap = useMemo(() => {
+    const map = new Map<number, Asset[]>()
+    for (const storyboard of displayStoryboards) {
+      const details = (storyboard.asset_ids || [])
+        .map((assetId) => scopeAssets.find((asset) => asset.id === assetId) || assets.find((asset) => asset.id === assetId) || null)
+        .filter((item): item is Asset => Boolean(item))
+      map.set(storyboard.id, details)
+    }
+    return map
+  }, [displayStoryboards, scopeAssets, assets])
+
   const storyboardScopeReady = displayStoryboards.length > 0
   const assetScopeReady = scopeAssets.length > 0
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
@@ -1232,6 +1255,15 @@ export default function AdVideoHistoryDetailPage() {
                                   {!!asset.episode_ids?.length && (
                                     <div className="mt-1 text-[11px] text-slate-500">关联分集：{asset.episode_ids.join(' / ')}</div>
                                   )}
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {(assetToStoryboardMap.get(asset.id) || []).length > 0 ? (assetToStoryboardMap.get(asset.id) || []).map((storyboard) => (
+                                      <span key={`asset-${asset.id}-storyboard-${storyboard.id}`} className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100">
+                                        分镜 #{storyboard.sequence_number}
+                                      </span>
+                                    )) : (
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">当前范围内暂未被分镜引用</span>
+                                    )}
+                                  </div>
                                 </div>
                                 <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(asset.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-violet-400/30 bg-violet-500/10 text-violet-100'}`}>
                                   {String(asset.image_url || '').trim() ? '已上传' : '待上传'}
@@ -1314,6 +1346,18 @@ export default function AdVideoHistoryDetailPage() {
                               )}
 
                               <div className="grid gap-3">
+                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+                                  <div className="mb-2 text-[11px] font-medium text-slate-300">引用参考图槽位</div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {(storyboardAssetDetailMap.get(storyboard.id) || []).length > 0 ? (storyboardAssetDetailMap.get(storyboard.id) || []).map((asset) => (
+                                      <span key={`storyboard-${storyboard.id}-asset-${asset.id}`} className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5 text-[10px] text-violet-100">
+                                        #{asset.id} {asset.name || '未命名素材'}
+                                      </span>
+                                    )) : (
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">当前没有绑定参考图槽位</span>
+                                    )}
+                                  </div>
+                                </div>
                                 <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
                                   <div className="mb-1 text-[11px] font-medium text-cyan-200">场景描述</div>
                                   <div className="line-clamp-4 whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
