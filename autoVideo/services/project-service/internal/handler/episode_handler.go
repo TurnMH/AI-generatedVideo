@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -477,18 +476,21 @@ func (h *EpisodeHandler) OptimizeAdCopy(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
-	defer cancel()
-	payload, err := h.svc.OptimizeAdCopy(ctx, projectID, req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			response.Fail(c, http.StatusGatewayTimeout, 504, "广告文案优化超时，请稍后重试")
-			return
-		}
-		response.InternalError(c, err.Error())
-		return
-	}
-	response.OK(c, payload)
+
+	go func(pid uint64, payload service.AdCopyOptimizeRequest) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		_, _ = h.svc.OptimizeAdCopy(ctx, pid, payload)
+	}(projectID, req)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    http.StatusAccepted,
+		"message": "processing",
+		"data": gin.H{
+			"project_id": projectID,
+			"status":     "processing",
+		},
+	})
 }
 
 // BatchReviewEpisodes — POST /api/v1/projects/:id/episodes/batch-review

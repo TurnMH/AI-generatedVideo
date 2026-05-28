@@ -185,6 +185,7 @@ export default function AdVideoHistoryDetailPage() {
   const [editableOptimizationPrompt, setEditableOptimizationPrompt] = useState('')
   const [editableStoryboardSplitPrompt, setEditableStoryboardSplitPrompt] = useState('')
   const [optimizingCopy, setOptimizingCopy] = useState(false)
+  const [adCopyOptimizationPending, setAdCopyOptimizationPending] = useState(false)
   const [savingCopyDraft, setSavingCopyDraft] = useState(false)
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
   const [generationAction, setGenerationAction] = useState<string | null>(null)
@@ -216,7 +217,10 @@ export default function AdVideoHistoryDetailPage() {
   const { data: adCopyState, mutate: mutateAdCopyState } = useSWR(projectId ? ['ad-video-history-ad-copy', projectId] : null, async () => {
     const res = await projectAPI.getAdCopyOptimizationState(projectId)
     return unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
-  }, { revalidateOnFocus: true })
+  }, {
+    revalidateOnFocus: true,
+    refreshInterval: adCopyOptimizationPending ? 3000 : 0,
+  })
 
   const { data: storyboardsData, mutate: mutateStoryboards } = useSWR(projectId ? ['ad-video-history-storyboards', projectId] : null, async () => {
     const res = await storyboardAPI.listAll(projectId)
@@ -300,6 +304,13 @@ export default function AdVideoHistoryDetailPage() {
     () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || DEFAULT_AD_COPY_OPTIMIZATION_PROMPT).trim(),
     [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
   )
+  const isAdCopyProgressAdvancing = useMemo(() => {
+    if (!project?.progress) return false
+    return project.progress.stage === 'script_processing'
+      || project.progress.stage === 'episode_splitting'
+      || project.progress.stage === 'scene_splitting'
+      || project.progress.stage === 'script_prepping'
+  }, [project?.progress])
   const storyboardSplitBuiltinPrompt = useMemo(
     () => String(adCopyState?.storyboard_split_prompt_builtin || DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT).trim(),
     [adCopyState?.storyboard_split_prompt_builtin],
@@ -527,6 +538,13 @@ ${custom}` : storyboardSplitBuiltinPrompt
   }, [realOptimizedScript, step1Running, optimizingCopy])
 
   useEffect(() => {
+    if (!adCopyOptimizationPending) return
+    if (realOptimizedScript || isAdCopyProgressAdvancing) {
+      setAdCopyOptimizationPending(false)
+    }
+  }, [adCopyOptimizationPending, realOptimizedScript, isAdCopyProgressAdvancing])
+
+  useEffect(() => {
     setEditableOriginalScript((prev) => {
       if (!prev.trim()) return realOriginalScript
       if (prev.trim() === realOriginalScript) return prev
@@ -659,19 +677,14 @@ ${custom}` : storyboardSplitBuiltinPrompt
       await storyboardAPI.updateConfig(projectId, {
         ad_copy_optimization_prompt: optimizationPrompt,
       })
-      const res = await projectAPI.optimizeAdCopy(projectId, {
+      await projectAPI.optimizeAdCopy(projectId, {
         original_script: originalScript,
         optimization_prompt: optimizationPrompt,
         persist_original: true,
       })
-      const payload = unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
-      if (payload) {
-        setEditableOriginalScript(payload.original_script || originalScript)
-        setEditableOptimizationPrompt(payload.optimization_prompt || optimizationPrompt)
-        setEditableOptimizedScript(String(payload.optimized_script || '').trim())
-      }
+      setAdCopyOptimizationPending(true)
       await refreshAll()
-      toast({ title: displayedOptimizedScript ? '已按当前提示词重新优化文案' : '已完成首次文案优化', variant: 'success' })
+      toast({ title: displayedOptimizedScript ? '已启动重新优化，结果会自动回填' : '已启动文案优化，结果会自动回填', variant: 'success' })
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '文案优化失败', variant: 'destructive' })
     } finally {
@@ -986,11 +999,11 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。前一步的目标不是泛化润色，而是把项目文案优化成更适合后续“按台词 / 口播为主进行拆分”的基准稿。</div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || pipelineBusy}>
+                        <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || adCopyOptimizationPending || pipelineBusy}>
                           {savingCopyDraft ? '保存中…' : '保存原文 / 文案'}
                         </Button>
-                        <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || savingCopyDraft || pipelineBusy}>
-                          {optimizingCopy ? '优化中…' : displayedOptimizedScript ? '重新优化' : '开始优化'}
+                        <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || adCopyOptimizationPending || savingCopyDraft || pipelineBusy}>
+                          {optimizingCopy ? '提交中…' : adCopyOptimizationPending ? '优化进行中…' : displayedOptimizedScript ? '重新优化' : '开始优化'}
                         </Button>
                       </div>
                     </div>
