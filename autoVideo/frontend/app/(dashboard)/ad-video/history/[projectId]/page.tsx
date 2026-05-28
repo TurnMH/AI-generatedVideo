@@ -700,6 +700,15 @@ export default function AdVideoHistoryDetailPage() {
     )
   }
 
+  const regenerateSingleAssetImage = async (assetId: number, assetName: string) => {
+    const action = `asset-regenerate-${assetId}`
+    await runScopedAction(
+      action,
+      () => assetAPI.retry(projectId, assetId),
+      `已重新提交参考图槽位「${assetName || `#${assetId}`}」的生成`,
+    )
+  }
+
   const handleAssetUpload = async (assetId: number, event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1298,16 +1307,31 @@ export default function AdVideoHistoryDetailPage() {
                                     )}
                                   </div>
 
-                                  <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
-                                    {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '重新上传参考图' : '上传参考图'}
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      className="hidden"
-                                      disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
-                                      onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
-                                    />
-                                  </label>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                      {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '重新上传参考图' : '上传参考图'}
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
+                                        onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
+                                      />
+                                    </label>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
+                                      disabled={pipelineBusy || !step2Enabled || uploadingAssetId !== null}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        void regenerateSingleAssetImage(asset.id, asset.name || `#${asset.id}`)
+                                      }}
+                                    >
+                                      重新生成参考图
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             </button>
