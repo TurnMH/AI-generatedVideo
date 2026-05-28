@@ -1177,6 +1177,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                         ))}
                       </select>
                       <div className="text-[11px] text-cyan-100/75">这里选择的是步骤 1 文案优化 / 台词拆分实际使用的文本模型。默认回填创建项目时选中的文本模型；重跑前会先写回项目。</div>
+                      <div className="text-[11px] text-cyan-100/65">当前项目已保存的文本模型 ID：{project?.text_model_id ? String(project.text_model_id) : '未设置'}；当前下拉值：{selectedTextModelId || '空'}</div>
                     </div>
 
                     <div className="space-y-2 xl:col-span-2">
