@@ -269,9 +269,19 @@ export default function AdVideoHistoryDetailPage() {
     [episodes, selectedEpisodeNumber],
   )
 
+  const persistedVideoModel = useMemo(
+    () => String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim(),
+    [project?.storyboard_config?.video_model, autoSplit?.video_model],
+  )
+
+  const effectiveSelectedVideoModel = useMemo(
+    () => selectedVideoModel || persistedVideoModel,
+    [selectedVideoModel, persistedVideoModel],
+  )
+
   const selectedModelMeta = useMemo(
-    () => availableModels.find((item) => item.key === selectedVideoModel) || null,
-    [availableModels, selectedVideoModel],
+    () => availableModels.find((item) => item.key === effectiveSelectedVideoModel) || null,
+    [availableModels, effectiveSelectedVideoModel],
   )
 
   const aspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
@@ -317,7 +327,7 @@ export default function AdVideoHistoryDetailPage() {
   )
 
   const splitConfigReady = Boolean(
-    selectedVideoModel
+    effectiveSelectedVideoModel
       && selectedAspectRatio
       && selectedResolution
       && selectedDuration
@@ -441,7 +451,7 @@ export default function AdVideoHistoryDetailPage() {
 
   useEffect(() => {
     if (!availableModels.length) return
-    const preferred = String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim()
+    const preferred = persistedVideoModel
     if (preferred && availableModels.some((item) => item.key === preferred)) {
       setVideoModelMismatch('')
       setSelectedVideoModel(preferred)
@@ -453,7 +463,7 @@ export default function AdVideoHistoryDetailPage() {
       setVideoModelMismatch('')
     }
     setSelectedVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : availableModels[0]?.key || ''))
-  }, [availableModels, project?.storyboard_config?.video_model, autoSplit?.video_model])
+  }, [availableModels, persistedVideoModel])
 
   useEffect(() => {
     const nextAspect = pickAllowedValue(aspectRatioOptions, project?.storyboard_config?.aspect_ratio)
@@ -593,7 +603,7 @@ export default function AdVideoHistoryDetailPage() {
     setRerunAction('pipeline')
     try {
       await storyboardAPI.updateConfig(projectId, {
-        video_model: selectedVideoModel,
+        video_model: effectiveSelectedVideoModel,
         aspect_ratio: selectedAspectRatio,
         resolution: selectedResolution,
         duration: Number(selectedDuration),
@@ -715,7 +725,7 @@ export default function AdVideoHistoryDetailPage() {
           scene_asset_ids: payload.scene_asset_ids,
           scene_description: payload.scene_description,
           scene_group_keys: payload.scene_group_keys,
-          model_name: selectedVideoModel,
+          model_name: effectiveSelectedVideoModel,
           style_preset: stylePreset,
           motion_mode: motionMode,
           video_mode: project?.video_mode,
@@ -754,7 +764,7 @@ export default function AdVideoHistoryDetailPage() {
               scene_description: item.scene_description,
               scene_group_keys: item.scene_group_keys,
             })),
-            model_name: selectedVideoModel,
+            model_name: effectiveSelectedVideoModel,
             style_preset: stylePreset,
             motion_mode: motionMode,
             video_mode: project?.video_mode,
@@ -781,7 +791,7 @@ export default function AdVideoHistoryDetailPage() {
               scene_asset_ids: payload.scene_asset_ids,
               scene_description: payload.scene_description,
               scene_group_keys: payload.scene_group_keys,
-              model_name: selectedVideoModel,
+              model_name: effectiveSelectedVideoModel,
               style_preset: stylePreset,
               motion_mode: motionMode,
               video_mode: project?.video_mode,
@@ -1049,7 +1059,7 @@ export default function AdVideoHistoryDetailPage() {
                     <div className="space-y-2 xl:col-span-2">
                       <Label className="text-slate-100">视频模型（用于时长/能力约束）</Label>
                       <select
-                        value={selectedVideoModel}
+                        value={effectiveSelectedVideoModel}
                         onChange={(e) => setSelectedVideoModel(e.target.value)}
                         className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
                       >
@@ -1130,7 +1140,7 @@ export default function AdVideoHistoryDetailPage() {
 
                   {videoModelMismatch && (
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
-                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
+                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{effectiveSelectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
                     </div>
                   )}
 
@@ -1255,7 +1265,7 @@ export default function AdVideoHistoryDetailPage() {
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-1">
                       <div>当前范围：{scopeLabel}</div>
-                      <div>目标模型：{selectedVideoModel || '未选择'}</div>
+                      <div>目标模型：{effectiveSelectedVideoModel || '未选择'}</div>
                       <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
                       <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                     </div>
