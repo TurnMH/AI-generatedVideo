@@ -400,12 +400,8 @@ ${paceBlock}`
   useEffect(() => {
     if (scopeStoryboards.length > 0) {
       previousStoryboardsRef.current = scopeStoryboards
-      return
     }
-    if (selectedEpisodeId !== 'all' && storyboards.length > 0 && !step1Running) {
-      setSelectedEpisodeId('all')
-    }
-  }, [scopeStoryboards, selectedEpisodeId, step1Running, storyboards.length])
+  }, [scopeStoryboards])
 
   const scopeStoryboardAssetIds = useMemo(() => {
     const ids = new Set<number>()
@@ -456,6 +452,13 @@ ${paceBlock}`
     if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
     return []
   }, [scopeStoryboards, step1Running])
+
+  useEffect(() => {
+    if (scopeStoryboards.length > 0) return
+    if (selectedEpisodeId !== 'all' && storyboards.length > 0 && !step1Running) {
+      setSelectedEpisodeId('all')
+    }
+  }, [scopeStoryboards, selectedEpisodeId, step1Running, storyboards.length])
 
   const completedStoryboardImages = useMemo(
     () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
