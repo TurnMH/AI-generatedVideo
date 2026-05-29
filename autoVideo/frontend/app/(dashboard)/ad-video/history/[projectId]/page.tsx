@@ -380,6 +380,20 @@ ${paceBlock}`
     [availableModels, effectiveSelectedVideoModel],
   )
 
+  const videoModelsForStep3 = useMemo(() => {
+    const map = new Map<string, VideoModelMeta>()
+    for (const item of availableModels) map.set(item.key, item)
+    if (persistedVideoModel && !map.has(persistedVideoModel)) {
+      map.set(persistedVideoModel, {
+        key: persistedVideoModel,
+        available: false,
+        native_audio: false,
+        params: [],
+      })
+    }
+    return Array.from(map.values())
+  }, [availableModels, persistedVideoModel])
+
   const aspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
   const resolutionOptions = useMemo(() => getParamOptions(selectedModelMeta, 'resolution'), [selectedModelMeta])
   const durationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'duration'), [selectedModelMeta])
@@ -1252,7 +1266,7 @@ ${paceBlock}`
                     </div>
 
                     <div className="space-y-2 xl:col-span-2">
-                      <Label className="text-slate-100">视频模型（用于时长/能力约束）</Label>
+                      <Label className="text-slate-100">约束模型（用于时长/能力约束）</Label>
                       <select
                         value={effectiveSelectedVideoModel}
                         onChange={(e) => setSelectedVideoModel(e.target.value)}
@@ -1678,11 +1692,35 @@ ${paceBlock}`
                       )}
                     </div>
 
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85 space-y-1">
-                      <div>当前范围：{scopeLabel}</div>
-                      <div>目标模型：{effectiveSelectedVideoModel || '未选择'}</div>
-                      <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
-                      <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">视频生成模型（步骤 3 实际使用）</Label>
+                        <select
+                          value={effectiveSelectedVideoModel}
+                          onChange={(e) => setSelectedVideoModel(e.target.value)}
+                          disabled={step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择模型</option>
+                          {videoModelsForStep3.map((item) => {
+                            const params = item.params || []
+                            const keys = new Set(params.map((param) => param.key))
+                            const missing = ['aspect_ratio', 'resolution', 'duration'].filter((key) => !keys.has(key))
+                            const suffix = item.available
+                              ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，步骤1可能不可用）` : ''
+                              : '（当前运行态不可用）'
+                            return <option key={item.key} value={item.key} disabled={!item.available}>{item.key}{suffix}</option>
+                          })}
+                        </select>
+                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；切换后会同步刷新比例、分辨率、时长等能力选项。</div>
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
+                        <div>当前范围：{scopeLabel}</div>
+                        <div>目标模型：{effectiveSelectedVideoModel || '未选择'}</div>
+                        <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
+                        <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                      </div>
                     </div>
 
                     <Button
@@ -1697,7 +1735,7 @@ ${paceBlock}`
                     </div>
 
                     <div className="text-[11px] text-emerald-100/75">
-                      真正提交给视频服务的是当前范围内那些已经有 `image_url` 的分镜图，以及对应的分镜文案、台词、镜头运动、角色/素材引用等字段。
+                      真正提交给视频服务的是当前范围内从首张可用 `image_url` 开始的完整分镜序列；只有第一段带首图，后续片段依赖上一段视频尾帧串行衔接，同时会带上这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
                     </div>
                   </div>
                 )}
