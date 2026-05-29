@@ -155,25 +155,25 @@ function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
 
 function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number) {
   const sorted = storyboards
-    .filter((item) => String(item.image_url || '').trim())
     .slice()
     .sort((a, b) => a.sequence_number - b.sequence_number)
 
-  const sceneDescriptions = sorted.map((item) => item.prompt_used || item.scene_description || '')
-  const dialogues = sorted.map((item) => item.dialogue || '')
-  const durations = sorted.map((item) => item.duration || 0)
-  const cameraMovements = sorted.map((item) => item.camera_movement || '')
-  const moods = sorted.map((item) => item.mood || '')
-  const spatialAnchors = sorted.map((item) => item.spatial_anchor || '')
-  const subjectPositions = sorted.map((item) => item.subject_positions || '')
-  const transitionNotes = sorted.map((item) => item.transition_note || '')
-  const sceneCharacters = sorted.map((item) => item.characters || [])
-  const sceneAssetIds = sorted.map((item) => item.asset_ids || [])
-  const sceneGroupKeys = sorted.map((item) => item.scene_group_key || '')
+  const firstImageIndex = sorted.findIndex((item) => String(item.image_url || '').trim())
+  const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
+  const sceneDescriptions = serialStoryboards.map((item) => item.prompt_used || item.scene_description || '')
+  const dialogues = serialStoryboards.map((item) => item.dialogue || '')
+  const durations = serialStoryboards.map((item) => item.duration || 0)
+  const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
+  const moods = serialStoryboards.map((item) => item.mood || '')
+  const spatialAnchors = serialStoryboards.map((item) => item.spatial_anchor || '')
+  const subjectPositions = serialStoryboards.map((item) => item.subject_positions || '')
+  const transitionNotes = serialStoryboards.map((item) => item.transition_note || '')
+  const sceneCharacters = serialStoryboards.map((item) => item.characters || [])
+  const sceneAssetIds = serialStoryboards.map((item) => item.asset_ids || [])
 
   return {
     episode_id: episodeId,
-    image_urls: sorted.map((item) => item.image_url),
+    image_urls: serialStoryboards.map((item, index) => index === 0 ? item.image_url : ''),
     scene_descriptions: sceneDescriptions,
     dialogues: dialogues.some(Boolean) ? dialogues : undefined,
     durations: durations.some(Boolean) ? durations : undefined,
@@ -185,7 +185,7 @@ function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number)
     scene_characters: sceneCharacters.some((arr) => arr.length > 0) ? sceneCharacters : undefined,
     scene_asset_ids: sceneAssetIds.some((arr) => arr.length > 0) ? sceneAssetIds : undefined,
     scene_description: sceneDescriptions.filter(Boolean).join(' ') || undefined,
-    scene_group_keys: sceneGroupKeys.some(Boolean) ? sceneGroupKeys : undefined,
+    scene_group_keys: serialStoryboards.map(() => `ad-episode-${episodeId || 'single'}`),
   }
 }
 
@@ -503,13 +503,14 @@ ${paceBlock}`
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
   const storyboardImagesReady = storyboardScopeReady && completedStoryboardImages > 0
   const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === displayStoryboards.length
+  const serialVideoSeedReady = storyboardScopeReady && displayStoryboards.some((item) => String(item.image_url || '').trim())
 
   const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && storyboardImagesComplete
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = step1Done && storyboardImagesReady
+  const step3Enabled = step1Done && serialVideoSeedReady
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -556,16 +557,16 @@ ${paceBlock}`
               : '当前范围已有部分分镜图，但还没补齐，建议继续刷新。'
 
   const step3Hint = !step3Enabled
-    ? '当前范围还没有可用分镜图。先在步骤 2 至少生成出一张可用分镜图，再来提交视频。'
+    ? '当前范围还没有可用的首张分镜图。先在步骤 2 至少生成第 1 张分镜图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
     : step3Running
       ? '当前已经有视频任务在执行，先等这一轮结果。'
       : completedStoryboardImages === 0
-        ? '当前范围还没有可用分镜图，所以现在不能提交视频。'
+        ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
         : !step2Done
-          ? '当前范围已经有可用分镜图，可以先提交视频；如果想要更完整的结果，再继续补齐剩余参考图和分镜图。'
+          ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
           : step3Done
             ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
-            : '当前范围已经有可用分镜图，可以开始提交视频任务。'
+            : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -872,12 +873,16 @@ ${paceBlock}`
     }
 
     const storyboardPool = scopeStoryboards
-      .filter((item) => String(item.image_url || '').trim())
       .slice()
       .sort((a, b) => a.sequence_number - b.sequence_number)
 
     if (storyboardPool.length === 0) {
-      toast({ title: '当前范围还没有可用的分镜图，请先上传人物图并刷新分镜图', variant: 'destructive' })
+      toast({ title: '当前范围还没有分镜文本，请先完成步骤 1', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+    if (!storyboardPool.some((item) => String(item.image_url || '').trim())) {
+      toast({ title: '当前范围还没有可用的首张分镜图，请先在步骤 2 至少生成第 1 张分镜图', variant: 'destructive' })
       releaseActionLock('video-start')
       return
     }
@@ -917,6 +922,7 @@ ${paceBlock}`
           video_mode: project?.video_mode,
           clip_duration_sec: clipDuration,
           render_config: renderConfig,
+          serial_scene: true,
         })
       } else {
         const groups = new Map<number, Storyboard[]>()
@@ -930,7 +936,7 @@ ${paceBlock}`
         const batchEpisodes = Array.from(groups.entries())
           .filter(([episodeId]) => episodeId > 0)
           .map(([episodeId, items]) => buildEpisodeVideoPayload(items, episodeId))
-          .filter((item) => item.image_urls.length > 0)
+          .filter((item) => String(item.image_urls?.[0] || '').trim())
 
         if (batchEpisodes.length > 0) {
           await videoAPI.generateBatch(projectId, {
@@ -956,13 +962,14 @@ ${paceBlock}`
             video_mode: project?.video_mode,
             clip_duration_sec: clipDuration,
             render_config: renderConfig,
+            serial_scene: true,
           })
         }
 
         const noEpisodeStoryboards = groups.get(0) || []
         if (noEpisodeStoryboards.length > 0) {
           const payload = buildEpisodeVideoPayload(noEpisodeStoryboards)
-          if (payload.image_urls.length > 0) {
+          if (String(payload.image_urls?.[0] || '').trim()) {
             await videoAPI.generate(projectId, {
               image_urls: payload.image_urls,
               scene_descriptions: payload.scene_descriptions,
@@ -983,6 +990,7 @@ ${paceBlock}`
               video_mode: project?.video_mode,
               clip_duration_sec: clipDuration,
               render_config: renderConfig,
+              serial_scene: true,
             })
           }
         }
@@ -1477,7 +1485,7 @@ ${paceBlock}`
                       )}
                       {!step2Done && step3Enabled && (
                         <div className="mt-2 text-emerald-200/90">
-                          当前范围已经有可用分镜图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交视频。
+                        当前范围已经有首张分镜图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
                         </div>
                       )}
                     </div>
@@ -1662,7 +1670,7 @@ ${paceBlock}`
                   <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
                     <div>
                       <div className="text-sm font-medium text-emerald-100">步骤 3：基于当前范围分镜图提交视频</div>
-                      <div className="mt-1 text-xs text-emerald-100/80">这里只有在当前范围已经有可用分镜图时才允许提交；人物图本身不会直接拿去生成视频。</div>
+                      <div className="mt-1 text-xs text-emerald-100/80">这里只要求当前范围至少有首张分镜图；提交后会串行生成，后续 clip 使用上一段视频检测到的尾帧作为下一段首帧。</div>
                       {step3Running && (
                         <div className="mt-2 inline-flex rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-100">
                           当前进行中：正在提交视频任务，请勿重复点击
@@ -1678,7 +1686,7 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || completedStoryboardImages === 0}
+                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || !serialVideoSeedReady}
                       onClick={() => void startScopedVideoGeneration()}
                     >
                       {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
