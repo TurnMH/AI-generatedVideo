@@ -1666,7 +1666,85 @@ ${paceBlock}`
                       )}
                     </div>
 
-                    <div className="grid gap-4">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                      <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-white">参考图槽位上传区</div>
+                          <div className="text-[11px] text-violet-100/80">已上传 {uploadedScopeAssets} / {scopeAssets.length}</div>
+                        </div>
+
+                        <div className="max-h-[520px] space-y-3 overflow-auto pr-1">
+                          {scopeAssets.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
+                              当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
+                            </div>
+                          ) : scopeAssets.map((asset) => (
+                            <div
+                              key={asset.id}
+                              className={`rounded-lg border p-3 text-left space-y-3 transition ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-cyan-400/40 bg-cyan-500/10 ring-1 ring-cyan-400/30' : 'border-white/10 bg-slate-950/40'}`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm font-medium text-white">#{asset.id} · {asset.name || '未命名素材'}</div>
+                                  <div className="mt-1 text-[11px] text-slate-400">{asset.type || '-'}{assetToStoryboardMap.get(asset.id)?.length ? ` · 对应 ${assetToStoryboardMap.get(asset.id)?.length || 0} 条分镜` : ' · 当前未映射分镜'}</div>
+                                </div>
+                                <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(asset.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-violet-400/30 bg-violet-500/10 text-violet-100'}`}>
+                                  {String(asset.image_url || '').trim() ? '已上传' : '待上传'}
+                                </div>
+                              </div>
+
+                              <div className="grid gap-3 md:grid-cols-[96px_minmax(0,1fr)]">
+                                {String(asset.image_url || '').trim() ? (
+                                  <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={asset.image_url} alt={asset.name || `asset-${asset.id}`} className="h-24 w-full object-cover" />
+                                  </div>
+                                ) : (
+                                  <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-[11px] text-slate-500">
+                                    暂无参考图
+                                  </div>
+                                )}
+
+                                <div className="space-y-3">
+                                  <div className="flex flex-wrap gap-1">
+                                    {(assetToStoryboardMap.get(asset.id) || []).length > 0 ? (assetToStoryboardMap.get(asset.id) || []).map((storyboard) => (
+                                      <span key={`asset-${asset.id}-storyboard-${storyboard.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-300/40 bg-cyan-400/20 text-cyan-50' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
+                                        分镜 #{storyboard.sequence_number}
+                                      </span>
+                                    )) : (
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">未映射</span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                      {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '重新上传参考图' : '上传参考图'}
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
+                                        onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
+                                      />
+                                    </label>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
+                                      disabled={pipelineBusy || !step2Enabled || uploadingAssetId !== null}
+                                      onClick={() => void regenerateSingleAssetImage(asset.id, asset.name || `#${asset.id}`)}
+                                    >
+                                      重新生成参考图
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
                       <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div className="text-sm font-medium text-white">当前范围分镜与参考图合并卡</div>
