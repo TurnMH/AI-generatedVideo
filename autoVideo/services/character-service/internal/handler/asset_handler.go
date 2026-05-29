@@ -24,13 +24,13 @@ import (
 const maxConcurrentEpisodeExtractions = 4
 
 type AssetHandler struct {
-	svc          *service.AssetService
-	extractSvc   *service.ExtractService
-	logger       *zap.Logger
-	extractSem   chan struct{}
-	geminiBases  []string
-	geminiKeys   []string
-	geminiModel  string
+	svc         *service.AssetService
+	extractSvc  *service.ExtractService
+	logger      *zap.Logger
+	extractSem  chan struct{}
+	geminiBases []string
+	geminiKeys  []string
+	geminiModel string
 }
 
 type geminiChannel struct {
@@ -44,10 +44,10 @@ type geminiMessage struct {
 }
 
 type geminiOutputPart struct {
-	Type     string `json:"type"`               // "text" | "image"
+	Type     string `json:"type"` // "text" | "image"
 	Text     string `json:"text,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
-	Data     string `json:"data,omitempty"`     // base64
+	Data     string `json:"data,omitempty"` // base64
 }
 
 // NewAssetHandler —— 创建资产处理器实例，返回 *AssetHandler
@@ -106,7 +106,7 @@ func fetchGeminiPartsFromChannel(ctx context.Context, client *http.Client, chann
 		ResponseModalities []string `json:"responseModalities"`
 	}
 	type geminiReq struct {
-		Contents         []geminiContent `json:"contents"`
+		Contents         []geminiContent  `json:"contents"`
 		GenerationConfig generationConfig `json:"generationConfig"`
 	}
 
@@ -749,7 +749,7 @@ func (h *AssetHandler) ChatGemini(c *gin.Context) {
 
 	var req struct {
 		Messages []struct {
-			Role    string `json:"role"`    // "user" | "model"
+			Role    string `json:"role"` // "user" | "model"
 			Content string `json:"content"`
 		} `json:"messages" binding:"required"`
 	}
@@ -838,6 +838,7 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
 		jwtToken = parts[1]
 	}
+	skipStoryboardTrigger := strings.EqualFold(c.GetHeader("X-Autovideo-Skip-Storyboard-Trigger"), "true")
 
 	go func() {
 		h.extractSem <- struct{}{}
@@ -851,7 +852,11 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 				)
 			}
 		}()
-		if _, err := h.extractSvc.ExtractFromEpisode(context.Background(), pid, eid, jwtToken); err != nil {
+		extractCtx := context.Background()
+		if skipStoryboardTrigger {
+			extractCtx = service.WithSkipStoryboardTrigger(extractCtx)
+		}
+		if _, err := h.extractSvc.ExtractFromEpisode(extractCtx, pid, eid, jwtToken); err != nil {
 			h.logger.Error("async episode extraction failed",
 				zap.Uint64("project_id", pid),
 				zap.Uint64("episode_id", eid),

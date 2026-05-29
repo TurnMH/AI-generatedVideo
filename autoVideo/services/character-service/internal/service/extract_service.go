@@ -148,6 +148,19 @@ func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) 
 	return resumed, nil
 }
 
+type extractContextKey string
+
+const skipStoryboardTriggerContextKey extractContextKey = "skipStoryboardTrigger"
+
+func WithSkipStoryboardTrigger(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipStoryboardTriggerContextKey, true)
+}
+
+func shouldSkipStoryboardTrigger(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipStoryboardTriggerContextKey).(bool)
+	return skip
+}
+
 type extractedAsset struct {
 	Type        string  `json:"type"`
 	Name        string  `json:"name"`
@@ -477,9 +490,9 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 			cleanedDesc = stripCharacterMentions(assetType, cleanedDesc)
 		}
 		asset := &model.Asset{
-			ProjectID:   projectID,
-			Type:        assetType,
-			Name:        ea.Name,
+			ProjectID: projectID,
+			Type:      assetType,
+			Name:      ea.Name,
 			// 不再存储视觉基调到 description
 			Description: cleanedDesc,
 			Status:      "pending",
@@ -647,6 +660,15 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 	// Auto-match voices after episode extraction
 	if _, err := s.assetSvc.AutoMatchVoices(projectID); err != nil {
 		s.logger.Warn("auto-match voices after episode extraction", zap.Error(err))
+	}
+	if shouldSkipStoryboardTrigger(ctx) {
+		if s.logger != nil {
+			s.logger.Info("skip storyboard extraction callback after episode asset extraction",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("episode_id", episodeID),
+			)
+		}
+		return created, nil
 	}
 	if err := s.triggerStoryboardExtraction(ctx, projectID, &episodeID, jwtToken); err != nil {
 		s.logger.Warn("auto trigger episode storyboard extraction after asset extraction failed",

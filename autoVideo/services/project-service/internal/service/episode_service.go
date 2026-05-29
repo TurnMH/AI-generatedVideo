@@ -88,7 +88,10 @@ type serviceRuntimeAPIKey struct {
 
 type episodeContextKey string
 
-const skipEpisodeAssetRefreshContextKey episodeContextKey = "skipEpisodeAssetRefresh"
+const (
+	skipEpisodeAssetRefreshContextKey      episodeContextKey = "skipEpisodeAssetRefresh"
+	skipEpisodeStoryboardTriggerContextKey episodeContextKey = "skipEpisodeStoryboardTrigger"
+)
 
 func WithSkipEpisodeAssetRefresh(ctx context.Context) context.Context {
 	return context.WithValue(ctx, skipEpisodeAssetRefreshContextKey, true)
@@ -96,6 +99,15 @@ func WithSkipEpisodeAssetRefresh(ctx context.Context) context.Context {
 
 func shouldSkipEpisodeAssetRefresh(ctx context.Context) bool {
 	skip, _ := ctx.Value(skipEpisodeAssetRefreshContextKey).(bool)
+	return skip
+}
+
+func WithSkipEpisodeStoryboardTrigger(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipEpisodeStoryboardTriggerContextKey, true)
+}
+
+func shouldSkipEpisodeStoryboardTrigger(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipEpisodeStoryboardTriggerContextKey).(bool)
 	return skip
 }
 
@@ -431,6 +443,9 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
+		if shouldSkipEpisodeStoryboardTrigger(ctx) {
+			req.Header.Set("X-Autovideo-Skip-Storyboard-Trigger", "true")
+		}
 
 		resp, doErr := s.httpClient.Do(req)
 		if doErr != nil {
@@ -1264,7 +1279,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 						zap.Uint64("episode_id", *episodeID),
 					)
 				}
-			} else if err := s.extractAssetsForEpisode(ctx, projectID, *episodeID); err != nil && s.logger != nil {
+			} else if err := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(ctx), projectID, *episodeID); err != nil && s.logger != nil {
 				s.logger.Warn("manual storyboard extraction asset pre-refresh failed",
 					zap.Uint64("project_id", projectID),
 					zap.Uint64("episode_id", *episodeID),
@@ -1272,7 +1287,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 				)
 			}
 		} else {
-			s.extractAssetsAfterSplit(ctx, projectID, episodes)
+			s.extractAssetsAfterSplit(WithSkipEpisodeStoryboardTrigger(ctx), projectID, episodes)
 		}
 	}
 
@@ -2162,7 +2177,7 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 					s.logger.Warn("auto optimize-review episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
 				}
 				if s.characterBaseURL != "" {
-					if extractErr := s.extractAssetsForEpisode(autoCtx, project.ID, ep.ID); extractErr != nil && s.logger != nil {
+					if extractErr := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(autoCtx), project.ID, ep.ID); extractErr != nil && s.logger != nil {
 						s.logger.Warn("fallback asset extraction after optimize-review failure", zap.Uint64("episode_id", ep.ID), zap.Error(extractErr))
 					}
 				}
@@ -2171,7 +2186,7 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 
 			autoPrepared := false
 			if updated.OptimizedText != "" {
-				if _, applyErr := s.ApplyOptimizedText(autoCtx, ep.ID, project.ID); applyErr != nil {
+				if _, applyErr := s.ApplyOptimizedText(WithSkipEpisodeStoryboardTrigger(autoCtx), ep.ID, project.ID); applyErr != nil {
 					if s.logger != nil {
 						s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
 					}
