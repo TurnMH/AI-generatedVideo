@@ -211,15 +211,21 @@ export default function AdVideoHistoryDetailPage() {
   const [rerunAction, setRerunAction] = useState<string | null>(null)
   const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
   const [selectedTextModelId, setSelectedTextModelId] = useState('default')
-  const [selectedVideoModel, setSelectedVideoModel] = useState('')
+  const [selectedConstraintVideoModel, setSelectedConstraintVideoModel] = useState('')
+  const [selectedGenerationVideoModel, setSelectedGenerationVideoModel] = useState('')
   const [selectedAspectRatio, setSelectedAspectRatio] = useState('')
   const [activePipelineStep, setActivePipelineStep] = useState<'step1' | 'step2' | 'step3'>('step1')
+  const userSelectedPipelineStepRef = useRef(false)
   const previousStoryboardsRef = useRef<Storyboard[]>([])
   const actionLocksRef = useRef<Set<string>>(new Set())
   const [selectedResolution, setSelectedResolution] = useState('')
   const [selectedDuration, setSelectedDuration] = useState('')
+  const [selectedStep3AspectRatio, setSelectedStep3AspectRatio] = useState('')
+  const [selectedStep3Resolution, setSelectedStep3Resolution] = useState('')
+  const [selectedStep3Duration, setSelectedStep3Duration] = useState('')
   const [selectedSpeechPace, setSelectedSpeechPace] = useState<SpeechPaceOption>('normal')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
+  const [selectedStep3GenerateAudio, setSelectedStep3GenerateAudio] = useState(false)
   const [videoModelMismatch, setVideoModelMismatch] = useState('')
   const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
   const [focusedStoryboardId, setFocusedStoryboardId] = useState<number | null>(null)
@@ -375,9 +381,19 @@ ${paceBlock}`
     [project?.storyboard_config?.video_model, autoSplit?.video_model],
   )
 
+  const effectiveConstraintVideoModel = useMemo(
+    () => selectedConstraintVideoModel || persistedVideoModel,
+    [selectedConstraintVideoModel, persistedVideoModel],
+  )
+
   const effectiveSelectedVideoModel = useMemo(
-    () => selectedVideoModel || persistedVideoModel,
-    [selectedVideoModel, persistedVideoModel],
+    () => selectedGenerationVideoModel || persistedVideoModel,
+    [selectedGenerationVideoModel, persistedVideoModel],
+  )
+
+  const constraintModelMeta = useMemo(
+    () => availableModels.find((item) => item.key === effectiveConstraintVideoModel) || null,
+    [availableModels, effectiveConstraintVideoModel],
   )
 
   const selectedModelMeta = useMemo(
@@ -400,9 +416,12 @@ ${paceBlock}`
     return Array.from(map.values())
   }, [availableModels, persistedVideoModel])
 
-  const aspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
-  const resolutionOptions = useMemo(() => getParamOptions(selectedModelMeta, 'resolution'), [selectedModelMeta])
-  const durationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'duration'), [selectedModelMeta])
+  const aspectRatioOptions = useMemo(() => getParamOptions(constraintModelMeta, 'aspect_ratio'), [constraintModelMeta])
+  const resolutionOptions = useMemo(() => getParamOptions(constraintModelMeta, 'resolution'), [constraintModelMeta])
+  const durationOptions = useMemo(() => getParamOptions(constraintModelMeta, 'duration'), [constraintModelMeta])
+  const step3AspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
+  const step3ResolutionOptions = useMemo(() => getParamOptions(selectedModelMeta, 'resolution'), [selectedModelMeta])
+  const step3DurationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'duration'), [selectedModelMeta])
   const persistedDuration = useMemo(
     () => String(project?.storyboard_config?.duration || autoSplit?.duration || '').trim(),
     [project?.storyboard_config?.duration, autoSplit?.duration],
@@ -451,13 +470,23 @@ ${paceBlock}`
   )
 
   const splitConfigReady = Boolean(
-    effectiveSelectedVideoModel
+    effectiveConstraintVideoModel
       && selectedAspectRatio
       && selectedResolution
       && selectedDuration
       && aspectRatioOptions.length > 0
       && resolutionOptions.length > 0
       && durationOptions.length > 0,
+  )
+
+  const step3ConfigReady = Boolean(
+    effectiveSelectedVideoModel
+      && selectedStep3AspectRatio
+      && selectedStep3Resolution
+      && selectedStep3Duration
+      && step3AspectRatioOptions.length > 0
+      && step3ResolutionOptions.length > 0
+      && step3DurationOptions.length > 0,
   )
 
   const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
@@ -530,7 +559,7 @@ ${paceBlock}`
   const step2Enabled = step1Done
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && storyboardImagesComplete
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = step1Done && serialVideoSeedReady
+  const step3Enabled = step1Done && serialVideoSeedReady && step3ConfigReady
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -538,6 +567,7 @@ ${paceBlock}`
   const step3Status: 'pending' | 'active' | 'done' | 'blocked' = !step3Enabled ? 'blocked' : step3Running ? 'active' : step3Done ? 'done' : 'pending'
 
   useEffect(() => {
+    if (userSelectedPipelineStepRef.current && !step1Running && !step2Running && !step3Running) return
     if (step1Running) {
       setActivePipelineStep('step1')
       return
@@ -578,8 +608,10 @@ ${paceBlock}`
 
   const step3Hint = !step3Enabled
     ? '当前范围还没有可用的首张分镜图。先在步骤 2 至少生成第 1 张分镜图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
-    : step3Running
-      ? '当前已经有视频任务在执行，先等这一轮结果。'
+    : !step3ConfigReady
+      ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
+      : step3Running
+        ? '当前已经有视频任务在执行，先等这一轮结果。'
       : completedStoryboardImages === 0
         ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
         : !step2Done
@@ -628,7 +660,8 @@ ${paceBlock}`
     const preferred = persistedVideoModel
     if (preferred && availableModels.some((item) => item.key === preferred)) {
       setVideoModelMismatch('')
-      setSelectedVideoModel(preferred)
+      setSelectedConstraintVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : preferred))
+      setSelectedGenerationVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : preferred))
       return
     }
     if (preferred) {
@@ -636,7 +669,9 @@ ${paceBlock}`
     } else {
       setVideoModelMismatch('')
     }
-    setSelectedVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : availableModels[0]?.key || ''))
+    const fallback = availableModels[0]?.key || ''
+    setSelectedConstraintVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : fallback))
+    setSelectedGenerationVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : fallback))
   }, [availableModels, persistedVideoModel])
 
   useEffect(() => {
@@ -650,9 +685,19 @@ ${paceBlock}`
   }, [aspectRatioOptions, project?.storyboard_config?.aspect_ratio])
 
   useEffect(() => {
+    const nextAspect = pickAllowedValue(step3AspectRatioOptions, project?.storyboard_config?.aspect_ratio)
+    setSelectedStep3AspectRatio((prev) => (prev && step3AspectRatioOptions.some((item) => item.value === prev) ? prev : nextAspect))
+  }, [step3AspectRatioOptions, project?.storyboard_config?.aspect_ratio])
+
+  useEffect(() => {
     const nextResolution = pickAllowedValue(resolutionOptions, project?.storyboard_config?.resolution)
     setSelectedResolution((prev) => (prev && resolutionOptions.some((item) => item.value === prev) ? prev : nextResolution))
   }, [resolutionOptions, project?.storyboard_config?.resolution])
+
+  useEffect(() => {
+    const nextResolution = pickAllowedValue(step3ResolutionOptions, project?.storyboard_config?.resolution)
+    setSelectedStep3Resolution((prev) => (prev && step3ResolutionOptions.some((item) => item.value === prev) ? prev : nextResolution))
+  }, [step3ResolutionOptions, project?.storyboard_config?.resolution])
 
   useEffect(() => {
     const nextDuration = pickAllowedValue(durationOptions, persistedDuration, false)
@@ -661,6 +706,14 @@ ${paceBlock}`
       return nextDuration
     })
   }, [durationOptions, persistedDuration])
+
+  useEffect(() => {
+    const nextDuration = pickAllowedValue(step3DurationOptions, persistedDuration, false)
+    setSelectedStep3Duration((prev) => {
+      if (prev && (step3DurationOptions.some((item) => item.value === prev) || prev === persistedDuration)) return prev
+      return nextDuration
+    })
+  }, [step3DurationOptions, persistedDuration])
 
   useEffect(() => {
     const persisted = String(project?.storyboard_config?.speech_pace || '').trim() as SpeechPaceOption | ''
@@ -673,6 +726,10 @@ ${paceBlock}`
 
   useEffect(() => {
     setSelectedGenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
+  }, [project?.storyboard_config?.generate_audio])
+
+  useEffect(() => {
+    setSelectedStep3GenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
   }, [project?.storyboard_config?.generate_audio])
 
   const refreshAll = async () => {
@@ -791,7 +848,7 @@ ${paceBlock}`
         text_model_id: selectedTextModelId === 'default' ? undefined : Number(selectedTextModelId),
       })
       await storyboardAPI.updateConfig(projectId, {
-        video_model: effectiveSelectedVideoModel,
+        video_model: effectiveConstraintVideoModel,
         aspect_ratio: selectedAspectRatio,
         resolution: selectedResolution,
         duration: Number(selectedDuration),
@@ -886,8 +943,8 @@ ${paceBlock}`
       return
     }
 
-    if (!splitConfigReady) {
-      toast({ title: '当前模型没有完整声明 aspect_ratio / resolution / duration，不能直接提交视频生成', variant: 'destructive' })
+    if (!step3ConfigReady) {
+      toast({ title: '步骤 3 当前模型没有完整声明 aspect_ratio / resolution / duration，不能直接提交视频生成', variant: 'destructive' })
       releaseActionLock('video-start')
       return
     }
@@ -908,14 +965,14 @@ ${paceBlock}`
     }
 
     const renderConfig: Record<string, unknown> = {
-      aspect_ratio: selectedAspectRatio,
-      resolution: selectedResolution,
-      generate_audio: selectedModelMeta?.native_audio ? selectedGenerateAudio : undefined,
+      aspect_ratio: selectedStep3AspectRatio,
+      resolution: selectedStep3Resolution,
+      generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
     }
 
     const stylePreset = project?.storyboard_config?.style_preset || autoSplit?.style_preset || undefined
     const motionMode = project?.storyboard_config?.motion_mode || undefined
-    const clipDuration = Number(selectedDuration || project?.storyboard_config?.duration || 0) || undefined
+    const clipDuration = Number(selectedStep3Duration || project?.storyboard_config?.duration || 0) || undefined
 
     setGenerationAction('video-start')
     try {
@@ -1212,7 +1269,7 @@ ${paceBlock}`
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="grid gap-3 md:grid-cols-3">
-                <button type="button" onClick={() => setActivePipelineStep('step1')} className={`rounded-xl border p-4 text-left transition ${stepTone(step1Status)} ${activePipelineStep === 'step1' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step1') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step1Status)} ${activePipelineStep === 'step1' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 1</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
@@ -1221,7 +1278,7 @@ ${paceBlock}`
                   <div className="mt-2 text-xs text-current/80">先确定视频模型、单分镜时长与语速，再按台词 / 口播承载量重跑当前文案；比例和分辨率用于同步约束构图与画面复杂度。重拆分后若原分集编号失效，页面会自动回到全部分集展示新结果。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
-                <button type="button" onClick={() => setActivePipelineStep('step2')} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step2') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 2</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step2Status)}</div>
@@ -1230,7 +1287,7 @@ ${paceBlock}`
                   <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为当前范围逐个上传真实参考图，最后刷新分镜图。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step2' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
-                <button type="button" onClick={() => setActivePipelineStep('step3')} className={`rounded-xl border p-4 text-left transition ${stepTone(step3Status)} ${activePipelineStep === 'step3' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step3') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step3Status)} ${activePipelineStep === 'step3' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-medium">步骤 3</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step3Status)}</div>
@@ -1274,8 +1331,8 @@ ${paceBlock}`
                     <div className="space-y-2 xl:col-span-2">
                       <Label className="text-slate-100">约束模型（仅用于步骤 1 时长/能力约束）</Label>
                       <select
-                        value={effectiveSelectedVideoModel}
-                        onChange={(e) => setSelectedVideoModel(e.target.value)}
+                        value={effectiveConstraintVideoModel}
+                        onChange={(e) => setSelectedConstraintVideoModel(e.target.value)}
                         className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
                       >
                         <option value="">请选择模型</option>
@@ -1372,7 +1429,7 @@ ${paceBlock}`
 
                   {videoModelMismatch && (
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
-                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{effectiveSelectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
+                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{effectiveConstraintVideoModel || effectiveSelectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
                     </div>
                   )}
 
@@ -1490,7 +1547,7 @@ ${paceBlock}`
                         size="sm"
                         variant="secondary"
                         disabled={!step3Enabled}
-                        onClick={() => setActivePipelineStep('step3')}
+                        onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step3') }}
                       >
                         去步骤 3 生成视频
                       </Button>
@@ -1703,7 +1760,7 @@ ${paceBlock}`
                         <Label className="text-emerald-100">视频生成模型（步骤 3 实际使用）</Label>
                         <select
                           value={effectiveSelectedVideoModel}
-                          onChange={(e) => setSelectedVideoModel(e.target.value)}
+                          onChange={(e) => setSelectedGenerationVideoModel(e.target.value)}
                           disabled={step3Running}
                           className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -1713,19 +1770,85 @@ ${paceBlock}`
                             const keys = new Set(params.map((param) => param.key))
                             const missing = ['aspect_ratio', 'resolution', 'duration'].filter((key) => !keys.has(key))
                             const suffix = item.available
-                              ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，步骤1可能不可用）` : ''
+                              ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，参数需手动补齐）` : ''
                               : '（当前运行态不可用）'
                             return <option key={item.key} value={item.key} disabled={!item.available}>{item.key}{suffix}</option>
                           })}
                         </select>
-                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；如果当前模型容易被拒，可以先切到别的模型再提交，避免直接撞上 provider 审核或能力限制。</div>
+                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
                       </div>
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
                         <div>当前范围：{scopeLabel}</div>
                         <div>目标模型：{effectiveSelectedVideoModel || '未选择'}</div>
-                        <div>视频配置：{selectedAspectRatio || '-'} / {selectedResolution || '-'} / {selectedDuration || '-'} 秒</div>
+                        <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 画面比例</Label>
+                        <select
+                          value={selectedStep3AspectRatio}
+                          onChange={(e) => setSelectedStep3AspectRatio(e.target.value)}
+                          disabled={step3AspectRatioOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择比例</option>
+                          {step3AspectRatioOptions.map((item) => (
+                            <option key={`step3-aspect-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 分辨率</Label>
+                        <select
+                          value={selectedStep3Resolution}
+                          onChange={(e) => setSelectedStep3Resolution(e.target.value)}
+                          disabled={step3ResolutionOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择分辨率</option>
+                          {step3ResolutionOptions.map((item) => (
+                            <option key={`step3-resolution-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 单分镜时长</Label>
+                        <select
+                          value={selectedStep3Duration}
+                          onChange={(e) => setSelectedStep3Duration(e.target.value)}
+                          disabled={step3DurationOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择时长</option>
+                          {step3DurationOptions.map((item) => (
+                            <option key={`step3-duration-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 语音输出</Label>
+                        <select
+                          value={selectedModelMeta?.native_audio ? (selectedStep3GenerateAudio ? 'enabled' : 'disabled') : 'unsupported'}
+                          onChange={(e) => setSelectedStep3GenerateAudio(e.target.value === 'enabled')}
+                          disabled={!selectedModelMeta?.native_audio || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {selectedModelMeta?.native_audio ? (
+                            <>
+                              <option value="disabled">不生成语音</option>
+                              <option value="enabled">生成语音（原生）</option>
+                            </>
+                          ) : (
+                            <option value="unsupported">当前模型不支持语音</option>
+                          )}
+                        </select>
                       </div>
                     </div>
 
