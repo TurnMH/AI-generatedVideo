@@ -2,9 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -30,15 +35,19 @@ type storyboardGenerationScope struct {
 }
 
 type StoryboardService struct {
-	repo              *repository.StoryboardRepo
-	projectRepo       *repository.ProjectRepo
-	kafkaProducer     *KafkaProducer
-	logger            *zap.Logger
-	maxInFlight       int
-	generationScopes  sync.Map
-	pausedProjects    sync.Map
-	auditor           *PromptAuditorService
-	continuityAuditor *SceneContinuityAuditor
+	repo                *repository.StoryboardRepo
+	projectRepo         *repository.ProjectRepo
+	kafkaProducer       *KafkaProducer
+	logger              *zap.Logger
+	maxInFlight         int
+	generationScopes    sync.Map
+	pausedProjects      sync.Map
+	auditor             *PromptAuditorService
+	continuityAuditor   *SceneContinuityAuditor
+	modelServiceBaseURL string
+	authServiceBaseURL  string
+	jwtSecret           string
+	httpClient          *http.Client
 }
 
 // NewStoryboardService —— 创建分镜服务实例
@@ -49,6 +58,7 @@ func NewStoryboardService(repo *repository.StoryboardRepo, projectRepo *reposito
 		logger:      zap.NewNop(),
 		maxInFlight: defaultStoryboardMaxInFlight,
 		auditor:     NewPromptAuditorService("", "", "", nil, nil),
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -80,6 +90,17 @@ func (s *StoryboardService) SetMaxInFlight(max int) {
 // SetContinuityAuditor wires up the scene continuity auditor.
 func (s *StoryboardService) SetContinuityAuditor(a *SceneContinuityAuditor) {
 	s.continuityAuditor = a
+}
+
+func (s *StoryboardService) SetServiceEndpoints(modelBaseURL, authBaseURL, jwtSecret string) {
+	s.modelServiceBaseURL = strings.TrimRight(modelBaseURL, "/")
+	s.authServiceBaseURL = strings.TrimRight(authBaseURL, "/")
+	if strings.TrimSpace(jwtSecret) != "" {
+		s.jwtSecret = jwtSecret
+	}
+	if s.httpClient == nil {
+		s.httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
 }
 
 // AuditSceneContinuity fetches all non-voided storyboards for a project/episode,
@@ -228,14 +249,105 @@ func normalizeStoryboardModelNames(modelName string, modelNames []string) []stri
 	for _, name := range modelNames {
 		appendModel(name)
 	}
-	if len(normalized) == 0 {
+	if len(normalized) == 0 && strings.TrimSpace(modelName) != "" {
 		appendModel(modelName)
-	}
-	if len(normalized) == 0 {
-		normalized = append(normalized, "")
 	}
 	return normalized
 
+}
+
+func selectedStoryboardImageModel(project *model.Project) string {
+	if project == nil {
+		return ""
+	}
+	if len(project.StoryboardConfig) > 0 {
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(project.StoryboardConfig, &cfg); err == nil {
+			for _, key := range []string{"image_model", "storyboard_image_model", "storyboard_image_model_name"} {
+				if value, ok := cfg[key].(string); ok && strings.TrimSpace(value) != "" {
+					return strings.TrimSpace(value)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func storyboardImageModelKey(meta *remoteModelConfig) string {
+	if meta == nil {
+		return ""
+	}
+	if strings.TrimSpace(meta.ModelKey) != "" {
+		return strings.TrimSpace(meta.ModelKey)
+	}
+	if strings.TrimSpace(meta.Name) != "" {
+		return strings.TrimSpace(meta.Name)
+	}
+	return ""
+}
+
+func (s *StoryboardService) buildServiceToken(projectID uint64) (string, error) {
+	secret := strings.TrimSpace(s.jwtSecret)
+	if secret == "" {
+		return "", errors.New("jwt secret not configured")
+	}
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims := map[string]interface{}{
+		"user_id":    1,
+		"project_id": projectID,
+		"role":       "service",
+		"token_type": "access",
+		"iat":        time.Now().Unix(),
+		"exp":        time.Now().Add(10 * time.Minute).Unix(),
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	payload := base64.RawURLEncoding.EncodeToString(claimsJSON)
+	unsigned := header + "." + payload
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(unsigned))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return unsigned + "." + sig, nil
+}
+
+func (s *StoryboardService) fetchRemoteImageModel(ctx context.Context, projectID uint64, id uint64) (*remoteModelConfig, error) {
+	if strings.TrimSpace(s.modelServiceBaseURL) == "" {
+		return nil, errors.New("model service base url not configured")
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/models/%d", s.modelServiceBaseURL, id), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("model service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Data remoteModelConfig `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(payload.Data.Type) != "" && strings.TrimSpace(payload.Data.Type) != "image" {
+		return nil, fmt.Errorf("selected model %d is %s, not image", id, payload.Data.Type)
+	}
+	return &payload.Data, nil
 }
 
 func cloneStoryboardGenerationScope(scope storyboardGenerationScope) storyboardGenerationScope {
@@ -270,13 +382,43 @@ func (s *StoryboardService) resolveProjectGenerationScope(projectID uint64, epis
 			resolved.ModelName = modelName
 			resolved.ModelNames = cloneStringSlice(modelNames)
 		}
-		return resolved
+		return s.applySelectedStoryboardImageModel(projectID, resolved)
 	}
-	return storyboardGenerationScope{
+	return s.applySelectedStoryboardImageModel(projectID, storyboardGenerationScope{
 		EpisodeID:  cloneUint64Ptr(episodeID),
 		ModelName:  modelName,
 		ModelNames: cloneStringSlice(modelNames),
+	})
+}
+
+func (s *StoryboardService) applySelectedStoryboardImageModel(projectID uint64, scope storyboardGenerationScope) storyboardGenerationScope {
+	if strings.TrimSpace(scope.ModelName) != "" || len(scope.ModelNames) > 0 || s.projectRepo == nil {
+		return scope
 	}
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("resolve selected storyboard image model failed", zap.Uint64("project_id", projectID), zap.Error(err))
+		}
+		return scope
+	}
+	selected := selectedStoryboardImageModel(project)
+	if selected == "" && project.ImageModelID != nil {
+		modelMeta, err := s.fetchRemoteImageModel(context.Background(), projectID, *project.ImageModelID)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("resolve project image model key failed", zap.Uint64("project_id", projectID), zap.Uint64("image_model_id", *project.ImageModelID), zap.Error(err))
+			}
+		} else {
+			selected = storyboardImageModelKey(modelMeta)
+		}
+	}
+	if selected == "" {
+		return scope
+	}
+	scope.ModelName = selected
+	scope.ModelNames = []string{selected}
+	return scope
 }
 
 func (s *StoryboardService) getProjectGenerationScope(projectID uint64) (storyboardGenerationScope, bool) {
@@ -910,6 +1052,9 @@ func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, scope sto
 	}
 
 	resolvedModels := normalizeStoryboardModelNames(scope.ModelName, scope.ModelNames)
+	if len(resolvedModels) == 0 {
+		return 0, fmt.Errorf("no storyboard image model selected")
+	}
 	dispatched := 0
 	for i := range storyboards {
 		usedModel := resolvedModels[dispatched%len(resolvedModels)]

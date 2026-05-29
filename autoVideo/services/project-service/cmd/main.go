@@ -91,6 +91,7 @@ func main() {
 
 	storyboardSvc := service.NewStoryboardService(storyboardRepo, projectRepo)
 	storyboardSvc.SetMaxInFlight(cfg.Concurrency.MaxStoryboardInFlight)
+	storyboardSvc.SetServiceEndpoints(cfg.Gateway.Addr, cfg.AuthService.BaseURL, cfg.JWT.AccessSecret)
 
 	// Wire scene continuity auditor
 	continuityAuditor := service.NewSceneContinuityAuditor(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model, logger)
