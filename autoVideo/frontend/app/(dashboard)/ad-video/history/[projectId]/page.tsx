@@ -359,6 +359,12 @@ ${paceBlock}`
     [episodes, selectedEpisodeNumber],
   )
 
+  useEffect(() => {
+    if (selectedEpisodeId === 'all') return
+    if (selectedEpisode) return
+    setSelectedEpisodeId('all')
+  }, [selectedEpisode, selectedEpisodeId])
+
   const persistedVideoModel = useMemo(
     () => String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim(),
     [project?.storyboard_config?.video_model, autoSplit?.video_model],
@@ -394,8 +400,12 @@ ${paceBlock}`
   useEffect(() => {
     if (scopeStoryboards.length > 0) {
       previousStoryboardsRef.current = scopeStoryboards
+      return
     }
-  }, [scopeStoryboards])
+    if (selectedEpisodeId !== 'all' && storyboards.length > 0 && !step1Running) {
+      setSelectedEpisodeId('all')
+    }
+  }, [scopeStoryboards, selectedEpisodeId, step1Running, storyboards.length])
 
   const scopeStoryboardAssetIds = useMemo(() => {
     const ids = new Set<number>()
@@ -1100,7 +1110,7 @@ ${paceBlock}`
                   </div>
 
                   {displayStoryboards.length === 0 ? (
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜记录。'}</div>
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : storyboards.length > 0 ? '当前分集范围没有命中新分镜，页面已自动回退到“全部分集”重新展示。' : '当前范围还没有分镜记录。'}</div>
                   ) : displayStoryboards.map((storyboard) => (
                     <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
