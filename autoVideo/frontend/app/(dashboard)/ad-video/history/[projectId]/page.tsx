@@ -239,12 +239,12 @@ function buildEpisodeVideoPayload(
     .sort((a, b) => a.sequence_number - b.sequence_number)
 
   const resolveSeedImage = (storyboard: Storyboard) => {
-    const storyboardImage = String(storyboard.image_url || '').trim()
-    if (storyboardImage) return storyboardImage
     for (const assetId of storyboard.asset_ids || []) {
       const assetImage = String(assetImageById?.get(assetId) || '').trim()
       if (assetImage) return assetImage
     }
+    const storyboardImage = String(storyboard.image_url || '').trim()
+    if (storyboardImage) return storyboardImage
     return ''
   }
 
@@ -1599,7 +1599,7 @@ ${paceBlock}`
                   <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
                     <div>
                       <div className="text-sm font-medium text-violet-100">步骤 2：参考图与分镜图联合准备</div>
-                      <div className="mt-1 text-xs text-violet-100/80">这一块会把“参考图槽位”和“当前范围分镜”联动起来看：后续视频生成优先使用分镜图；如果某条分镜还没有图，但它绑定的参考图槽位里已经上传了图，也会把这张参考图当作可复用种子图。</div>
+                      <div className="mt-1 text-xs text-violet-100/80">这一块会把“参考图槽位”和“当前范围分镜”联动起来看：后续视频生成会优先使用参考图槽位中已上传的图片；只有某条分镜没有可用参考图时，才回退使用分镜图。</div>
                       {step2Running && (
                         <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
                           当前进行中：正在准备素材槽位 / 上传参考图 / 刷新分镜图，请勿重复点击
@@ -1661,7 +1661,7 @@ ${paceBlock}`
                       )}
                       {!step2Done && step3Enabled && (
                         <div className="mt-2 text-emerald-200/90">
-                        当前范围已经有首张分镜图，或已有可复用的参考图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
+                        当前范围已经有首张可复用的参考图，或至少已有首张分镜图兜底了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
                         </div>
                       )}
                     </div>
@@ -1681,12 +1681,19 @@ ${paceBlock}`
                           ) : displayStoryboards.map((storyboard) => {
                             const storyboardAssets = (storyboardAssetDetailMap.get(storyboard.id) || [])
                             const seedAssets = storyboardAssets.filter((asset) => String(asset.image_url || '').trim())
-                            const seedImageUrl = String(storyboard.image_url || seedAssets[0]?.image_url || '').trim()
+                            const seedImageUrl = String(seedAssets[0]?.image_url || storyboard.image_url || '').trim()
                             return (
-                              <button
+                              <div
                                 key={storyboard.id}
-                                type="button"
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => {
+                                  setFocusedStoryboardId((prev) => (prev === storyboard.id ? null : storyboard.id))
+                                  setFocusedAssetId(null)
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key !== 'Enter' && event.key !== ' ') return
+                                  event.preventDefault()
                                   setFocusedStoryboardId((prev) => (prev === storyboard.id ? null : storyboard.id))
                                   setFocusedAssetId(null)
                                 }}
@@ -1699,7 +1706,7 @@ ${paceBlock}`
                                   </div>
                                   <div className="flex flex-wrap items-center justify-end gap-2">
                                     <div className={`rounded-full border px-2 py-0.5 text-[11px] ${seedImageUrl ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
-                                      {seedImageUrl ? '可作为种子图' : '待补种子图'}
+                                      {seedImageUrl ? '参考图已就绪' : '待补参考图'}
                                     </div>
                                     <Button
                                       type="button"
@@ -1725,7 +1732,7 @@ ${paceBlock}`
                                     </div>
                                   ) : (
                                     <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-[11px] text-slate-500">
-                                      暂无可用种子图
+                                      暂无参考图，当前会回退使用分镜图
                                     </div>
                                   )}
 
@@ -1769,7 +1776,7 @@ ${paceBlock}`
                                     </div>
                                   </div>
                                 </div>
-                              </button>
+                              </div>
                             )
                           })}
                         </div>
