@@ -110,3 +110,58 @@ func TestPostProcessAdScenes_MergesEmptyDialogueIntoPrevious(t *testing.T) {
 		t.Fatalf("expected empty-dialogue scene merged, got %d scenes", len(got))
 	}
 }
+
+func TestPostProcessAdScenes_MergesShortLeadIntoFollowingScene(t *testing.T) {
+	svc := &EpisodeService{}
+	scenes := []llmScene{
+		{
+			Description: "[中景] 主播开场自我介绍，仍在同一办公室",
+			Location:    "办公室",
+			Characters:  []string{"主播"},
+			Dialogue:    "大家好，我是李恩泽。",
+			Duration:    5,
+		},
+		{
+			Description: "[中景] 主播继续在办公室展开完整卖点说明",
+			Location:    "办公室",
+			Characters:  []string{"主播"},
+			Dialogue:    "近年来，市场变化日新月异，人工智能正以前所未有的速度重塑各行各业。",
+			Duration:    5,
+		},
+	}
+	got := svc.postProcessAdScenes(scenes, 5)
+	if len(got) != 1 {
+		t.Fatalf("expected short lead merged into following scene, got %d scenes", len(got))
+	}
+}
+
+func TestPostProcessAdScenes_RebalancesShortMiddleIntoLongFollowingScene(t *testing.T) {
+	svc := &EpisodeService{}
+	scenes := []llmScene{
+		{
+			Description: "[中景] 第一段完整介绍",
+			Location:    "办公室",
+			Characters:  []string{"主播"},
+			Dialogue:    "近年来，市场变化日新月异，人工智能正以前所未有的速度重塑各行各业。",
+			Duration:    5,
+		},
+		{
+			Description: "[中景] 同场景下一个过短承接句",
+			Location:    "办公室",
+			Characters:  []string{"主播"},
+			Dialogue:    "从AI到半导体。",
+			Duration:    5,
+		},
+		{
+			Description: "[中景] 同场景继续展开大段解释",
+			Location:    "办公室",
+			Characters:  []string{"主播"},
+			Dialogue:    "再到全球资本流向，新的机遇层出不穷，但真正洞察其背后逻辑的人却屈指可数。",
+			Duration:    5,
+		},
+	}
+	got := svc.postProcessAdScenes(scenes, 5)
+	if len(got) != 2 {
+		t.Fatalf("expected short middle scene merged for rebalance, got %d scenes", len(got))
+	}
+}

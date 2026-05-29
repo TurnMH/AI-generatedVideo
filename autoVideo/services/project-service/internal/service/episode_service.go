@@ -3405,6 +3405,8 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 		return scenes
 	}
 	const minDialogueRunes = 8
+	const minLeadDialogueRunes = 14
+	const longDialogueRunes = 36
 	processed := make([]llmScene, 0, len(scenes))
 	mergeIntoPrev := func(prev *llmScene, scene llmScene) {
 		if scene.Dialogue != "" {
@@ -3483,6 +3485,14 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 		}
 		processed = append(processed, scene)
 	}
+	if len(processed) > 1 {
+		firstDialogue := strings.TrimSpace(processed[0].Dialogue)
+		secondDialogue := strings.TrimSpace(processed[1].Dialogue)
+		if firstDialogue != "" && utf8.RuneCountInString(firstDialogue) < minLeadDialogueRunes && secondDialogue != "" && !hasStructuralShift(processed[0], processed[1]) {
+			mergeIntoPrev(&processed[1], processed[0])
+			processed = processed[1:]
+		}
+	}
 	if len(processed) > 2 {
 		collapsed := make([]llmScene, 0, len(processed))
 		for i := 0; i < len(processed); i++ {
@@ -3499,6 +3509,24 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 			collapsed = append(collapsed, current)
 		}
 		processed = collapsed
+	}
+	if len(processed) > 1 {
+		balanced := make([]llmScene, 0, len(processed))
+		for i := 0; i < len(processed); i++ {
+			current := processed[i]
+			currentDialogue := strings.TrimSpace(current.Dialogue)
+			if i > 0 && i < len(processed)-1 && currentDialogue != "" && utf8.RuneCountInString(currentDialogue) < minLeadDialogueRunes {
+				next := processed[i+1]
+				nextDialogue := strings.TrimSpace(next.Dialogue)
+				if nextDialogue != "" && utf8.RuneCountInString(nextDialogue) >= longDialogueRunes && !hasStructuralShift(current, next) {
+					mergeIntoPrev(&next, current)
+					processed[i+1] = next
+					continue
+				}
+			}
+			balanced = append(balanced, current)
+		}
+		processed = balanced
 	}
 	if len(processed) > 1 {
 		last := processed[len(processed)-1]
