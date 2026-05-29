@@ -69,6 +69,7 @@ func doFetchRuntimeAPIKeys(client *http.Client, baseURL, secret string) ([]runti
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+buildServiceToken(secret))
+	req.Header.Set("X-Internal-Service", "project-service")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

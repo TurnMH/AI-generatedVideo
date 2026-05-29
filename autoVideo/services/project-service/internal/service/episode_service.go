@@ -217,6 +217,7 @@ func (s *EpisodeService) fetchRuntimeAPIKeys(ctx context.Context) ([]serviceRunt
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.authServiceBaseURL+"/internal/runtime-api-keys", nil)
 	if err != nil { return nil, err }
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Internal-Service", "project-service")
 	resp, err := s.httpClient.Do(req)
 	if err != nil { return nil, err }
 	defer resp.Body.Close()
