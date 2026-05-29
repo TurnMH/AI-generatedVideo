@@ -509,7 +509,7 @@ ${paceBlock}`
   const step2Enabled = step1Done
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && storyboardImagesComplete
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = step2Done
+  const step3Enabled = step1Done && storyboardImagesReady
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -556,14 +556,16 @@ ${paceBlock}`
               : '当前范围已有部分分镜图，但还没补齐，建议继续刷新。'
 
   const step3Hint = !step3Enabled
-    ? '先完成步骤 2：把当前范围需要的参考图补齐，并生成出可用分镜图。'
+    ? '当前范围还没有可用分镜图。先在步骤 2 至少生成出一张可用分镜图，再来提交视频。'
     : step3Running
       ? '当前已经有视频任务在执行，先等这一轮结果。'
       : completedStoryboardImages === 0
         ? '当前范围还没有可用分镜图，所以现在不能提交视频。'
-        : step3Done
-          ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
-          : '当前范围已经有可用分镜图，可以开始提交视频任务。'
+        : !step2Done
+          ? '当前范围已经有可用分镜图，可以先提交视频；如果想要更完整的结果，再继续补齐剩余参考图和分镜图。'
+          : step3Done
+            ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
+            : '当前范围已经有可用分镜图，可以开始提交视频任务。'
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1459,7 +1461,7 @@ ${paceBlock}`
                       <Button
                         size="sm"
                         variant="secondary"
-                        disabled={!step2Done}
+                        disabled={!step3Enabled}
                         onClick={() => setActivePipelineStep('step3')}
                       >
                         去步骤 3 生成视频
@@ -1471,6 +1473,11 @@ ${paceBlock}`
                       {step2Done && (
                         <div className="mt-2 text-emerald-200/90">
                           当前范围的参考图和分镜图已准备完成，可以直接点上方“去步骤 3 生成视频”。
+                        </div>
+                      )}
+                      {!step2Done && step3Enabled && (
+                        <div className="mt-2 text-emerald-200/90">
+                          当前范围已经有可用分镜图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交视频。
                         </div>
                       )}
                     </div>
