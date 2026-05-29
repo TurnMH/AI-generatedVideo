@@ -529,14 +529,14 @@ ${paceBlock}`
   }, [step1Running, step2Running, step3Running])
 
   const step1Hint = step1Running
-    ? '当前正在重跑文本拆分 / 自动分镜，请先等这一轮结束。'
+    ? '当前正在重跑文本拆分 / 自动分镜；后端会重建分集与分镜，若原分集范围失效，页面会自动回到“全部分集”。'
     : !splitConfigReady
       ? '先补齐视频模型、比例、分辨率、单分镜时长。'
       : !editableOriginalScript.trim()
         ? '当前原文为空，无法拆分。'
         : storyboardScopeReady
           ? `当前范围已经有可用分镜，可继续重跑覆盖；当前语速档位：${selectedSpeechPaceMeta.label}。`
-          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的分集与分镜文本。`
+          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的分集与分镜文本。若原分集范围失效，页面会自动回到“全部分集”。`
 
   const step2Hint = !step2Enabled
     ? '先完成步骤 1，先让这一轮视频配置真正产出新的分集和分镜文案。'
@@ -1185,7 +1185,7 @@ ${paceBlock}`
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">按台词时长重拆分文本</div>
-                  <div className="mt-2 text-xs text-current/80">先确定视频模型与单分镜时长，再按台词 / 口播承载量重跑当前文案；比例和分辨率用于同步约束构图与画面复杂度。</div>
+                  <div className="mt-2 text-xs text-current/80">先确定视频模型、单分镜时长与语速，再按台词 / 口播承载量重跑当前文案；比例和分辨率用于同步约束构图与画面复杂度。重拆分后若原分集编号失效，页面会自动回到全部分集展示新结果。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
                 <button type="button" onClick={() => setActivePipelineStep('step2')} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
@@ -1398,6 +1398,9 @@ ${paceBlock}`
                     </Button>
                     <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-cyan-100/80">
                       {step1Hint}
+                    </div>
+                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-50">
+                      提醒：步骤 1 会重新生成分集，旧分集编号可能失效；如果你之前只看某一集，完成后页面会自动切回“全部分集”，避免误判成“没有分镜产出”。
                     </div>
                   </div>
                   </div>
