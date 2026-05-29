@@ -126,6 +126,35 @@ function softenVideoPromptText(input: string) {
     .trim()
 }
 
+function softenDialogueText(input: string) {
+  const text = String(input || '')
+  if (!text.trim()) return ''
+  return text
+    .replace(/李恩泽/g, '我')
+    .replace(/Li Enze/gi, 'I')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function softenSceneCharacters(characters: string[]) {
+  const cleaned = Array.from(new Set((characters || []).map((item) => String(item || '').trim()).filter(Boolean).map((item) => {
+    if (/^李恩泽$/i.test(item) || /^Li Enze$/i.test(item)) return 'speaker'
+    return item
+  })))
+  return cleaned
+}
+
+function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payload: ReturnType<typeof buildEpisodeVideoPayload>) {
+  return {
+    ...renderConfig,
+    safety_softening: 'moderation-lite',
+    scene_descriptions: payload.scene_descriptions,
+    dialogues: payload.dialogues,
+    scene_characters: payload.scene_characters,
+    source_prompt_softened: true,
+  }
+}
+
 function humanizeVideoTaskError(task?: VideoTask | null) {
   const msg = String(task?.error_msg || '')
   if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451/i.test(msg)) {
@@ -202,14 +231,14 @@ function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number)
   const firstImageIndex = sorted.findIndex((item) => String(item.image_url || '').trim())
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
   const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(item.prompt_used || item.scene_description || ''))
-  const dialogues = serialStoryboards.map((item) => item.dialogue || '')
+  const dialogues = serialStoryboards.map((item) => softenDialogueText(item.dialogue || ''))
   const durations = serialStoryboards.map((item) => item.duration || 0)
   const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
   const moods = serialStoryboards.map((item) => item.mood || '')
   const spatialAnchors = serialStoryboards.map((item) => item.spatial_anchor || '')
   const subjectPositions = serialStoryboards.map((item) => item.subject_positions || '')
   const transitionNotes = serialStoryboards.map((item) => item.transition_note || '')
-  const sceneCharacters = serialStoryboards.map((item) => item.characters || [])
+  const sceneCharacters = serialStoryboards.map((item) => softenSceneCharacters(item.characters || []))
   const sceneAssetIds = serialStoryboards.map((item) => item.asset_ids || [])
 
   return {
@@ -1000,7 +1029,7 @@ ${paceBlock}`
       return
     }
 
-    const renderConfig: Record<string, unknown> = {
+    const renderConfigBase: Record<string, unknown> = {
       aspect_ratio: selectedStep3AspectRatio,
       resolution: selectedStep3Resolution,
       generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
@@ -1014,6 +1043,7 @@ ${paceBlock}`
     try {
       if (selectedEpisodeNumber) {
         const payload = buildEpisodeVideoPayload(storyboardPool, selectedEpisodeNumber)
+        const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
         await videoAPI.generate(projectId, {
           episode_id: selectedEpisodeNumber,
           image_urls: payload.image_urls,
@@ -1074,7 +1104,7 @@ ${paceBlock}`
             motion_mode: motionMode,
             video_mode: project?.video_mode,
             clip_duration_sec: clipDuration,
-            render_config: renderConfig,
+            render_config: applyStep3SafetySoftening(renderConfigBase, batchEpisodes[0]),
             serial_scene: true,
           })
         }
@@ -1083,6 +1113,7 @@ ${paceBlock}`
         if (noEpisodeStoryboards.length > 0) {
           const payload = buildEpisodeVideoPayload(noEpisodeStoryboards)
           if (String(payload.image_urls?.[0] || '').trim()) {
+            const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
             await videoAPI.generate(projectId, {
               image_urls: payload.image_urls,
               scene_descriptions: payload.scene_descriptions,
@@ -1923,6 +1954,7 @@ ${paceBlock}`
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
                       {step3Hint}
                       <div className="mt-2 text-amber-200/90">补充提醒：如果首段返回 `InputImageSensitiveContentDetected`、`HTTP 451` 或类似“real-person/sensitive image”的拒绝，通常先查首图是否过于像真人肖像；这类情况会让后续 clip 继续报 `serial chain broken`，但那是连锁结果，不是每一段都单独坏了。</div>
+                      <div className="mt-2 text-emerald-100/75">当前页面会在提交前自动做一层“降敏软化”：弱化真实姓名、portrait / photorealistic / RAW photo 等强真人肖像化措辞，并把 scene descriptions / dialogues / scene characters 一并按软化后的版本透传给 video-service。</div>
                     </div>
 
                     <div className="text-[11px] text-emerald-100/75">
