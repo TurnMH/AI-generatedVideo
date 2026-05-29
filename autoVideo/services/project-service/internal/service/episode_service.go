@@ -35,22 +35,30 @@ type CreateEpisodeReq struct {
 }
 
 type EpisodeService struct {
-	episodeRepo      *repository.EpisodeRepo
-	projectRepo      *repository.ProjectRepo
-	storyboardSvc    *StoryboardService
-	characterBaseURL string
-	scriptBaseURL    string // for fetching PromptTemplates
-	videoBaseURL     string // for cascade-deleting video tasks on episode delete
+	episodeRepo         *repository.EpisodeRepo
+	projectRepo         *repository.ProjectRepo
+	storyboardSvc       *StoryboardService
+	characterBaseURL    string
+	scriptBaseURL       string // for fetching PromptTemplates
+	videoBaseURL        string // for cascade-deleting video tasks on episode delete
 	modelServiceBaseURL string
 	authServiceBaseURL  string
-	jwtSecret        string
-	httpClient       *http.Client
-	llmBaseURL       string
-	llmAPIKey        string
-	llmModel         string
-	storageBaseURL   string
-	auditor          *PromptAuditorService // prompt dedup + sensitive word + LLM review
-	logger           *zap.Logger
+	jwtSecret           string
+	httpClient          *http.Client
+	llmBaseURL          string
+	llmAPIKey           string
+	llmModel            string
+	storageBaseURL      string
+	auditor             *PromptAuditorService // prompt dedup + sensitive word + LLM review
+	logger              *zap.Logger
+
+	storyboardRunMu sync.Mutex
+	storyboardRuns  map[uint64]storyboardRunState
+}
+
+type storyboardRunState struct {
+	Scope     string
+	StartedAt time.Time
 }
 
 type projectLLMConfig struct {
@@ -95,6 +103,33 @@ func shouldEnableSceneSerial(projectType string) bool {
 	return strings.TrimSpace(projectType) == "video_serial"
 }
 
+func storyboardRunScope(episodeID *uint64) string {
+	if episodeID == nil {
+		return "project"
+	}
+	return fmt.Sprintf("episode:%d", *episodeID)
+}
+
+func (s *EpisodeService) acquireStoryboardRun(projectID uint64, episodeID *uint64) error {
+	s.storyboardRunMu.Lock()
+	defer s.storyboardRunMu.Unlock()
+	if s.storyboardRuns == nil {
+		s.storyboardRuns = make(map[uint64]storyboardRunState)
+	}
+	scope := storyboardRunScope(episodeID)
+	if current, ok := s.storyboardRuns[projectID]; ok {
+		return fmt.Errorf("storyboard extraction already running for project %d (active_scope=%s, requested_scope=%s, started_at=%s)", projectID, current.Scope, scope, current.StartedAt.Format(time.RFC3339))
+	}
+	s.storyboardRuns[projectID] = storyboardRunState{Scope: scope, StartedAt: time.Now()}
+	return nil
+}
+
+func (s *EpisodeService) releaseStoryboardRun(projectID uint64) {
+	s.storyboardRunMu.Lock()
+	defer s.storyboardRunMu.Unlock()
+	delete(s.storyboardRuns, projectID)
+}
+
 // NewEpisodeService —— 创建剧集服务实例，初始化 LLM 及存储配置
 func NewEpisodeService(
 	episodeRepo *repository.EpisodeRepo,
@@ -120,6 +155,7 @@ func NewEpisodeService(
 		storageBaseURL: storageBaseURL,
 		httpClient:     &http.Client{Timeout: 5 * time.Minute},
 		auditor:        NewPromptAuditorService(base, llmAPIKey, llmModel, nil, nil),
+		storyboardRuns: make(map[uint64]storyboardRunState),
 	}
 }
 
@@ -166,7 +202,9 @@ func (s *EpisodeService) resolveProjectLLMConfig(ctx context.Context, project *m
 	}
 	modelMeta, err := s.fetchRemoteModel(ctx, *project.TextModelID)
 	if err != nil {
-		if s.logger != nil { s.logger.Warn("resolve project text model failed", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.Error(err)) }
+		if s.logger != nil {
+			s.logger.Warn("resolve project text model failed", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.Error(err))
+		}
 		return cfg
 	}
 	if strings.TrimSpace(modelMeta.Type) != "" && strings.TrimSpace(modelMeta.Type) != "llm" {
@@ -174,12 +212,16 @@ func (s *EpisodeService) resolveProjectLLMConfig(ctx context.Context, project *m
 	}
 	keys, err := s.fetchRuntimeAPIKeys(ctx)
 	if err != nil {
-		if s.logger != nil { s.logger.Warn("fetch runtime api keys for project text model failed", zap.Uint64("project_id", project.ID), zap.Error(err)) }
+		if s.logger != nil {
+			s.logger.Warn("fetch runtime api keys for project text model failed", zap.Uint64("project_id", project.ID), zap.Error(err))
+		}
 		return cfg
 	}
 	selected := matchRuntimeKeyForModel(keys, modelMeta)
 	if selected == nil {
-		if s.logger != nil { s.logger.Warn("no runtime key matched project text model", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.String("provider", modelMeta.Provider), zap.String("model_key", modelMeta.ModelKey)) }
+		if s.logger != nil {
+			s.logger.Warn("no runtime key matched project text model", zap.Uint64("project_id", project.ID), zap.Uint64("text_model_id", *project.TextModelID), zap.String("provider", modelMeta.Provider), zap.String("model_key", modelMeta.ModelKey))
+		}
 		return cfg
 	}
 	if strings.TrimSpace(modelMeta.APIEndpoint) != "" {
@@ -197,66 +239,108 @@ func (s *EpisodeService) resolveProjectLLMConfig(ctx context.Context, project *m
 
 func (s *EpisodeService) fetchRemoteModel(ctx context.Context, id uint64) (*remoteModelConfig, error) {
 	token, err := s.buildServiceToken(0)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/models/%d", s.modelServiceBaseURL, id), nil)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := s.httpClient.Do(req)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= http.StatusBadRequest { return nil, fmt.Errorf("model service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))) }
-	var payload struct { Data remoteModelConfig `json:"data"` }
-	if err := json.Unmarshal(body, &payload); err != nil { return nil, err }
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("model service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Data remoteModelConfig `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
 	return &payload.Data, nil
 }
 
 func (s *EpisodeService) fetchRuntimeAPIKeys(ctx context.Context) ([]serviceRuntimeAPIKey, error) {
 	token, err := s.buildServiceToken(0)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.authServiceBaseURL+"/internal/runtime-api-keys", nil)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Internal-Service", "project-service")
 	resp, err := s.httpClient.Do(req)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= http.StatusBadRequest { return nil, fmt.Errorf("auth service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))) }
-	var payload struct { Data []serviceRuntimeAPIKey `json:"data"` }
-	if err := json.Unmarshal(body, &payload); err != nil { return nil, err }
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("auth service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Data []serviceRuntimeAPIKey `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
 	return payload.Data, nil
 }
 
 func matchRuntimeKeyForModel(keys []serviceRuntimeAPIKey, modelMeta *remoteModelConfig) *serviceRuntimeAPIKey {
-	if modelMeta == nil { return nil }
+	if modelMeta == nil {
+		return nil
+	}
 	ref := ""
-	if modelMeta.APIKeyRef != nil { ref = strings.TrimSpace(*modelMeta.APIKeyRef) }
+	if modelMeta.APIKeyRef != nil {
+		ref = strings.TrimSpace(*modelMeta.APIKeyRef)
+	}
 	provider := strings.ToLower(strings.TrimSpace(modelMeta.Provider))
 	for i := range keys {
 		key := &keys[i]
-		if ref != "" && strings.Contains(strings.ToLower(strings.TrimSpace(key.KeyAlias)), strings.ToLower(ref)) { return key }
+		if ref != "" && strings.Contains(strings.ToLower(strings.TrimSpace(key.KeyAlias)), strings.ToLower(ref)) {
+			return key
+		}
 	}
 	for i := range keys {
 		key := &keys[i]
 		kp := strings.ToLower(strings.TrimSpace(key.Provider))
-		if provider == "" { continue }
-		if strings.Contains(kp, "."+provider) || strings.HasSuffix(kp, provider) || providerMatchesEndpoint(provider, modelMeta.APIEndpoint, key.BaseURL) { return key }
+		if provider == "" {
+			continue
+		}
+		if strings.Contains(kp, "."+provider) || strings.HasSuffix(kp, provider) || providerMatchesEndpoint(provider, modelMeta.APIEndpoint, key.BaseURL) {
+			return key
+		}
 	}
 	for i := range keys {
 		key := &keys[i]
-		if strings.TrimSpace(key.PlainKey) != "" { return key }
+		if strings.TrimSpace(key.PlainKey) != "" {
+			return key
+		}
 	}
 	return nil
 }
 
 func providerMatchesEndpoint(provider, modelEndpoint, runtimeBase string) bool {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "" { return false }
+	if provider == "" {
+		return false
+	}
 	for _, raw := range []string{modelEndpoint, runtimeBase} {
 		u, err := url.Parse(strings.TrimSpace(raw))
-		if err == nil && strings.Contains(strings.ToLower(u.Host), provider) { return true }
-		if strings.Contains(strings.ToLower(strings.TrimSpace(raw)), provider) { return true }
+		if err == nil && strings.Contains(strings.ToLower(u.Host), provider) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(strings.TrimSpace(raw)), provider) {
+			return true
+		}
 	}
 	return false
 }
@@ -993,6 +1077,17 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 	if s.storyboardSvc == nil || s.storyboardSvc.repo == nil {
 		return 0, errors.New("storyboard service not configured")
 	}
+	if err := s.acquireStoryboardRun(projectID, episodeID); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("skip storyboard extraction because another run is active",
+				zap.Uint64("project_id", projectID),
+				zap.String("requested_scope", storyboardRunScope(episodeID)),
+				zap.Error(err),
+			)
+		}
+		return 0, err
+	}
+	defer s.releaseStoryboardRun(projectID)
 
 	project, err := s.projectRepo.FindByIDNoAuth(projectID)
 	if err != nil {
