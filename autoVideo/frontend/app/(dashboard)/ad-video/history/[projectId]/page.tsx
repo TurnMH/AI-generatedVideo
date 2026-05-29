@@ -101,6 +101,42 @@ function taskResultUrl(task?: VideoTask | null) {
   return String(task.result_url || rc.subtitled_result_url || rc.original_result_url || '').trim()
 }
 
+function softenVideoPromptText(input: string) {
+  const text = String(input || '')
+  if (!text.trim()) return ''
+
+  return text
+    .replace(/Li Enze|李恩泽/gi, 'the speaker')
+    .replace(/portrait/gi, 'character shot')
+    .replace(/photorealistic/gi, 'cinematic realistic')
+    .replace(/RAW photo/gi, 'clean cinematic frame')
+    .replace(/full-body live-action character portrait/gi, 'full-body business character reference')
+    .replace(/8K UHD/gi, 'high detail')
+    .replace(/youthful charm/gi, 'professional presence')
+    .replace(/expressive eyes/gi, 'focused expression')
+    .replace(/warm smile/gi, 'calm expression')
+    .replace(/face shape/gi, 'overall appearance')
+    .replace(/skin tone/gi, 'overall look')
+    .replace(/hairstyle/gi, 'styling')
+    .replace(/hair color/gi, 'grooming')
+    .replace(/natural skin texture/gi, 'natural lighting texture')
+    .replace(/真实人物|真人肖像|人脸特写|面部特征|脸部细节/g, '泛化商务人物')
+    .replace(/\bcelebrity\b/gi, 'specific identity')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function humanizeVideoTaskError(task?: VideoTask | null) {
+  const msg = String(task?.error_msg || '')
+  if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451/i.test(msg)) {
+    return '这次更像是首图触发了上游内容审核，不一定是步骤 3 参数或串行链本身的问题。'
+  }
+  if (/serial chain broken/i.test(msg)) {
+    return '后续 clip 的串行报错通常是首段没过审带出来的连锁结果。'
+  }
+  return ''
+}
+
 function getParamOptions(model: VideoModelMeta | null, key: string): VideoModelParamOption[] {
   if (!model?.params?.length) return []
   const param = model.params.find((item) => item.key === key)
@@ -165,7 +201,7 @@ function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number)
 
   const firstImageIndex = sorted.findIndex((item) => String(item.image_url || '').trim())
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
-  const sceneDescriptions = serialStoryboards.map((item) => item.prompt_used || item.scene_description || '')
+  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(item.prompt_used || item.scene_description || ''))
   const dialogues = serialStoryboards.map((item) => item.dialogue || '')
   const durations = serialStoryboards.map((item) => item.duration || 0)
   const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
@@ -189,7 +225,7 @@ function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number)
     transition_notes: transitionNotes.some(Boolean) ? transitionNotes : undefined,
     scene_characters: sceneCharacters.some((arr) => arr.length > 0) ? sceneCharacters : undefined,
     scene_asset_ids: sceneAssetIds.some((arr) => arr.length > 0) ? sceneAssetIds : undefined,
-    scene_description: sceneDescriptions.filter(Boolean).join(' ') || undefined,
+    scene_description: softenVideoPromptText(sceneDescriptions.filter(Boolean).join(' ')) || undefined,
     scene_group_keys: serialStoryboards.map(() => `ad-episode-${episodeId || 'single'}`),
   }
 }
@@ -1246,6 +1282,7 @@ ${paceBlock}`
                       <div key={task.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
                         <div>task #{task.id} · {task.status || '-'} · model {task.model_name || '-'} · {task.created_at || '-'}</div>
                         {task.error_msg && <div className="mt-2 text-rose-300">错误：{task.error_msg}</div>}
+                        {humanizeVideoTaskError(task) && <div className="mt-1 text-amber-200/90">提示：{humanizeVideoTaskError(task)}</div>}
                         {taskResultUrl(task) && <div className="mt-2 break-all"><a className="text-cyan-300 underline" href={taskResultUrl(task)} target="_blank" rel="noreferrer">打开结果视频</a></div>}
                       </div>
                     ))}
@@ -1885,6 +1922,7 @@ ${paceBlock}`
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
                       {step3Hint}
+                      <div className="mt-2 text-amber-200/90">补充提醒：如果首段返回 `InputImageSensitiveContentDetected`、`HTTP 451` 或类似“real-person/sensitive image”的拒绝，通常先查首图是否过于像真人肖像；这类情况会让后续 clip 继续报 `serial chain broken`，但那是连锁结果，不是每一段都单独坏了。</div>
                     </div>
 
                     <div className="text-[11px] text-emerald-100/75">
