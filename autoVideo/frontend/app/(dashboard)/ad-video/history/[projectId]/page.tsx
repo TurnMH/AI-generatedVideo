@@ -1271,32 +1271,8 @@ ${paceBlock}`
                       <div className="text-[11px] text-cyan-100/65">当前项目已保存的文本模型 ID：{project?.text_model_id ? String(project.text_model_id) : '未设置'}；当前下拉值：{selectedTextModelId || '空'}</div>
                     </div>
 
-                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2 text-xs text-cyan-50">
-                      <div className="font-medium text-cyan-100">当前模型能力声明：{effectiveSelectedVideoModel || '未选择'}</div>
-                      {selectedModelMeta ? (
-                        <>
-                          <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>
-                          {selectedModelParams.length > 0 ? (
-                            <div className="space-y-2">
-                              {selectedModelParams.map((param) => (
-                                <div key={param.key} className="rounded border border-cyan-400/15 bg-black/10 p-2">
-                                  <div><span className="text-cyan-100">{param.label || param.key}</span> <span className="text-cyan-200/70">({param.key})</span></div>
-                                  <div className="text-cyan-100/80">默认值：{param.default || '未声明'}</div>
-                                  <div className="text-cyan-100/75">可选值：{formatModelParamValues(param)}</div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="text-cyan-100/75">当前模型没有返回 params 声明。</div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="text-cyan-100/75">当前未匹配到该模型的运行态能力声明，所以比例 / 分辨率 / 时长等选项无法可靠展示。</div>
-                      )}
-                    </div>
-
                     <div className="space-y-2 xl:col-span-2">
-                      <Label className="text-slate-100">约束模型（用于时长/能力约束）</Label>
+                      <Label className="text-slate-100">约束模型（仅用于步骤 1 时长/能力约束）</Label>
                       <select
                         value={effectiveSelectedVideoModel}
                         onChange={(e) => setSelectedVideoModel(e.target.value)}
@@ -1742,7 +1718,7 @@ ${paceBlock}`
                             return <option key={item.key} value={item.key} disabled={!item.available}>{item.key}{suffix}</option>
                           })}
                         </select>
-                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；切换后会同步刷新比例、分辨率、时长等能力选项。</div>
+                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；如果当前模型容易被拒，可以先切到别的模型再提交，避免直接撞上 provider 审核或能力限制。</div>
                       </div>
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
@@ -1753,23 +1729,8 @@ ${paceBlock}`
                       </div>
                     </div>
 
-                    <Button
-                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || !serialVideoSeedReady}
-                      onClick={() => void startScopedVideoGeneration()}
-                    >
-                      {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
-                    </Button>
-
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
-                      {step3Hint}
-                    </div>
-
-                    <div className="text-[11px] text-emerald-100/75">
-                      真正提交给视频服务的是当前范围内从首张可用 `image_url` 开始的完整分镜序列；只有第一段带首图，后续片段依赖上一段视频尾帧串行衔接，同时会带上这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
-                    </div>
-
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2 text-xs text-emerald-50">
-                      <div className="font-medium text-emerald-100">当前生成模型能力声明：{effectiveSelectedVideoModel || '未选择'}</div>
+                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{effectiveSelectedVideoModel || '未选择'}</div>
                       {selectedModelMeta ? (
                         <>
                           <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>
@@ -1788,8 +1749,23 @@ ${paceBlock}`
                           )}
                         </>
                       ) : (
-                        <div className="text-emerald-100/75">当前未匹配到该模型的运行态能力声明。</div>
+                        <div className="text-emerald-100/75">当前未匹配到该模型的运行态能力声明；建议先切到一个能正常返回能力声明的模型，再提交生成，避免 provider 拒绝时难以判断原因。</div>
                       )}
+                    </div>
+
+                    <Button
+                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || !serialVideoSeedReady}
+                      onClick={() => void startScopedVideoGeneration()}
+                    >
+                      {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
+                    </Button>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
+                      {step3Hint}
+                    </div>
+
+                    <div className="text-[11px] text-emerald-100/75">
+                      真正提交给视频服务的是当前范围内从首张可用 `image_url` 开始的完整分镜序列；只有第一段带首图，后续片段依赖上一段视频尾帧串行衔接，同时会带上这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
                     </div>
                   </div>
                 )}
