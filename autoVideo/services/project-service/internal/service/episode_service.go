@@ -2928,14 +2928,14 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 				if s.logger != nil {
 					s.logger.Warn("scene split cancelled", zap.Int("episode", episodeNum))
 				}
-				return s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration)
+				return s.postProcessAdScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration)
 			case <-time.After(2 * time.Second):
 			}
 		}
 
 		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
-			return scenes
+			return s.postProcessAdScenes(scenes, clipDuration)
 		}
 	}
 
@@ -2943,7 +2943,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 		s.logger.Warn("LLM scene split failed after retries, using paragraph fallback",
 			zap.Int("episode", episodeNum))
 	}
-	return s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration)
+	return s.postProcessAdScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration)
 }
 
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
@@ -3123,6 +3123,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 若一个分镜含多句对白，全部用 \n 拼接放入 dialogue，不截断不省略
 - dialogue 只能放“真的会被念出来/打上字幕的文字”，不能把摄影说明、灯光、美术、转场说明、动作说明混入 dialogue
 - 如果某段只有动作/镜头说明、没有可念文本，优先继续调整拆分，让它并回前后有台词的分镜；除最后一个分镜外，默认不允许保留无台词分镜
+- 若当前分镜 dialogue 少于约 8 个汉字/字符，且没有明确新增场景切换、主体切换或卖点切换，也必须继续并回相邻分镜；禁止把“好”“是的”“现在”“加入我们”等过短句子单独拆成一镜
 
 **镜头连续性规则（必须遵守）：**
 - 如果相邻分镜 location 相同，默认视为同一空间连续动作，人物站位、朝向、手中道具、受伤状态、服装层次必须延续，除非原文明确发生变化
@@ -3140,7 +3141,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 %s`, episodeNum, modelDurationHint, visualHint, refDuration, episodeNum, content)
 	}
 
-	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少四项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置。"
+	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少四项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置。"
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -3273,7 +3274,6 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 		dur = 5
 	}
 
-	// Each paragraph = one scene (maximum granularity, no merging)
 	var scenes []llmScene
 	for i, p := range paragraphs {
 		runes := []rune(p)
@@ -3291,7 +3291,7 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 			Characters:  nil,
 			Location:    "",
 			Duration:    dur,
-			Dialogue:    "",
+			Dialogue:    strings.TrimSpace(p),
 		})
 	}
 
@@ -3302,6 +3302,83 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 		)
 	}
 	return scenes
+}
+
+func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int) []llmScene {
+	if len(scenes) == 0 {
+		return scenes
+	}
+	const minDialogueRunes = 8
+	processed := make([]llmScene, 0, len(scenes))
+	for _, scene := range scenes {
+		scene.Dialogue = strings.TrimSpace(scene.Dialogue)
+		scene.Description = strings.TrimSpace(scene.Description)
+		if scene.Duration <= 0 {
+			scene.Duration = clipDuration
+			if scene.Duration <= 0 {
+				scene.Duration = 5
+			}
+		}
+		if len(processed) == 0 {
+			processed = append(processed, scene)
+			continue
+		}
+		shouldMerge := scene.Dialogue == "" || utf8.RuneCountInString(scene.Dialogue) < minDialogueRunes
+		if shouldMerge && len(processed) > 0 {
+			prev := &processed[len(processed)-1]
+			if scene.Dialogue != "" {
+				if prev.Dialogue == "" {
+					prev.Dialogue = scene.Dialogue
+				} else {
+					prev.Dialogue = strings.TrimSpace(prev.Dialogue + "\n" + scene.Dialogue)
+				}
+			}
+			if scene.Description != "" {
+				if prev.Description == "" {
+					prev.Description = scene.Description
+				} else {
+					prev.Description = strings.TrimSpace(prev.Description + "；" + scene.Description)
+				}
+			}
+			if prev.Location == "" {
+				prev.Location = scene.Location
+			}
+			if prev.Mood == "" {
+				prev.Mood = scene.Mood
+			}
+			prev.Duration += scene.Duration
+			if len(prev.Characters) == 0 && len(scene.Characters) > 0 {
+				prev.Characters = append(prev.Characters, scene.Characters...)
+			}
+			if len(prev.Items) == 0 && len(scene.Items) > 0 {
+				prev.Items = append(prev.Items, scene.Items...)
+			}
+			if len(prev.CharacterStates) == 0 && len(scene.CharacterStates) > 0 {
+				prev.CharacterStates = append(prev.CharacterStates, scene.CharacterStates...)
+			}
+			continue
+		}
+		processed = append(processed, scene)
+	}
+	if len(processed) > 1 {
+		last := processed[len(processed)-1]
+		if strings.TrimSpace(last.Dialogue) == "" || utf8.RuneCountInString(strings.TrimSpace(last.Dialogue)) < minDialogueRunes {
+			prev := &processed[len(processed)-2]
+			if strings.TrimSpace(last.Dialogue) != "" {
+				if prev.Dialogue == "" {
+					prev.Dialogue = strings.TrimSpace(last.Dialogue)
+				} else {
+					prev.Dialogue = strings.TrimSpace(prev.Dialogue + "\n" + strings.TrimSpace(last.Dialogue))
+				}
+			}
+			if strings.TrimSpace(last.Description) != "" {
+				prev.Description = strings.TrimSpace(prev.Description + "；" + strings.TrimSpace(last.Description))
+			}
+			prev.Duration += last.Duration
+			processed = processed[:len(processed)-1]
+		}
+	}
+	return processed
 }
 
 // refineScenePrompts calls LLM to produce cohesive, skill-injected image generation prompts
