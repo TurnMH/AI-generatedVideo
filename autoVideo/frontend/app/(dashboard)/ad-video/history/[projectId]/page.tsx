@@ -1456,10 +1456,23 @@ ${paceBlock}`
                       >
                         {generationAction === 'storyboard-image-all' || generationAction === `storyboard-image-episode-${selectedEpisodeNumber}` ? '正在刷新分镜图…' : '3）刷新当前范围分镜图'}
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={!step2Done}
+                        onClick={() => setActivePipelineStep('step3')}
+                      >
+                        去步骤 3 生成视频
+                      </Button>
                     </div>
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
                       {step2Hint}
+                      {step2Done && (
+                        <div className="mt-2 text-emerald-200/90">
+                          当前范围的参考图和分镜图已准备完成，可以直接点上方“去步骤 3 生成视频”。
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
