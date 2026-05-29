@@ -94,6 +94,7 @@ func (r *ProjectRepo) FindAutoPreparationCandidates(limit int) ([]model.Project,
 	query := r.db.Model(&model.Project{}).
 		Where("status IN ?", []string{"script_processing", "asset_generating"}).
 		Where("COALESCE(progress ->> 'stage', '') = ?", "script_prepping").
+		Where("updated_at < NOW() - INTERVAL '2 minutes'").
 		Order("updated_at ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -109,6 +110,7 @@ func (r *ProjectRepo) FindEpisodeGenerationCandidates(limit int) ([]model.Projec
 	query := r.db.Model(&model.Project{}).
 		Where("status = ?", "script_processing").
 		Where("COALESCE(progress ->> 'stage', '') IN ?", []string{"", "episode_splitting"}).
+		Where("updated_at < NOW() - INTERVAL '2 minutes'").
 		Order("updated_at ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
