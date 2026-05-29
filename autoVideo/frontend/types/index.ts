@@ -111,6 +111,7 @@ export interface StoryboardConfig {
   generate_audio?: boolean
   auto_split_after_optimization?: boolean
   video_model?: string  // runtime model key (e.g. "kling", "vidu", "wan") for director duration guidance
+  speech_pace?: 'normal' | 'slightly_fast' | 'with_pauses' | 'very_fast' | 'medium_fast' | 'medium_steady'
   ad_copy_optimization_prompt?: string
   storyboard_split_prompt?: string
 }

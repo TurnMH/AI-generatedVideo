@@ -708,6 +708,7 @@ type storyboardRuntimeConfig struct {
 	StylePreset                string `json:"style_preset"`
 	AspectRatio                string `json:"aspect_ratio"`
 	Resolution                 string `json:"resolution"`
+	SpeechPace                 string `json:"speech_pace"`
 	AutoSplitAfterOptimization bool   `json:"auto_split_after_optimization"`
 }
 
@@ -757,6 +758,9 @@ func parseStoryboardRuntimeConfig(project *model.Project) storyboardRuntimeConfi
 	_ = json.Unmarshal(project.StoryboardConfig, &cfg)
 	cfg.VideoModel = strings.TrimSpace(cfg.VideoModel)
 	cfg.StylePreset = strings.TrimSpace(cfg.StylePreset)
+	cfg.AspectRatio = strings.TrimSpace(cfg.AspectRatio)
+	cfg.Resolution = strings.TrimSpace(cfg.Resolution)
+	cfg.SpeechPace = canonicalSpeechPace(cfg.SpeechPace)
 	return cfg
 }
 
@@ -1273,7 +1277,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 	}
 
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, project.ProjectType, startSequence)
+	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, runtimeCfg.SpeechPace, project.ProjectType, startSequence)
 	patchedContinuity := 0
 	if created > 0 && s.storyboardSvc != nil && s.storyboardSvc.continuityAuditor != nil {
 		auditCtx, cancelAudit := context.WithTimeout(ctx, 90*time.Second)
@@ -2684,11 +2688,11 @@ type llmScene struct {
 // generateStoryboardsParallel —— 使用工作池并行为所有剧集创建分镜，返回总分镜数
 // generateStoryboardsParallel creates storyboards for all episodes using a worker pool
 // for LLM scene breakdown. Reports per-episode progress and updates episode status.
-func (s *EpisodeService) generateStoryboardsParallel(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string) int {
-	return s.generateStoryboardsParallelWithOffset(ctx, projectID, userID, dbEpisodes, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, 0)
+func (s *EpisodeService) generateStoryboardsParallel(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string) int {
+	return s.generateStoryboardsParallelWithOffset(ctx, projectID, userID, dbEpisodes, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, 0)
 }
 
-func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, startSequence int) int {
+func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Context, projectID, userID uint64, dbEpisodes []model.Episode, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, startSequence int) int {
 	projectRef, _ := s.projectRepo.FindByIDNoAuth(projectID)
 	type episodeScenes struct {
 		idx    int
@@ -2808,7 +2812,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			}
 
 			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -3009,7 +3013,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
 	}
@@ -3029,7 +3033,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
 			return s.postProcessAdScenes(scenes, clipDuration)
 		}
@@ -3045,7 +3049,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -3054,15 +3058,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -3101,7 +3105,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, projectType, customStoryboardSplitPrompt)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -3117,7 +3121,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
 	// clipDuration is the user-configured default; we still expose it as a soft reference
 	// but allow the LLM to deviate based on actual scene complexity.
 	refDuration := clipDuration
@@ -3127,6 +3131,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 	// Build model-specific duration constraint hint for the LLM.
 	modelDurationHint := videoModelDurationHint(videoModel, refDuration)
 	visualHint := visualConstraintHint(aspectRatio, resolution, refDuration)
+	speechHint := speechPaceHint(speechPace, refDuration)
 
 	var prompt string
 	if projectType == "comics" {
@@ -3200,6 +3205,8 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 %s
 - 构图/画面约束（必须同步遵守）：
 %s
+- 语速/口播承载约束（必须同步遵守）：
+%s
 - dialogue 该场景中的对白（保持原文语言；如无则留空字符串）
 
 **内联标注识别（优先级最高）：**
@@ -3234,7 +3241,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 ]}
 
 第 %d 集内容：
-%s`, episodeNum, modelDurationHint, visualHint, refDuration, episodeNum, content)
+%s`, episodeNum, modelDurationHint, visualHint, speechHint, refDuration, episodeNum, content)
 	}
 
 	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少四项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置。"
@@ -3974,6 +3981,61 @@ func visualConstraintHint(aspectRatio, resolution string, refDuration int) strin
 		res = "未指定"
 	}
 	return fmt.Sprintf("  目标画面比例：%s。构图、主体数量、左右留白、前景/中景/后景层次必须适配该比例，不要沿用默认构图。\n  目标分辨率：%s。若分辨率较低，避免单镜塞入过多主体、小字或复杂微动作，优先保证主体清晰、卖点突出。\n  目标单分镜时长参考：%d 秒。单镜承载的信息量、口播长度、动作阶段数都必须服务于这个时长。", ar, res, refDuration)
+}
+
+func canonicalSpeechPace(raw string) string {
+	pace := strings.TrimSpace(strings.ToLower(raw))
+	switch pace {
+	case "", "normal":
+		return "normal"
+	case "slightly_fast":
+		return "slightly_fast"
+	case "with_pauses":
+		return "with_pauses"
+	case "very_fast":
+		return "very_fast"
+	case "medium_fast":
+		return "medium_fast"
+	case "medium_steady":
+		return "medium_steady"
+	default:
+		return "normal"
+	}
+}
+
+func speechPaceHint(raw string, refDuration int) string {
+	pace := canonicalSpeechPace(raw)
+	duration := refDuration
+	if duration <= 0 {
+		duration = 10
+	}
+	type paceProfile struct {
+		label         string
+		charsPer10Sec int
+		directive     string
+	}
+	profile := paceProfile{
+		label:         "正常",
+		charsPer10Sec: 48,
+		directive:     "按标准商业口播节奏拆分，句子完整优先，避免为了凑镜头数生硬切断。",
+	}
+	switch pace {
+	case "slightly_fast":
+		profile = paceProfile{label: "稍快", charsPer10Sec: 56, directive: "允许信息密度略高，但仍要保留自然换气点；只有超过该承载量或卖点明显切换时再拆镜。"}
+	case "with_pauses":
+		profile = paceProfile{label: "有停顿", charsPer10Sec: 38, directive: "把停顿、强调、留白也算进时长；同样 10 秒内可承载的台词量更少，应更积极拆镜，避免一句话塞太满。"}
+	case "very_fast":
+		profile = paceProfile{label: "很快", charsPer10Sec: 66, directive: "允许高密度口播，但仍不能牺牲语义完整性；优先按卖点组块而不是机械按字数平均切。"}
+	case "medium_fast":
+		profile = paceProfile{label: "中速偏快", charsPer10Sec: 52, directive: "比正常稍紧凑，适合信息流广告；在保证顺口的前提下，可比正常档少拆一镜。"}
+	case "medium_steady":
+		profile = paceProfile{label: "中速稳重", charsPer10Sec: 42, directive: "节奏稳、句间更讲究停连；需要给强调和停顿留空间，宁可多一镜，也不要单镜负担过重。"}
+	}
+	targetChars := profile.charsPer10Sec * duration / 10
+	if targetChars < 20 {
+		targetChars = 20
+	}
+	return fmt.Sprintf("  当前语速档位：%s。按 %d 秒口播参考，这一档约可自然承载 %d 个中文字符（按 10 秒≈%d 字折算）。%s", profile.label, duration, targetChars, profile.charsPer10Sec, profile.directive)
 }
 
 func videoModelDurationHint(videoModel string, refDuration int) string {

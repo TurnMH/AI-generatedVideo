@@ -102,6 +102,17 @@ function getParamOptions(model: VideoModelMeta | null, key: string): VideoModelP
   return Array.isArray(param?.values) ? param!.values : []
 }
 
+const SPEECH_PACE_OPTIONS = [
+  { value: 'normal', label: '正常', hint: '10 秒内按常规商业口播节奏拆分。' },
+  { value: 'slightly_fast', label: '稍快', hint: '10 秒内可承载更多字数，适合信息密度略高的广告。' },
+  { value: 'with_pauses', label: '有停顿', hint: '要给停顿和强调留空间，会更积极拆镜。' },
+  { value: 'very_fast', label: '很快', hint: '10 秒内承载量最高，但仍以完整句群为主。' },
+  { value: 'medium_fast', label: '中速偏快', hint: '介于正常和稍快之间，适合信息流广告。' },
+  { value: 'medium_steady', label: '中速稳重', hint: '节奏稳，句间更讲究停连，避免单镜过满。' },
+] as const
+
+type SpeechPaceOption = typeof SPEECH_PACE_OPTIONS[number]['value']
+
 function pickAllowedValue(options: VideoModelParamOption[], preferred?: string | number | null, fallbackToFirst = true) {
   if (!options.length) return ''
   const normalizedPreferred = String(preferred ?? '').trim()
@@ -202,6 +213,7 @@ export default function AdVideoHistoryDetailPage() {
   const actionLocksRef = useRef<Set<string>>(new Set())
   const [selectedResolution, setSelectedResolution] = useState('')
   const [selectedDuration, setSelectedDuration] = useState('')
+  const [selectedSpeechPace, setSelectedSpeechPace] = useState<SpeechPaceOption>('normal')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
   const [videoModelMismatch, setVideoModelMismatch] = useState('')
   const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
@@ -318,13 +330,23 @@ export default function AdVideoHistoryDetailPage() {
     () => String(adCopyState?.storyboard_split_prompt_builtin || DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT).trim(),
     [adCopyState?.storyboard_split_prompt_builtin],
   )
+  const selectedSpeechPaceMeta = useMemo(
+    () => SPEECH_PACE_OPTIONS.find((item) => item.value === selectedSpeechPace) || SPEECH_PACE_OPTIONS[0],
+    [selectedSpeechPace],
+  )
   const storyboardSplitPromptPreview = useMemo(() => {
     const custom = editableStoryboardSplitPrompt.trim()
-    return custom ? `${storyboardSplitBuiltinPrompt}
+    const paceBlock = `# 本次步骤 1 语速档位\n${selectedSpeechPaceMeta.label}：${selectedSpeechPaceMeta.hint}`
+    return custom
+      ? `${storyboardSplitBuiltinPrompt}
+
+${paceBlock}
 
 # 项目级补充规则
-${custom}` : storyboardSplitBuiltinPrompt
-  }, [editableStoryboardSplitPrompt, storyboardSplitBuiltinPrompt])
+${custom}` : `${storyboardSplitBuiltinPrompt}
+
+${paceBlock}`
+  }, [editableStoryboardSplitPrompt, selectedSpeechPaceMeta, storyboardSplitBuiltinPrompt])
   const resultUrl = taskResultUrl(latestTask)
 
   const selectedEpisodeNumber = useMemo(() => {
@@ -503,8 +525,8 @@ ${custom}` : storyboardSplitBuiltinPrompt
       : !editableOriginalScript.trim()
         ? '当前原文为空，无法拆分。'
         : storyboardScopeReady
-          ? '当前范围已经有可用分镜，可继续重跑覆盖。'
-          : '先执行这一步，产出新的分集与分镜文本。'
+          ? `当前范围已经有可用分镜，可继续重跑覆盖；当前语速档位：${selectedSpeechPaceMeta.label}。`
+          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的分集与分镜文本。`
 
   const step2Hint = !step2Enabled
     ? '先完成步骤 1，先让这一轮视频配置真正产出新的分集和分镜文案。'
@@ -603,6 +625,15 @@ ${custom}` : storyboardSplitBuiltinPrompt
       return nextDuration
     })
   }, [durationOptions, persistedDuration])
+
+  useEffect(() => {
+    const persisted = String(project?.storyboard_config?.speech_pace || '').trim() as SpeechPaceOption | ''
+    if (persisted && SPEECH_PACE_OPTIONS.some((item) => item.value === persisted)) {
+      setSelectedSpeechPace(persisted)
+      return
+    }
+    setSelectedSpeechPace('normal')
+  }, [project?.storyboard_config?.speech_pace])
 
   useEffect(() => {
     setSelectedGenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
@@ -728,6 +759,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
         aspect_ratio: selectedAspectRatio,
         resolution: selectedResolution,
         duration: Number(selectedDuration),
+        speech_pace: selectedSpeechPace,
         auto_split_after_optimization: true,
         generate_audio: Boolean(selectedModelMeta?.native_audio && selectedGenerateAudio),
       })
@@ -738,7 +770,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
       await projectAPI.generateEpisodes(projectId, undefined, { rebuild: true, autoStoryboard: true })
       await refreshAll()
       toast({
-        title: '已按当前文本模型，并参考所选视频时长约束，重跑“文本拆分 → 分镜文本”',
+        title: `已按当前文本模型、${selectedSpeechPaceMeta.label}语速，并参考所选视频时长约束，重跑“文本拆分 → 分镜文本”`,
         variant: 'success',
       })
     } catch (error) {
@@ -1257,6 +1289,20 @@ ${custom}` : storyboardSplitBuiltinPrompt
                       </select>
                       <div className="text-[11px] text-cyan-100/75">单分镜时长会直接约束单镜可承载的台词 / 口播长度；步骤 1 会优先按台词承载量判断该合并还是继续拆分，再补足动作与画面。</div>
                     </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">10 秒语速档位</Label>
+                      <select
+                        value={selectedSpeechPace}
+                        onChange={(e) => setSelectedSpeechPace(e.target.value as SpeechPaceOption)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        {SPEECH_PACE_OPTIONS.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">按 10 秒口播承载量控制步骤 1 的拆分密度，防止分镜拆分不够。当前说明：{selectedSpeechPaceMeta.hint}</div>
+                    </div>
                   </div>
 
                     <div className="space-y-2">
@@ -1338,7 +1384,7 @@ ${custom}` : storyboardSplitBuiltinPrompt
                       disabled={pipelineBusy || step1Running || !editableOriginalScript.trim() || !splitConfigReady}
                       onClick={() => void rerunStoryboardPipeline()}
                     >
-                      {step1Running ? '步骤 1 进行中…' : rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按文本模型重拆分（参考视频时长约束）'}
+                      {step1Running ? '步骤 1 进行中…' : rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按文本模型重拆分（参考视频时长 + 语速约束）'}
                     </Button>
                     <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-cyan-100/80">
                       {step1Hint}
