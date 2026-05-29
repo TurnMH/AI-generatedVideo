@@ -3311,7 +3311,58 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 	}
 	const minDialogueRunes = 8
 	processed := make([]llmScene, 0, len(scenes))
-	for _, scene := range scenes {
+	mergeIntoPrev := func(prev *llmScene, scene llmScene) {
+		if scene.Dialogue != "" {
+			if prev.Dialogue == "" {
+				prev.Dialogue = scene.Dialogue
+			} else {
+				prev.Dialogue = strings.TrimSpace(prev.Dialogue + "\n" + scene.Dialogue)
+			}
+		}
+		if scene.Description != "" {
+			if prev.Description == "" {
+				prev.Description = scene.Description
+			} else {
+				prev.Description = strings.TrimSpace(prev.Description + "；" + scene.Description)
+			}
+		}
+		if prev.Location == "" {
+			prev.Location = scene.Location
+		}
+		if prev.Mood == "" {
+			prev.Mood = scene.Mood
+		}
+		prev.Duration += scene.Duration
+		if len(prev.Characters) == 0 && len(scene.Characters) > 0 {
+			prev.Characters = append(prev.Characters, scene.Characters...)
+		}
+		if len(prev.Items) == 0 && len(scene.Items) > 0 {
+			prev.Items = append(prev.Items, scene.Items...)
+		}
+		if len(prev.CharacterStates) == 0 && len(scene.CharacterStates) > 0 {
+			prev.CharacterStates = append(prev.CharacterStates, scene.CharacterStates...)
+		}
+	}
+	hasStructuralShift := func(prev, current llmScene) bool {
+		prevLocation := strings.TrimSpace(prev.Location)
+		currentLocation := strings.TrimSpace(current.Location)
+		if prevLocation != "" && currentLocation != "" && !strings.EqualFold(prevLocation, currentLocation) {
+			return true
+		}
+		prevChars := strings.Join(prev.Characters, "|")
+		currentChars := strings.Join(current.Characters, "|")
+		if prevChars != "" && currentChars != "" && !strings.EqualFold(prevChars, currentChars) {
+			return true
+		}
+		currentDesc := strings.ToLower(strings.TrimSpace(current.Description))
+		for _, marker := range []string{"转场", "切到", "镜头切", "来到", "进入", "切换到", "场景切换"} {
+			if strings.Contains(currentDesc, marker) {
+				return true
+			}
+		}
+		return false
+	}
+	for idx, scene := range scenes {
 		scene.Dialogue = strings.TrimSpace(scene.Dialogue)
 		scene.Description = strings.TrimSpace(scene.Description)
 		if scene.Duration <= 0 {
@@ -3324,58 +3375,45 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 			processed = append(processed, scene)
 			continue
 		}
-		shouldMerge := scene.Dialogue == "" || utf8.RuneCountInString(scene.Dialogue) < minDialogueRunes
-		if shouldMerge && len(processed) > 0 {
-			prev := &processed[len(processed)-1]
-			if scene.Dialogue != "" {
-				if prev.Dialogue == "" {
-					prev.Dialogue = scene.Dialogue
-				} else {
-					prev.Dialogue = strings.TrimSpace(prev.Dialogue + "\n" + scene.Dialogue)
-				}
-			}
-			if scene.Description != "" {
-				if prev.Description == "" {
-					prev.Description = scene.Description
-				} else {
-					prev.Description = strings.TrimSpace(prev.Description + "；" + scene.Description)
-				}
-			}
-			if prev.Location == "" {
-				prev.Location = scene.Location
-			}
-			if prev.Mood == "" {
-				prev.Mood = scene.Mood
-			}
-			prev.Duration += scene.Duration
-			if len(prev.Characters) == 0 && len(scene.Characters) > 0 {
-				prev.Characters = append(prev.Characters, scene.Characters...)
-			}
-			if len(prev.Items) == 0 && len(scene.Items) > 0 {
-				prev.Items = append(prev.Items, scene.Items...)
-			}
-			if len(prev.CharacterStates) == 0 && len(scene.CharacterStates) > 0 {
-				prev.CharacterStates = append(prev.CharacterStates, scene.CharacterStates...)
-			}
+		prev := &processed[len(processed)-1]
+		dialogueLen := utf8.RuneCountInString(scene.Dialogue)
+		isEmptyDialogue := scene.Dialogue == ""
+		isShortDialogue := dialogueLen > 0 && dialogueLen < minDialogueRunes
+		mustMerge := isEmptyDialogue
+		isLastOriginalScene := idx == len(scenes)-1
+		shouldMergeShort := isShortDialogue && !isLastOriginalScene && !hasStructuralShift(*prev, scene)
+		if mustMerge || shouldMergeShort {
+			mergeIntoPrev(prev, scene)
 			continue
 		}
 		processed = append(processed, scene)
 	}
-	if len(processed) > 1 {
-		last := processed[len(processed)-1]
-		if strings.TrimSpace(last.Dialogue) == "" || utf8.RuneCountInString(strings.TrimSpace(last.Dialogue)) < minDialogueRunes {
-			prev := &processed[len(processed)-2]
-			if strings.TrimSpace(last.Dialogue) != "" {
-				if prev.Dialogue == "" {
-					prev.Dialogue = strings.TrimSpace(last.Dialogue)
-				} else {
-					prev.Dialogue = strings.TrimSpace(prev.Dialogue + "\n" + strings.TrimSpace(last.Dialogue))
+	if len(processed) > 2 {
+		collapsed := make([]llmScene, 0, len(processed))
+		for i := 0; i < len(processed); i++ {
+			current := processed[i]
+			currentDialogue := strings.TrimSpace(current.Dialogue)
+			if i > 0 && i < len(processed)-1 && currentDialogue != "" && utf8.RuneCountInString(currentDialogue) < minDialogueRunes {
+				next := processed[i+1]
+				if !hasStructuralShift(current, next) {
+					mergeIntoPrev(&next, current)
+					processed[i+1] = next
+					continue
 				}
 			}
-			if strings.TrimSpace(last.Description) != "" {
-				prev.Description = strings.TrimSpace(prev.Description + "；" + strings.TrimSpace(last.Description))
-			}
-			prev.Duration += last.Duration
+			collapsed = append(collapsed, current)
+		}
+		processed = collapsed
+	}
+	if len(processed) > 1 {
+		last := processed[len(processed)-1]
+		lastDialogue := strings.TrimSpace(last.Dialogue)
+		prev := &processed[len(processed)-2]
+		if lastDialogue == "" {
+			mergeIntoPrev(prev, last)
+			processed = processed[:len(processed)-1]
+		} else if utf8.RuneCountInString(lastDialogue) < minDialogueRunes && !hasStructuralShift(*prev, last) {
+			mergeIntoPrev(prev, last)
 			processed = processed[:len(processed)-1]
 		}
 	}
