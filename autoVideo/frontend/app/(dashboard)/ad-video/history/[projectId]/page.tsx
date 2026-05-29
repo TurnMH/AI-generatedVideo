@@ -229,12 +229,26 @@ function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
   }
 }
 
-function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number) {
+function buildEpisodeVideoPayload(
+  storyboards: Storyboard[],
+  episodeId: number | undefined,
+  assetImageById?: Map<number, string>,
+) {
   const sorted = storyboards
     .slice()
     .sort((a, b) => a.sequence_number - b.sequence_number)
 
-  const firstImageIndex = sorted.findIndex((item) => String(item.image_url || '').trim())
+  const resolveSeedImage = (storyboard: Storyboard) => {
+    const storyboardImage = String(storyboard.image_url || '').trim()
+    if (storyboardImage) return storyboardImage
+    for (const assetId of storyboard.asset_ids || []) {
+      const assetImage = String(assetImageById?.get(assetId) || '').trim()
+      if (assetImage) return assetImage
+    }
+    return ''
+  }
+
+  const firstImageIndex = sorted.findIndex((item) => resolveSeedImage(item))
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
   const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(item.prompt_used || item.scene_description || ''))
   const dialogues = serialStoryboards.map((item) => softenDialogueText(item.dialogue || ''))
@@ -249,7 +263,7 @@ function buildEpisodeVideoPayload(storyboards: Storyboard[], episodeId?: number)
 
   return {
     episode_id: episodeId,
-    image_urls: serialStoryboards.map((item, index) => index === 0 ? item.image_url : ''),
+    image_urls: serialStoryboards.map((item, index) => index === 0 ? resolveSeedImage(item) : ''),
     scene_descriptions: sceneDescriptions,
     dialogues: dialogues.some(Boolean) ? dialogues : undefined,
     durations: durations.some(Boolean) ? durations : undefined,
@@ -623,7 +637,10 @@ ${paceBlock}`
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
   const storyboardImagesReady = storyboardScopeReady && completedStoryboardImages > 0
   const storyboardImagesComplete = storyboardScopeReady && completedStoryboardImages === displayStoryboards.length
-  const serialVideoSeedReady = storyboardScopeReady && displayStoryboards.some((item) => String(item.image_url || '').trim())
+  const serialVideoSeedReady = storyboardScopeReady && displayStoryboards.some((item) => {
+    if (String(item.image_url || '').trim()) return true
+    return (storyboardAssetDetailMap.get(item.id) || []).some((asset) => String(asset.image_url || '').trim())
+  })
 
   const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
@@ -678,7 +695,7 @@ ${paceBlock}`
               : '当前范围已有部分分镜图，但还没补齐，建议继续刷新。'
 
   const step3Hint = !step3Enabled
-    ? '当前范围还没有可用的首张分镜图。先在步骤 2 至少生成第 1 张分镜图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
+    ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
     : !step3ConfigReady
       ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
       : step3Running
@@ -1029,16 +1046,13 @@ ${paceBlock}`
       releaseActionLock('video-start')
       return
     }
-    if (!storyboardPool.some((item) => String(item.image_url || '').trim())) {
-      toast({ title: '当前范围还没有可用的首张分镜图，请先在步骤 2 至少生成第 1 张分镜图', variant: 'destructive' })
+    if (!storyboardPool.some((item) => {
+      if (String(item.image_url || '').trim()) return true
+      return (item.asset_ids || []).some((assetId) => String(assetImageById.get(assetId) || '').trim())
+    })) {
+      toast({ title: '当前范围还没有可用的首张分镜图或参考图，请先在步骤 2 至少补一张分镜图，或上传可复用的参考图', variant: 'destructive' })
       releaseActionLock('video-start')
       return
-    }
-
-    const renderConfigBase: Record<string, unknown> = {
-      aspect_ratio: selectedStep3AspectRatio,
-      resolution: selectedStep3Resolution,
-      generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
     }
 
     const stylePreset = project?.storyboard_config?.style_preset || autoSplit?.style_preset || undefined
@@ -1048,7 +1062,12 @@ ${paceBlock}`
     setGenerationAction('video-start')
     try {
       if (selectedEpisodeNumber) {
-        const payload = buildEpisodeVideoPayload(storyboardPool, selectedEpisodeNumber)
+        const payload = buildEpisodeVideoPayload(storyboardPool, selectedEpisodeNumber, assetImageById)
+        const renderConfigBase: Record<string, unknown> = {
+          aspect_ratio: selectedStep3AspectRatio,
+          resolution: selectedStep3Resolution,
+          generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
+        }
         const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
         await videoAPI.generate(projectId, {
           episode_id: selectedEpisodeNumber,
@@ -1082,9 +1101,15 @@ ${paceBlock}`
           groups.set(eid, bucket)
         }
 
+        const renderConfigBase: Record<string, unknown> = {
+          aspect_ratio: selectedStep3AspectRatio,
+          resolution: selectedStep3Resolution,
+          generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
+        }
+
         const batchEpisodes = Array.from(groups.entries())
           .filter(([episodeId]) => episodeId > 0)
-          .map(([episodeId, items]) => buildEpisodeVideoPayload(items, episodeId))
+          .map(([episodeId, items]) => buildEpisodeVideoPayload(items, episodeId, assetImageById))
           .filter((item) => String(item.image_urls?.[0] || '').trim())
 
         if (batchEpisodes.length > 0) {
@@ -1117,7 +1142,7 @@ ${paceBlock}`
 
         const noEpisodeStoryboards = groups.get(0) || []
         if (noEpisodeStoryboards.length > 0) {
-          const payload = buildEpisodeVideoPayload(noEpisodeStoryboards)
+          const payload = buildEpisodeVideoPayload(noEpisodeStoryboards, undefined, assetImageById)
           if (String(payload.image_urls?.[0] || '').trim()) {
             const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
             await videoAPI.generate(projectId, {
@@ -1573,8 +1598,8 @@ ${paceBlock}`
                 {activePipelineStep === 'step2' && (
                   <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
                     <div>
-                      <div className="text-sm font-medium text-violet-100">步骤 2：准备参考图并刷新分镜图</div>
-                      <div className="mt-1 text-xs text-violet-100/80">这一块只做三件事：先生成当前范围需要的素材槽位，再上传参考图，最后刷新这一范围的分镜图。</div>
+                      <div className="text-sm font-medium text-violet-100">步骤 2：参考图与分镜图联合准备</div>
+                      <div className="mt-1 text-xs text-violet-100/80">这一块会把“参考图槽位”和“当前范围分镜”联动起来看：后续视频生成优先使用分镜图；如果某条分镜还没有图，但它绑定的参考图槽位里已经上传了图，也会把这张参考图当作可复用种子图。</div>
                       {step2Running && (
                         <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
                           当前进行中：正在准备素材槽位 / 上传参考图 / 刷新分镜图，请勿重复点击
@@ -1596,8 +1621,8 @@ ${paceBlock}`
                         <div className="mt-1 text-sm text-white">{uploadedScopeAssets} / {scopeAssets.length}</div>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
-                        <div className="text-[11px] text-violet-200/70">可用分镜图</div>
-                        <div className="mt-1 text-sm text-white">{completedStoryboardImages} / {displayStoryboards.length}</div>
+                        <div className="text-[11px] text-violet-200/70">可用种子图</div>
+                        <div className="mt-1 text-sm text-white">{completedStoryboardImages} 条分镜图 + {uploadedScopeAssets} 个已上传参考图</div>
                       </div>
                     </div>
 
@@ -1636,7 +1661,7 @@ ${paceBlock}`
                       )}
                       {!step2Done && step3Enabled && (
                         <div className="mt-2 text-emerald-200/90">
-                        当前范围已经有首张分镜图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
+                        当前范围已经有首张分镜图，或已有可复用的参考图了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
                         </div>
                       )}
                     </div>
