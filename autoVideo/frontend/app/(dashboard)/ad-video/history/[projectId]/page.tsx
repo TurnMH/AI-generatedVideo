@@ -1666,176 +1666,112 @@ ${paceBlock}`
                       )}
                     </div>
 
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-                      <div className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-4">
+                    <div className="grid gap-4">
+                      <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">参考图槽位</div>
-                          <div className="text-[11px] text-violet-100/80">已上传 {uploadedScopeAssets} / {scopeAssets.length}</div>
+                          <div className="text-sm font-medium text-white">当前范围分镜与参考图合并卡</div>
+                          <div className="text-[11px] text-violet-100/80">分镜图 {completedStoryboardImages} / {displayStoryboards.length} · 已上传参考图 {uploadedScopeAssets} / {scopeAssets.length}</div>
                         </div>
 
-                        <div className="max-h-[520px] space-y-3 overflow-auto pr-1">
-                          {scopeAssets.length === 0 ? (
-                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
-                              当前范围还没有可上传的素材槽位。先点上面的“准备人物 / 素材槽位”，系统才会生成这一轮需要上传的角色/物件入口。
-                            </div>
-                          ) : scopeAssets.map((asset) => (
-                            <button
-                              key={asset.id}
-                              type="button"
-                              onClick={() => {
-                                setFocusedAssetId((prev) => (prev === asset.id ? null : asset.id))
-                                setFocusedStoryboardId(null)
-                              }}
-                              className={`w-full rounded-lg border p-3 text-left space-y-3 transition ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-cyan-400/40 bg-cyan-500/10 ring-1 ring-cyan-400/30' : 'border-white/10 bg-slate-950/40 hover:bg-white/5'}`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-sm font-medium text-white">#{asset.id} · {asset.name || '未命名素材'}</div>
-                                  <div className="mt-1 text-[11px] text-slate-400">{asset.type || '-'}{assetToStoryboardMap.get(asset.id)?.length ? ` · 对应 ${assetToStoryboardMap.get(asset.id)?.length || 0} 条分镜` : ' · 当前未映射分镜'}</div>
-                                </div>
-                                <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(asset.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-violet-400/30 bg-violet-500/10 text-violet-100'}`}>
-                                  {String(asset.image_url || '').trim() ? '已上传' : '待上传'}
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 md:grid-cols-[112px_minmax(0,1fr)]">
-                                {String(asset.image_url || '').trim() ? (
-                                  <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={asset.image_url} alt={asset.name || `asset-${asset.id}`} className="h-28 w-full object-cover" />
-                                  </div>
-                                ) : (
-                                  <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-[11px] text-slate-500">
-                                    暂无参考图
-                                  </div>
-                                )}
-
-                                <div className="space-y-3">
-                                  <div className="flex flex-wrap gap-1">
-                                    {(assetToStoryboardMap.get(asset.id) || []).length > 0 ? (assetToStoryboardMap.get(asset.id) || []).map((storyboard) => (
-                                      <span key={`asset-${asset.id}-storyboard-${storyboard.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-300/40 bg-cyan-400/20 text-cyan-50' : 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'}`}>
-                                        分镜 #{storyboard.sequence_number}
-                                      </span>
-                                    )) : (
-                                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">未映射</span>
-                                    )}
-                                  </div>
-
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
-                                      {uploadingAssetId === asset.id ? '上传中…' : String(asset.image_url || '').trim() ? '重新上传参考图' : '上传参考图'}
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        className="hidden"
-                                        disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
-                                        onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
-                                      />
-                                    </label>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
-                                      disabled={pipelineBusy || !step2Enabled || uploadingAssetId !== null}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        void regenerateSingleAssetImage(asset.id, asset.name || `#${asset.id}`)
-                                      }}
-                                    >
-                                      重新生成参考图
-                                    </Button>
-                                  </div>
-                                </div>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="min-h-0 rounded-xl border border-white/10 bg-black/20 p-4">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">当前范围分镜</div>
-                          <div className="text-[11px] text-violet-100/80">分镜图 {completedStoryboardImages} / {displayStoryboards.length}</div>
-                        </div>
-
-                        <div className="max-h-[520px] space-y-3 overflow-auto pr-1">
+                        <div className="space-y-3">
                           {displayStoryboards.length === 0 ? (
                             <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
                               {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜记录。'}
                             </div>
-                          ) : displayStoryboards.map((storyboard) => (
-                            <button
-                              key={storyboard.id}
-                              type="button"
-                              onClick={() => {
-                                setFocusedStoryboardId((prev) => (prev === storyboard.id ? null : storyboard.id))
-                                setFocusedAssetId(null)
-                              }}
-                              className={`w-full rounded-lg border p-3 text-left space-y-3 transition ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-violet-400/40 bg-violet-500/10 ring-1 ring-violet-400/30' : 'border-white/10 bg-slate-950/40 hover:bg-white/5'}`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number}</div>
-                                  <div className="mt-1 text-[11px] text-slate-400">episode {storyboard.episode_id || '-'} · {(storyboardAssetDetailMap.get(storyboard.id) || []).length} 个参考图槽位</div>
-                                </div>
-                                <div className="flex flex-wrap items-center justify-end gap-2">
-                                  <div className={`rounded-full border px-2 py-0.5 text-[11px] ${String(storyboard.image_url || '').trim() ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
-                                    {String(storyboard.image_url || '').trim() ? '分镜图已就绪' : '待生成'}
+                          ) : displayStoryboards.map((storyboard) => {
+                            const storyboardAssets = (storyboardAssetDetailMap.get(storyboard.id) || [])
+                            const seedAssets = storyboardAssets.filter((asset) => String(asset.image_url || '').trim())
+                            const seedImageUrl = String(storyboard.image_url || seedAssets[0]?.image_url || '').trim()
+                            return (
+                              <button
+                                key={storyboard.id}
+                                type="button"
+                                onClick={() => {
+                                  setFocusedStoryboardId((prev) => (prev === storyboard.id ? null : storyboard.id))
+                                  setFocusedAssetId(null)
+                                }}
+                                className={`w-full rounded-lg border p-3 text-left space-y-3 transition ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-violet-400/40 bg-violet-500/10 ring-1 ring-violet-400/30' : 'border-white/10 bg-slate-950/40 hover:bg-white/5'}`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number}</div>
+                                    <div className="mt-1 text-[11px] text-slate-400">episode {storyboard.episode_id || '-'} · {storyboardAssets.length} 个绑定参考图槽位</div>
                                   </div>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-lg border-violet-400/30 bg-violet-500/10 px-2 text-[11px] text-violet-100 hover:bg-violet-500/20"
-                                    disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0 || step2Running}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      void regenerateSingleStoryboardImage(storyboard.id, storyboard.sequence_number)
-                                    }}
-                                  >
-                                    重新生成
-                                  </Button>
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 md:grid-cols-[112px_minmax(0,1fr)]">
-                                {String(storyboard.image_url || '').trim() ? (
-                                  <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={storyboard.image_url} alt={`storyboard-${storyboard.id}`} className="h-28 w-full object-cover" />
-                                  </div>
-                                ) : (
-                                  <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-[11px] text-slate-500">
-                                    暂无分镜图
-                                  </div>
-                                )}
-
-                                <div className="space-y-3">
-                                  <div className="flex flex-wrap gap-1">
-                                    {(storyboardAssetDetailMap.get(storyboard.id) || []).length > 0 ? (storyboardAssetDetailMap.get(storyboard.id) || []).map((asset) => (
-                                      <span key={`storyboard-${storyboard.id}-asset-${asset.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-violet-300/40 bg-violet-400/20 text-violet-50' : 'border-violet-400/20 bg-violet-500/10 text-violet-100'}`}>
-                                        #{asset.id} {asset.name || '未命名素材'}
-                                      </span>
-                                    )) : (
-                                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">无参考图槽位</span>
-                                    )}
-                                  </div>
-
-                                  <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-[11px] text-slate-300 space-y-2">
-                                    <div>
-                                      <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">场景</div>
-                                      <div className="line-clamp-3 whitespace-pre-wrap break-words text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                                  <div className="flex flex-wrap items-center justify-end gap-2">
+                                    <div className={`rounded-full border px-2 py-0.5 text-[11px] ${seedImageUrl ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                      {seedImageUrl ? '可作为种子图' : '待补种子图'}
                                     </div>
-                                    <div>
-                                      <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">台词</div>
-                                      <div className="line-clamp-2 whitespace-pre-wrap break-words text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-lg border-violet-400/30 bg-violet-500/10 px-2 text-[11px] text-violet-100 hover:bg-violet-500/20"
+                                      disabled={pipelineBusy || !step2Enabled || storyboardAssets.length === 0 || step2Running}
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        void regenerateSingleStoryboardImage(storyboard.id, storyboard.sequence_number)
+                                      }}
+                                    >
+                                      重新生成分镜图
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                <div className="grid gap-3 md:grid-cols-[112px_minmax(0,1fr)]">
+                                  {seedImageUrl ? (
+                                    <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={seedImageUrl} alt={`storyboard-${storyboard.id}`} className="h-28 w-full object-cover" />
+                                    </div>
+                                  ) : (
+                                    <div className="flex h-28 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-[11px] text-slate-500">
+                                      暂无可用种子图
+                                    </div>
+                                  )}
+
+                                  <div className="space-y-3">
+                                    <div className="flex flex-wrap gap-1">
+                                      {storyboardAssets.length > 0 ? storyboardAssets.map((asset) => (
+                                        <span key={`storyboard-${storyboard.id}-asset-${asset.id}`} className={`rounded-full border px-2 py-0.5 text-[10px] ${focusedAssetId === asset.id || focusedAssetIds.has(asset.id) ? 'border-violet-300/40 bg-violet-400/20 text-violet-50' : 'border-violet-400/20 bg-violet-500/10 text-violet-100'}`}>
+                                          #{asset.id} {asset.name || '未命名素材'}{String(asset.image_url || '').trim() ? ' · 已上传' : ' · 待上传'}
+                                        </span>
+                                      )) : (
+                                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">无绑定参考图槽位</span>
+                                      )}
+                                    </div>
+
+                                    <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-[11px] text-slate-300 space-y-2">
+                                      <div>
+                                        <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">场景</div>
+                                        <div className="line-clamp-3 whitespace-pre-wrap break-words text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                                      </div>
+                                      <div>
+                                        <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">台词</div>
+                                        <div className="line-clamp-2 whitespace-pre-wrap break-words text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      {storyboardAssets.length > 0 ? storyboardAssets.map((asset) => (
+                                        <label key={`storyboard-${storyboard.id}-upload-${asset.id}`} className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                          {String(asset.image_url || '').trim() ? `重新上传 #${asset.id}` : `上传到 #${asset.id}`}
+                                          <input
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy}
+                                            onChange={(event) => { event.stopPropagation(); void handleAssetUpload(asset.id, event) }}
+                                          />
+                                        </label>
+                                      )) : (
+                                        <div className="text-[11px] text-slate-400">这条分镜暂无绑定槽位，先在步骤 2 生成素材槽位再回来看。</div>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
-                              </div>
-                            </button>
-                          ))}
+                              </button>
+                            )
+                          })}
                         </div>
                       </div>
                     </div>
