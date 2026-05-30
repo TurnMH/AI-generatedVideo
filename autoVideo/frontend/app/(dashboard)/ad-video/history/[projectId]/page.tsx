@@ -291,7 +291,6 @@ export default function AdVideoHistoryDetailPage() {
   const [optimizingCopy, setOptimizingCopy] = useState(false)
   const [adCopyOptimizationPending, setAdCopyOptimizationPending] = useState(false)
   const [savingCopyDraft, setSavingCopyDraft] = useState(false)
-  const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>('all')
   const [generationAction, setGenerationAction] = useState<string | null>(null)
   const [rerunAction, setRerunAction] = useState<string | null>(null)
   const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
@@ -445,22 +444,6 @@ ${paceBlock}`
   }, [editableStoryboardSplitPrompt, selectedSpeechPaceMeta, storyboardSplitBuiltinPrompt])
   const resultUrl = taskResultUrl(latestTask)
 
-  const selectedEpisodeNumber = useMemo(() => {
-    const value = Number(selectedEpisodeId)
-    return Number.isFinite(value) && value > 0 ? value : null
-  }, [selectedEpisodeId])
-
-  const selectedEpisode = useMemo(
-    () => episodes.find((episode) => episode.id === selectedEpisodeNumber) || null,
-    [episodes, selectedEpisodeNumber],
-  )
-
-  useEffect(() => {
-    if (selectedEpisodeId === 'all') return
-    if (selectedEpisode) return
-    setSelectedEpisodeId('all')
-  }, [selectedEpisode, selectedEpisodeId])
-
   const persistedVideoModel = useMemo(
     () => String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim(),
     [project?.storyboard_config?.video_model, autoSplit?.video_model],
@@ -516,10 +499,7 @@ ${paceBlock}`
     [durationOptions, persistedDuration],
   )
 
-  const scopeStoryboards = useMemo(() => {
-    if (!selectedEpisodeNumber) return storyboards
-    return storyboards.filter((item) => Number(item.episode_id) === selectedEpisodeNumber)
-  }, [selectedEpisodeNumber, storyboards])
+  const scopeStoryboards = useMemo(() => storyboards, [storyboards])
 
   useEffect(() => {
     if (scopeStoryboards.length > 0) {
@@ -536,13 +516,9 @@ ${paceBlock}`
   }, [scopeStoryboards])
 
   const scopeAssets = useMemo(() => {
-    const base = selectedEpisodeNumber
-      ? assets.filter((item) => !item.episode_ids?.length || item.episode_ids.includes(selectedEpisodeNumber))
-      : assets
-
-    const referenced = base.filter((item) => scopeStoryboardAssetIds.has(item.id))
-    return referenced.length > 0 ? referenced : base
-  }, [assets, scopeStoryboardAssetIds, selectedEpisodeNumber])
+    const referenced = assets.filter((item) => scopeStoryboardAssetIds.has(item.id))
+    return referenced.length > 0 ? referenced : assets
+  }, [assets, scopeStoryboardAssetIds])
 
   const uploadedScopeAssets = useMemo(
     () => scopeAssets.filter((item) => String(item.image_url || '').trim()).length,
@@ -586,13 +562,6 @@ ${paceBlock}`
     if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
     return []
   }, [scopeStoryboards, step1Running])
-
-  useEffect(() => {
-    if (scopeStoryboards.length > 0) return
-    if (selectedEpisodeId !== 'all' && storyboards.length > 0 && !step1Running) {
-      setSelectedEpisodeId('all')
-    }
-  }, [scopeStoryboards, selectedEpisodeId, step1Running, storyboards.length])
 
   const completedStoryboardImages = useMemo(
     () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
@@ -676,17 +645,17 @@ ${paceBlock}`
   }, [step1Running, step2Running, step3Running])
 
   const step1Hint = step1Running
-    ? '当前正在重跑文本拆分 / 自动分镜；后端会重建分集与分镜，若原分集范围失效，页面会自动回到“全部分集”。'
+    ? '当前正在重跑文本拆分 / 自动分镜；后端会重建整条广告的分镜文本，请等这一轮回流。'
     : !splitConfigReady
       ? '先补齐视频模型、比例、分辨率、单分镜时长。'
       : !editableOriginalScript.trim()
         ? '当前原文为空，无法拆分。'
         : storyboardScopeReady
           ? `当前范围已经有可用分镜，可继续重跑覆盖；当前语速档位：${selectedSpeechPaceMeta.label}。`
-          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的分集与分镜文本。若原分集范围失效，页面会自动回到“全部分集”。`
+          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的整条广告分镜文本。`
 
   const step2Hint = !step2Enabled
-    ? '先完成步骤 1，先让这一轮视频配置真正产出新的分集和分镜文案。'
+    ? '先完成步骤 1，先让这一轮视频配置真正产出新的广告分镜文案。'
     : step2Running
       ? '当前正在执行步骤 2：准备素材槽位或生成首张分镜图，请等这一轮回流。'
       : !assetScopeReady
@@ -966,15 +935,7 @@ ${paceBlock}`
   }
 
   const triggerAssetExtraction = async () => {
-    if (selectedEpisodeNumber) {
-      await runScopedAction(
-        `asset-episode-${selectedEpisodeNumber}`,
-        () => assetAPI.extractEpisode(projectId, selectedEpisodeNumber),
-        `已为 episode ${selectedEpisode?.episode_number || selectedEpisodeNumber} 生成可上传的人物 / 素材槽位`,
-      )
-      return
-    }
-    await runScopedAction('asset-all', () => assetAPI.extract(projectId), '已为整项目生成可上传的人物 / 素材槽位')
+    await runScopedAction('asset-all', () => assetAPI.extract(projectId), '已为整条广告生成可上传的人物 / 素材槽位')
   }
 
   const triggerStoryboardImageGeneration = async () => {
@@ -1081,121 +1042,39 @@ ${paceBlock}`
 
     setGenerationAction('video-start')
     try {
-      if (selectedEpisodeNumber) {
-        const payload = buildEpisodeVideoPayload(storyboardPool, selectedEpisodeNumber, assetImageById)
-        const renderConfigBase: Record<string, unknown> = {
-          aspect_ratio: selectedStep3AspectRatio,
-          resolution: selectedStep3Resolution,
-          generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
-        }
-        const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
-        await videoAPI.generate(projectId, {
-          episode_id: selectedEpisodeNumber,
-          image_urls: payload.image_urls,
-          scene_descriptions: payload.scene_descriptions,
-          dialogues: payload.dialogues,
-          durations: payload.durations,
-          camera_movements: payload.camera_movements,
-          moods: payload.moods,
-          spatial_anchors: payload.spatial_anchors,
-          subject_positions: payload.subject_positions,
-          transition_notes: payload.transition_notes,
-          scene_characters: payload.scene_characters,
-          scene_asset_ids: payload.scene_asset_ids,
-          scene_description: payload.scene_description,
-          scene_group_keys: payload.scene_group_keys,
-          model_name: effectiveSelectedVideoModel,
-          style_preset: stylePreset,
-          motion_mode: motionMode,
-          video_mode: project?.video_mode,
-          clip_duration_sec: clipDuration,
-          render_config: renderConfig,
-          serial_scene: true,
-        })
-      } else {
-        const groups = new Map<number, Storyboard[]>()
-        for (const storyboard of storyboardPool) {
-          const eid = Number(storyboard.episode_id || 0)
-          const bucket = groups.get(eid) ?? []
-          bucket.push(storyboard)
-          groups.set(eid, bucket)
-        }
-
-        const renderConfigBase: Record<string, unknown> = {
-          aspect_ratio: selectedStep3AspectRatio,
-          resolution: selectedStep3Resolution,
-          generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
-        }
-
-        const batchEpisodes = Array.from(groups.entries())
-          .filter(([episodeId]) => episodeId > 0)
-          .map(([episodeId, items]) => buildEpisodeVideoPayload(items, episodeId, assetImageById))
-          .filter((item) => String(item.image_urls?.[0] || '').trim())
-
-        if (batchEpisodes.length > 0) {
-          await videoAPI.generateBatch(projectId, {
-            episodes: batchEpisodes.map((item) => ({
-              episode_id: item.episode_id || 0,
-              image_urls: item.image_urls,
-              scene_descriptions: item.scene_descriptions,
-              dialogues: item.dialogues,
-              durations: item.durations,
-              camera_movements: item.camera_movements,
-              moods: item.moods,
-              spatial_anchors: item.spatial_anchors,
-              subject_positions: item.subject_positions,
-              transition_notes: item.transition_notes,
-              scene_characters: item.scene_characters,
-              scene_asset_ids: item.scene_asset_ids,
-              scene_description: item.scene_description,
-              scene_group_keys: item.scene_group_keys,
-            })),
-            model_name: effectiveSelectedVideoModel,
-            style_preset: stylePreset,
-            motion_mode: motionMode,
-            video_mode: project?.video_mode,
-            clip_duration_sec: clipDuration,
-            render_config: applyStep3SafetySoftening(renderConfigBase, batchEpisodes[0]),
-            serial_scene: true,
-          })
-        }
-
-        const noEpisodeStoryboards = groups.get(0) || []
-        if (noEpisodeStoryboards.length > 0) {
-          const payload = buildEpisodeVideoPayload(noEpisodeStoryboards, undefined, assetImageById)
-          if (String(payload.image_urls?.[0] || '').trim()) {
-            const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
-            await videoAPI.generate(projectId, {
-              image_urls: payload.image_urls,
-              scene_descriptions: payload.scene_descriptions,
-              dialogues: payload.dialogues,
-              durations: payload.durations,
-              camera_movements: payload.camera_movements,
-              moods: payload.moods,
-              spatial_anchors: payload.spatial_anchors,
-              subject_positions: payload.subject_positions,
-              transition_notes: payload.transition_notes,
-              scene_characters: payload.scene_characters,
-              scene_asset_ids: payload.scene_asset_ids,
-              scene_description: payload.scene_description,
-              scene_group_keys: payload.scene_group_keys,
-              model_name: effectiveSelectedVideoModel,
-              style_preset: stylePreset,
-              motion_mode: motionMode,
-              video_mode: project?.video_mode,
-              clip_duration_sec: clipDuration,
-              render_config: renderConfig,
-              serial_scene: true,
-            })
-          }
-        }
+      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, assetImageById)
+      const renderConfigBase: Record<string, unknown> = {
+        aspect_ratio: selectedStep3AspectRatio,
+        resolution: selectedStep3Resolution,
+        generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
       }
+      const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
+      await videoAPI.generate(projectId, {
+        image_urls: payload.image_urls,
+        scene_descriptions: payload.scene_descriptions,
+        dialogues: payload.dialogues,
+        durations: payload.durations,
+        camera_movements: payload.camera_movements,
+        moods: payload.moods,
+        spatial_anchors: payload.spatial_anchors,
+        subject_positions: payload.subject_positions,
+        transition_notes: payload.transition_notes,
+        scene_characters: payload.scene_characters,
+        scene_asset_ids: payload.scene_asset_ids,
+        scene_description: payload.scene_description,
+        scene_group_keys: payload.scene_group_keys,
+        model_name: effectiveSelectedVideoModel,
+        style_preset: stylePreset,
+        motion_mode: motionMode,
+        video_mode: project?.video_mode,
+        clip_duration_sec: clipDuration,
+        render_config: renderConfig,
+        serial_scene: true,
+      })
 
       await refreshAll()
       toast({
-        title: selectedEpisodeNumber
-          ? `已启动 episode ${selectedEpisode?.episode_number || selectedEpisodeNumber} 的视频生成`
-          : '已启动当前项目范围的视频生成',
+        title: '已启动整条广告的视频生成',
         variant: 'success',
       })
     } catch (error) {
@@ -1206,9 +1085,7 @@ ${paceBlock}`
     }
   }
 
-  const scopeLabel = selectedEpisode
-    ? `episode #${selectedEpisode.episode_number} · ${selectedEpisode.title || '未命名片段'}`
-    : '整项目（全部分集）'
+  const scopeLabel = '整条广告（不分集）'
 
   return (
     <div className="space-y-6">
@@ -1318,7 +1195,7 @@ ${paceBlock}`
                   </div>
 
                   {displayStoryboards.length === 0 ? (
-                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : storyboards.length > 0 ? '当前分集范围没有命中新分镜，页面已自动回退到“全部分集”重新展示。' : '当前范围还没有分镜记录。'}</div>
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前还没有分镜记录。'}</div>
                   ) : displayStoryboards.map((storyboard, index) => (
                     <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
@@ -1399,7 +1276,7 @@ ${paceBlock}`
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">按台词时长重拆分文本</div>
-                  <div className="mt-2 text-xs text-current/80">先确定视频模型、单分镜时长与语速，再按台词 / 口播承载量重跑当前文案；比例和分辨率用于同步约束构图与画面复杂度。重拆分后若原分集编号失效，页面会自动回到全部分集展示新结果。</div>
+                  <div className="mt-2 text-xs text-current/80">先确定视频模型、单分镜时长与语速，再按台词 / 口播承载量重跑整条广告文案；比例和分辨率用于同步约束构图与画面复杂度。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
                 <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step2') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
@@ -1427,7 +1304,7 @@ ${paceBlock}`
                   <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
                   <div>
                     <div className="text-sm font-medium text-cyan-100">步骤 1：按文本模型重跑“文本 → 分镜文本”</div>
-                    <div className="mt-1 text-xs text-cyan-100/80">这里用文本模型完成广告文案优化与自动分集；下方视频模型只用于提供单分镜时长和后续视频能力约束，不是文本拆分模型。</div>
+                    <div className="mt-1 text-xs text-cyan-100/80">这里用文本模型完成广告文案优化与整条广告分镜拆分；下方视频模型只用于提供单分镜时长和后续视频能力约束，不是文本拆分模型。</div>
                     {step1Running && (
                       <div className="mt-2 inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-100">
                         当前进行中：正在用文本模型重跑文本拆分 / 自动分镜，请勿重复点击
@@ -1614,7 +1491,7 @@ ${paceBlock}`
                       {step1Hint}
                     </div>
                     <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-50">
-                      提醒：步骤 1 会重新生成分集，旧分集编号可能失效；如果你之前只看某一集，完成后页面会自动切回“全部分集”，避免误判成“没有分镜产出”。
+                      提醒：步骤 1 会直接重建整条广告的分镜文本，因此请以这次回流后的全量结果为准。
                     </div>
                   </div>
                   </div>
@@ -1658,7 +1535,7 @@ ${paceBlock}`
                         disabled={pipelineBusy || !step2Enabled}
                         onClick={() => void triggerAssetExtraction()}
                       >
-                        {generationAction === 'asset-all' || generationAction === `asset-episode-${selectedEpisodeNumber}` ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
+                        {generationAction === 'asset-all' ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
                       </Button>
                       <Button
                         size="sm"
@@ -1927,7 +1804,7 @@ ${paceBlock}`
                       disabled={pipelineBusy || !step3Enabled || !splitConfigReady || !serialVideoSeedReady}
                       onClick={() => void startScopedVideoGeneration()}
                     >
-                      {generationAction === 'video-start' ? '正在提交视频任务…' : selectedEpisodeNumber ? '开始生成当前分集视频' : '开始生成当前范围视频'}
+                      {generationAction === 'video-start' ? '正在提交视频任务…' : '开始生成整条广告视频'}
                     </Button>
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
