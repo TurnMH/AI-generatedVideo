@@ -13,6 +13,27 @@ import { useToast } from '@/components/ui/toast'
 import { assetAPI, modelAPI, projectAPI, storyboardAPI, storageAPI, videoAPI, type Episode, type Project } from '@/lib/api'
 import type { AdCopyOptimizationState, Asset, Storyboard } from '@/types'
 
+type VideoTaskClip = {
+  id: number
+  video_task_id?: number
+  clip_order: number
+  source_image_url?: string
+  clip_url?: string
+  duration_sec?: number
+  model_used?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  status?: string
+  error_msg?: string
+  scene_group_key?: string
+  scene_seq?: number
+  end_frame_image_url?: string
+  created_at?: string
+  updated_at?: string
+}
+
 type VideoTask = {
   id: number
   project_id: number
@@ -24,6 +45,7 @@ type VideoTask = {
   created_at?: string
   updated_at?: string
   render_config?: Record<string, unknown>
+  clips?: VideoTaskClip[]
 }
 
 type VideoTaskClipDebug = {
@@ -471,6 +493,28 @@ export default function AdVideoHistoryDetailPage() {
     () => (latestTaskDetail?.clips_debug || []).slice().sort((a, b) => Number(a.clip_order) - Number(b.clip_order)),
     [latestTaskDetail],
   )
+  const latestStoryboardVideoRecords = useMemo(() => {
+    if (!latestTaskDetail?.task) return []
+    const clips = Array.isArray(latestTaskDetail.task.clips) ? latestTaskDetail.task.clips : []
+    const debugMap = new Map((latestTaskDetail.clips_debug || []).map((item) => [Number(item.clip_order), item]))
+    return clips
+      .slice()
+      .sort((a, b) => Number(a.clip_order) - Number(b.clip_order))
+      .map((clip) => {
+        const debug = debugMap.get(Number(clip.clip_order))
+        return {
+          ...clip,
+          source_image_url: clip.source_image_url || debug?.source_image_url || '',
+          end_frame_image_url: clip.end_frame_image_url || debug?.end_frame_image_url || '',
+          requested_model: clip.requested_model || debug?.requested_model || '',
+          routed_generator: clip.routed_generator || debug?.routed_generator || '',
+          runtime_provider: clip.runtime_provider || debug?.runtime_provider || '',
+          effective_model: clip.effective_model || debug?.effective_model || '',
+          scene_group_key: clip.scene_group_key || debug?.scene_group_key || '',
+          scene_seq: clip.scene_seq ?? debug?.scene_seq,
+        }
+      })
+  }, [latestTaskDetail])
   const autoSplit = project?.progress?.auto_split || null
   const realOptimizedScript = useMemo(
     () => String(adCopyState?.optimized_script || autoSplit?.optimized_script || '').trim(),
@@ -1952,8 +1996,8 @@ ${paceBlock}`
                     <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <div className="text-sm font-medium text-white">Step3 串行链路记录（最新任务）</div>
-                          <div className="mt-1 text-[11px] text-emerald-100/75">这里直接展示最新任务每一段 clip 的首帧来源、尾帧落库和结果视频，方便你在步骤 3 里判断串行连续性有没有真的接上。</div>
+                          <div className="text-sm font-medium text-white">Step3 每个分镜的视频记录（最新任务）</div>
+                          <div className="mt-1 text-[11px] text-emerald-100/75">这里按分镜顺序直接展示“这个分镜生成出来的视频记录”，并额外标出上一分镜传给下一段的有效锚点、当前分镜产出的有效尾帧，方便你在步骤 3 里判断串行连续性有没有真的接上。</div>
                         </div>
                         <Button variant="outline" onClick={() => { void mutateLatestTaskDetail() }}>
                           刷新这份串行记录
@@ -1970,7 +2014,7 @@ ${paceBlock}`
                             <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">最新任务：#{latestTaskDetail.task.id}</div>
                             <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">状态：{latestTaskDetail.task.status || '-'}</div>
                             <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">模型：{latestTaskDetail.task.model_name || '-'}</div>
-                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">clip 数：{latestTaskClips.length}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">分镜视频记录：{latestStoryboardVideoRecords.length}</div>
                           </div>
 
                           {latestTaskDetail.task.result_url && (
@@ -1979,69 +2023,84 @@ ${paceBlock}`
                             </div>
                           )}
 
-                          {latestTaskClips.length === 0 ? (
-                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">这个任务的 clip 明细还没回流出来。</div>
+                          {latestStoryboardVideoRecords.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">这个任务的分镜视频记录还没回流出来。</div>
                           ) : (
                             <div className="max-h-[720px] space-y-3 overflow-auto pr-1">
-                              {latestTaskClips.map((clip, index) => (
-                                <div key={`step3-clip-${clip.id ?? `${clip.clip_order}-${clip.scene_seq ?? index}`}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
-                                  <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div>
-                                      <div className="text-sm font-medium text-white">第 {index + 1} 段分镜</div>
-                                      <div className="mt-1 text-[11px] text-slate-300">
-                                        clip #{clip.id ?? '-'} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}
+                              {latestStoryboardVideoRecords.map((clip, index) => {
+                                const previousClip = index > 0 ? latestStoryboardVideoRecords[index - 1] : null
+                                const inheritedAnchor = index === 0
+                                  ? clip.source_image_url || ''
+                                  : clip.source_image_url || previousClip?.end_frame_image_url || previousClip?.source_image_url || ''
+                                return (
+                                  <div key={`step3-clip-${clip.id ?? `${clip.clip_order}-${clip.scene_seq ?? index}`}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-sm font-medium text-white">第 {index + 1} 个分镜的视频记录</div>
+                                        <div className="mt-1 text-[11px] text-slate-300">
+                                          clip #{clip.id ?? '-'} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}
+                                        </div>
+                                      </div>
+                                      <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '待回流'}</div>
+                                    </div>
+
+                                    {clip.clip_url ? (
+                                      <div className="overflow-hidden rounded-lg border border-emerald-500/20 bg-black/30 p-3 space-y-2">
+                                        <div className="text-xs font-medium text-emerald-100">这个分镜生成出来的视频</div>
+                                        <video className="max-h-[320px] w-full rounded-lg bg-black" controls preload="metadata" src={clip.clip_url} />
+                                      </div>
+                                    ) : (
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400">
+                                        这个分镜的视频结果还没有回流出来。
+                                      </div>
+                                    )}
+
+                                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs text-slate-200">
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-cyan-100">本分镜实际首帧来源</div>
+                                        {clip.source_image_url ? (
+                                          <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                      <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-fuchsia-100">上一分镜传给这一段的有效锚点</div>
+                                        {inheritedAnchor ? (
+                                          <a className="break-all text-fuchsia-300 underline" href={inheritedAnchor} target="_blank" rel="noreferrer">{inheritedAnchor}</a>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-amber-100">本分镜产出的有效尾帧</div>
+                                        {clip.end_frame_image_url ? (
+                                          <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-emerald-100">这个分镜的视频记录</div>
+                                        {clip.clip_url ? (
+                                          <a className="break-all text-emerald-300 underline" href={clip.clip_url} target="_blank" rel="noreferrer">{clip.clip_url}</a>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
                                       </div>
                                     </div>
-                                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '待回流'}</div>
-                                  </div>
 
-                                  {clip.clip_url ? (
-                                    <div className="overflow-hidden rounded-lg border border-emerald-500/20 bg-black/30 p-3 space-y-2">
-                                      <div className="text-xs font-medium text-emerald-100">本段视频预览</div>
-                                      <video className="max-h-[320px] w-full rounded-lg bg-black" controls preload="metadata" src={clip.clip_url} />
-                                    </div>
-                                  ) : (
-                                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400">
-                                      本段视频还没有回流出可播放结果。
-                                    </div>
-                                  )}
-
-                                  <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-200">
-                                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
-                                      <div className="font-medium text-cyan-100">source_image_url（本段首帧来源）</div>
-                                      {clip.source_image_url ? (
-                                        <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
-                                      ) : (
-                                        <div className="text-slate-400">空</div>
-                                      )}
-                                    </div>
-                                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
-                                      <div className="font-medium text-amber-100">end_frame_image_url（本段尾帧记录）</div>
-                                      {clip.end_frame_image_url ? (
-                                        <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
-                                      ) : (
-                                        <div className="text-slate-400">空</div>
-                                      )}
-                                    </div>
-                                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2">
-                                      <div className="font-medium text-emerald-100">clip_url（本段结果）</div>
-                                      {clip.clip_url ? (
-                                        <a className="break-all text-emerald-300 underline" href={clip.clip_url} target="_blank" rel="noreferrer">{clip.clip_url}</a>
-                                      ) : (
-                                        <div className="text-slate-400">空</div>
-                                      )}
+                                    <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-6">
+                                      <div>scene_group_key：{clip.scene_group_key || '-'}</div>
+                                      <div>effective_model：{clip.effective_model || clip.model_used || '-'}</div>
+                                      <div>requested_model：{clip.requested_model || '-'}</div>
+                                      <div>runtime_provider：{clip.runtime_provider || '-'}</div>
+                                      <div>duration_sec：{clip.duration_sec ?? '-'}</div>
+                                      <div>error：{clip.error_msg || '-'}</div>
                                     </div>
                                   </div>
-
-                                  <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-5">
-                                    <div>scene_group_key：{clip.scene_group_key || '-'}</div>
-                                    <div>effective_model：{clip.effective_model || '-'}</div>
-                                    <div>requested_model：{clip.requested_model || '-'}</div>
-                                    <div>runtime_provider：{clip.runtime_provider || '-'}</div>
-                                    <div>error：{clip.error_msg || '-'}</div>
-                                  </div>
-                                </div>
-                              ))}
+                                )
+                              })}
                             </div>
                           )}
                         </>
