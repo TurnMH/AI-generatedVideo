@@ -2108,14 +2108,6 @@ ${paceBlock}`
                                           <div className="text-slate-400">空</div>
                                         )}
                                       </div>
-                                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2">
-                                        <div className="font-medium text-emerald-100">这个分镜的视频记录</div>
-                                        {clip.clip_url ? (
-                                          <a className="break-all text-emerald-300 underline" href={clip.clip_url} target="_blank" rel="noreferrer">{clip.clip_url}</a>
-                                        ) : (
-                                          <div className="text-slate-400">空</div>
-                                        )}
-                                      </div>
                                     </div>
 
                                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs text-slate-200">
