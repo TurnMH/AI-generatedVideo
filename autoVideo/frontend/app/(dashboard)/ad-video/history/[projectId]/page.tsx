@@ -1983,12 +1983,28 @@ ${paceBlock}`
                             <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">这个任务的 clip 明细还没回流出来。</div>
                           ) : (
                             <div className="max-h-[720px] space-y-3 overflow-auto pr-1">
-                              {latestTaskClips.map((clip) => (
-                                <div key={`step3-clip-${clip.id}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-3 space-y-3">
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="text-sm font-medium text-white">clip #{clip.id} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}</div>
-                                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '-'}</div>
+                              {latestTaskClips.map((clip, index) => (
+                                <div key={`step3-clip-${clip.id ?? `${clip.clip_order}-${clip.scene_seq ?? index}`}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-medium text-white">第 {index + 1} 段分镜</div>
+                                      <div className="mt-1 text-[11px] text-slate-300">
+                                        clip #{clip.id ?? '-'} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}
+                                      </div>
+                                    </div>
+                                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '待回流'}</div>
                                   </div>
+
+                                  {clip.clip_url ? (
+                                    <div className="overflow-hidden rounded-lg border border-emerald-500/20 bg-black/30 p-3 space-y-2">
+                                      <div className="text-xs font-medium text-emerald-100">本段视频预览</div>
+                                      <video className="max-h-[320px] w-full rounded-lg bg-black" controls preload="metadata" src={clip.clip_url} />
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400">
+                                      本段视频还没有回流出可播放结果。
+                                    </div>
+                                  )}
 
                                   <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-200">
                                     <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
@@ -2017,9 +2033,11 @@ ${paceBlock}`
                                     </div>
                                   </div>
 
-                                  <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3">
+                                  <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-5">
                                     <div>scene_group_key：{clip.scene_group_key || '-'}</div>
                                     <div>effective_model：{clip.effective_model || '-'}</div>
+                                    <div>requested_model：{clip.requested_model || '-'}</div>
+                                    <div>runtime_provider：{clip.runtime_provider || '-'}</div>
                                     <div>error：{clip.error_msg || '-'}</div>
                                   </div>
                                 </div>
