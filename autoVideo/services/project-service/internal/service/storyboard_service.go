@@ -818,6 +818,15 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 			sb.Dialogue = str
 		}
 	}
+	if v, ok := updates["image_url"]; ok {
+		if str, ok := v.(string); ok {
+			sb.ImageURL = str
+			if strings.TrimSpace(str) != "" {
+				sb.Status = "completed"
+				sb.ErrorMsg = ""
+			}
+		}
+	}
 	if v, ok := updates["prompt_used"]; ok {
 		if str, ok := v.(string); ok {
 			if s.auditor != nil {
