@@ -38,9 +38,10 @@ type VideoGenerateReq struct {
 
 // VideoClip is the result of a successful generation.
 type VideoClip struct {
-	ClipURL     string
-	DurationSec float64
-	ModelUsed   string
+	ClipURL          string
+	EndFrameImageURL string
+	DurationSec      float64
+	ModelUsed        string
 }
 
 // ── Model parameter capabilities ─────────────────────────────────────────────
@@ -74,6 +75,16 @@ func firstNonEmpty(vals ...string) string {
 
 func resolvedModelUsed(actualModel, fallback string) string {
 	return firstNonEmpty(strings.TrimSpace(actualModel), strings.TrimSpace(fallback))
+}
+
+func resolvedDurationSec(actual, requested float64) float64 {
+	if actual > 0 {
+		return actual
+	}
+	if requested > 0 {
+		return requested
+	}
+	return 5
 }
 
 // RetrySubmit calls submitFn up to maxAttempts times, backing off on rate-limit

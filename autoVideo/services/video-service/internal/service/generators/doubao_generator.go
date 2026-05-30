@@ -137,12 +137,13 @@ type doubaoImageURLItem struct {
 }
 
 type doubaoSubmitReq struct {
-	Model         string              `json:"model"`
-	Content       []doubaoContentItem `json:"content"`
-	Ratio         string              `json:"ratio,omitempty"`
-	Resolution    string              `json:"resolution,omitempty"`
-	Duration      int                 `json:"duration,omitempty"`
-	GenerateAudio bool                `json:"generate_audio,omitempty"`
+	Model           string              `json:"model"`
+	Content         []doubaoContentItem `json:"content"`
+	Ratio           string              `json:"ratio,omitempty"`
+	Resolution      string              `json:"resolution,omitempty"`
+	Duration        int                 `json:"duration,omitempty"`
+	GenerateAudio   bool                `json:"generate_audio,omitempty"`
+	ReturnLastFrame bool                `json:"return_last_frame,omitempty"`
 }
 
 type doubaoTaskResp struct {
@@ -200,7 +201,7 @@ func (g *DoubaoGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*
 	if err != nil {
 		return nil, fmt.Errorf("doubao submit: %w", err)
 	}
-	clip, err := g.poll(ctx, taskID)
+	clip, err := g.poll(ctx, taskID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("doubao poll %s: %w", taskID, err)
 	}
@@ -209,6 +210,7 @@ func (g *DoubaoGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*
 
 // submit —— 提交视频生成任务，返回任务 ID
 func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
+	textPrompt := g.buildPromptText(req)
 	// Build content array based on generate mode.
 	var content []doubaoContentItem
 
@@ -216,7 +218,7 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	case "startEnd2video":
 		// 首尾帧生视频：text prompt + first_frame + last_frame
 		content = []doubaoContentItem{
-			{Type: "text", Text: req.Prompt},
+			{Type: "text", Text: textPrompt},
 		}
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
@@ -236,7 +238,7 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	case "reference2video":
 		// 融合生视频：text prompt + reference_image items
 		content = []doubaoContentItem{
-			{Type: "text", Text: req.Prompt},
+			{Type: "text", Text: textPrompt},
 		}
 		for _, imgURL := range req.CharacterImageURLs {
 			if imgURL != "" {
@@ -267,13 +269,14 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		}
 		content = append(content, doubaoContentItem{
 			Type: "text",
-			Text: req.Prompt,
+			Text: textPrompt,
 		})
 	}
 
 	body := doubaoSubmitReq{
-		Model:   g.Model,
-		Content: content,
+		Model:           g.Model,
+		Content:         content,
+		ReturnLastFrame: true,
 	}
 	if g.supportsRatio && req.AspectRatio != "" {
 		body.Ratio = req.AspectRatio
@@ -331,8 +334,23 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	return result.ID, nil
 }
 
+func (g *DoubaoGenerator) buildPromptText(req VideoGenerateReq) string {
+	prompt := strings.TrimSpace(req.Prompt)
+	voiceText := strings.TrimSpace(req.VoiceText)
+	if !g.supportsAudio || !req.GenerateAudio || voiceText == "" {
+		return prompt
+	}
+	if prompt == "" {
+		return voiceText
+	}
+	if strings.Contains(prompt, voiceText) {
+		return prompt
+	}
+	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+}
+
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）
-func (g *DoubaoGenerator) poll(ctx context.Context, taskID string) (*VideoClip, error) {
+func (g *DoubaoGenerator) poll(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -344,7 +362,7 @@ func (g *DoubaoGenerator) poll(ctx context.Context, taskID string) (*VideoClip, 
 		case <-timeout:
 			return nil, fmt.Errorf("doubao: task %s timed out after 15min", taskID)
 		case <-ticker.C:
-			clip, done, err := g.queryTask(ctx, taskID)
+			clip, done, err := g.queryTask(ctx, taskID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -356,7 +374,7 @@ func (g *DoubaoGenerator) poll(ctx context.Context, taskID string) (*VideoClip, 
 }
 
 // queryTask —— 查询单次任务状态
-func (g *DoubaoGenerator) queryTask(ctx context.Context, taskID string) (*VideoClip, bool, error) {
+func (g *DoubaoGenerator) queryTask(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, bool, error) {
 	endpoint := g.BaseURL + "/api/v3/contents/generations/tasks/" + taskID
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -387,7 +405,7 @@ func (g *DoubaoGenerator) queryTask(ctx context.Context, taskID string) (*VideoC
 		}
 		return &VideoClip{
 			ClipURL:     videoURL,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   resolvedModelUsed(g.Model, g.genName),
 		}, true, nil
 	case "failed":

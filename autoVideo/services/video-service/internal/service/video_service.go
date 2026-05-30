@@ -481,6 +481,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			return err
 		}
 		c.ClipURL = result.ClipURL
+		c.EndFrameImageURL = firstNonEmpty(result.EndFrameImageURL, c.EndFrameImageURL)
 		c.DurationSec = result.DurationSec
 		c.ModelUsed = result.ModelUsed
 		c.Status = model.StatusSucceeded
@@ -1424,6 +1425,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	}
 
 	clip.ClipURL = result.ClipURL
+	clip.EndFrameImageURL = firstNonEmpty(result.EndFrameImageURL, clip.EndFrameImageURL)
 	clip.DurationSec = result.DurationSec
 	clip.ModelUsed = result.ModelUsed
 	clip.Status = model.StatusSucceeded

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -108,12 +109,13 @@ func (g *SuannengGenerator) ParamOptions() []ModelParamOption {
 
 // suannengSubmitReq mirrors the doubao ARK contents/generations/tasks request body.
 type suannengSubmitReq struct {
-	Model         string              `json:"model"`
-	Content       []doubaoContentItem `json:"content"`
-	GenerateAudio bool                `json:"generate_audio"`
-	Ratio         string              `json:"ratio,omitempty"`
-	Resolution    string              `json:"resolution,omitempty"`
-	Duration      int                 `json:"duration,omitempty"`
+	Model           string              `json:"model"`
+	Content         []doubaoContentItem `json:"content"`
+	GenerateAudio   bool                `json:"generate_audio"`
+	Ratio           string              `json:"ratio,omitempty"`
+	Resolution      string              `json:"resolution,omitempty"`
+	Duration        int                 `json:"duration,omitempty"`
+	ReturnLastFrame bool                `json:"return_last_frame,omitempty"`
 }
 
 // suannengSubmitResp is the task creation response — field "id" (not "task_id").
@@ -151,7 +153,7 @@ func (g *SuannengGenerator) Generate(ctx context.Context, req VideoGenerateReq) 
 	if err != nil {
 		return nil, fmt.Errorf("suanneng submit: %w", err)
 	}
-	clip, err := g.poll(ctx, taskID)
+	clip, err := g.poll(ctx, taskID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("suanneng poll %s: %w", taskID, err)
 	}
@@ -160,6 +162,7 @@ func (g *SuannengGenerator) Generate(ctx context.Context, req VideoGenerateReq) 
 
 // submit —— 使用 doubao ARK content[] 格式提交视频生成任务，返回任务 ID
 func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
+	textPrompt := g.buildPromptText(req)
 	dur := int(req.DurationSec)
 	if dur <= 0 {
 		dur = 5
@@ -178,7 +181,7 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 	switch req.GenerateMode {
 	case "startEnd2video":
 		content = []doubaoContentItem{
-			{Type: "text", Text: req.Prompt},
+			{Type: "text", Text: textPrompt},
 		}
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
@@ -195,7 +198,7 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 
 	case "reference2video":
 		content = []doubaoContentItem{
-			{Type: "text", Text: req.Prompt},
+			{Type: "text", Text: textPrompt},
 		}
 		for _, imgURL := range req.CharacterImageURLs {
 			if imgURL != "" {
@@ -214,7 +217,7 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 
 	default:
 		content = []doubaoContentItem{
-			{Type: "text", Text: req.Prompt},
+			{Type: "text", Text: textPrompt},
 		}
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
@@ -225,12 +228,13 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 	}
 
 	body := suannengSubmitReq{
-		Model:         g.Model,
-		Content:       content,
-		GenerateAudio: req.GenerateAudio,
-		Ratio:         ratio,
-		Resolution:    resolution,
-		Duration:      dur,
+		Model:           g.Model,
+		Content:         content,
+		GenerateAudio:   req.GenerateAudio,
+		Ratio:           ratio,
+		Resolution:      resolution,
+		Duration:        dur,
+		ReturnLastFrame: true,
 	}
 	b, _ := json.Marshal(body)
 
@@ -268,8 +272,23 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 	return result.ID, nil
 }
 
+func (g *SuannengGenerator) buildPromptText(req VideoGenerateReq) string {
+	prompt := strings.TrimSpace(req.Prompt)
+	voiceText := strings.TrimSpace(req.VoiceText)
+	if !req.GenerateAudio || voiceText == "" {
+		return prompt
+	}
+	if prompt == "" {
+		return voiceText
+	}
+	if strings.Contains(prompt, voiceText) {
+		return prompt
+	}
+	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+}
+
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）
-func (g *SuannengGenerator) poll(ctx context.Context, taskID string) (*VideoClip, error) {
+func (g *SuannengGenerator) poll(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -281,7 +300,7 @@ func (g *SuannengGenerator) poll(ctx context.Context, taskID string) (*VideoClip
 		case <-timeout:
 			return nil, fmt.Errorf("suanneng: task %s timed out after 15min", taskID)
 		case <-ticker.C:
-			clip, done, err := g.queryTask(ctx, taskID)
+			clip, done, err := g.queryTask(ctx, taskID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -293,7 +312,7 @@ func (g *SuannengGenerator) poll(ctx context.Context, taskID string) (*VideoClip
 }
 
 // queryTask —— 查询单次任务状态（doubao ARK 兼容响应格式）
-func (g *SuannengGenerator) queryTask(ctx context.Context, taskID string) (*VideoClip, bool, error) {
+func (g *SuannengGenerator) queryTask(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, bool, error) {
 	url := g.BaseURL + "/" + taskID
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -324,7 +343,7 @@ func (g *SuannengGenerator) queryTask(ctx context.Context, taskID string) (*Vide
 		}
 		return &VideoClip{
 			ClipURL:     videoURL,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   resolvedModelUsed(g.Model, g.Name()),
 		}, true, nil
 	case "failed":
