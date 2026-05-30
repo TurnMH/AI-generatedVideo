@@ -553,6 +553,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 						chainEnabled = serialChainByClip[c.ClipOrder]
 						promptEnabled = serialPromptByClip[c.ClipOrder]
 					}
+					producesChainAnchor := task.SerialScene && strings.TrimSpace(c.SceneGroupKey) != ""
 					// 非首帧串行 clip 必须继续继承上一段尾帧；
 					// 文案弱时只是不额外强化 prompt，不应把链路本身切断。
 					if chainEnabled && prevEndFrameURL != "" {
@@ -634,10 +635,11 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 						zap.Int("scene_seq", c.SceneSeq),
 						zap.Int("group_size", len(g.clips)),
 						zap.String("clip_url", c.ClipURL))
-					// 只有真正属于串行链的非首帧片段，才要求为后续片段维护尾帧锚点。
-					// prompt 是否强化由 promptEnabled 决定，不影响这里。
+					// prompt 是否强化由 promptEnabled 决定，不影响串行锚点维护。
 					_ = promptEnabled
-					if !chainEnabled {
+					// 首段 clip 不消费上一段尾帧，但只要属于串行组，就必须为下一段产出锚点；
+					// 否则第二段永远拿不到首段的 continuity anchor。
+					if !producesChainAnchor {
 						prevEndFrameURL = ""
 						continue
 					}
