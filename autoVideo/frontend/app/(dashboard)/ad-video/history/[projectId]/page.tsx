@@ -2079,7 +2079,9 @@ ${paceBlock}`
                                         <div className="font-medium text-cyan-100">本分镜实际首帧来源</div>
                                         {clip.source_image_url ? (
                                           <>
-                                            <img src={clip.source_image_url} alt={`第${index + 1}段分镜首帧来源`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a href={clip.source_image_url} target="_blank" rel="noreferrer" className="block">
+                                              <img src={clip.source_image_url} alt={`第${index + 1}段分镜首帧来源`} className="h-36 w-full rounded-md object-cover bg-black/30 transition hover:opacity-90" />
+                                            </a>
                                             <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
                                           </>
                                         ) : (
@@ -2090,7 +2092,9 @@ ${paceBlock}`
                                         <div className="font-medium text-fuchsia-100">上一分镜传给这一段的有效锚点</div>
                                         {inheritedAnchor ? (
                                           <>
-                                            <img src={inheritedAnchor} alt={`第${index + 1}段分镜继承锚点`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a href={inheritedAnchor} target="_blank" rel="noreferrer" className="block">
+                                              <img src={inheritedAnchor} alt={`第${index + 1}段分镜继承锚点`} className="h-36 w-full rounded-md object-cover bg-black/30 transition hover:opacity-90" />
+                                            </a>
                                             <a className="break-all text-fuchsia-300 underline" href={inheritedAnchor} target="_blank" rel="noreferrer">{inheritedAnchor}</a>
                                           </>
                                         ) : (
