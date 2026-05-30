@@ -497,11 +497,25 @@ export default function AdVideoHistoryDetailPage() {
     if (!latestTaskDetail?.task) return []
     const clips = Array.isArray(latestTaskDetail.task.clips) ? latestTaskDetail.task.clips : []
     const debugMap = new Map((latestTaskDetail.clips_debug || []).map((item) => [Number(item.clip_order), item]))
+    const renderConfig = (latestTaskDetail.task.render_config || {}) as {
+      scene_descriptions?: string[]
+      dialogues?: string[]
+      camera_movements?: string[]
+      moods?: string[]
+      scene_characters?: string[][]
+    }
+    const sceneDescriptions = Array.isArray(renderConfig.scene_descriptions) ? renderConfig.scene_descriptions : []
+    const dialogues = Array.isArray(renderConfig.dialogues) ? renderConfig.dialogues : []
+    const cameraMovements = Array.isArray(renderConfig.camera_movements) ? renderConfig.camera_movements : []
+    const moods = Array.isArray(renderConfig.moods) ? renderConfig.moods : []
+    const sceneCharacters = Array.isArray(renderConfig.scene_characters) ? renderConfig.scene_characters : []
+
     return clips
       .slice()
       .sort((a, b) => Number(a.clip_order) - Number(b.clip_order))
       .map((clip) => {
-        const debug = debugMap.get(Number(clip.clip_order))
+        const clipOrder = Number(clip.clip_order)
+        const debug = debugMap.get(clipOrder)
         return {
           ...clip,
           source_image_url: clip.source_image_url || debug?.source_image_url || '',
@@ -512,6 +526,11 @@ export default function AdVideoHistoryDetailPage() {
           effective_model: clip.effective_model || debug?.effective_model || '',
           scene_group_key: clip.scene_group_key || debug?.scene_group_key || '',
           scene_seq: clip.scene_seq ?? debug?.scene_seq,
+          prompt_scene_description: String(sceneDescriptions[clipOrder] || '').trim(),
+          prompt_dialogue: String(dialogues[clipOrder] || '').trim(),
+          prompt_camera_movement: String(cameraMovements[clipOrder] || '').trim(),
+          prompt_mood: String(moods[clipOrder] || '').trim(),
+          prompt_scene_characters: Array.isArray(sceneCharacters[clipOrder]) ? sceneCharacters[clipOrder] : [],
         }
       })
   }, [latestTaskDetail])
@@ -2059,7 +2078,10 @@ ${paceBlock}`
                                       <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
                                         <div className="font-medium text-cyan-100">本分镜实际首帧来源</div>
                                         {clip.source_image_url ? (
-                                          <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
+                                          <>
+                                            <img src={clip.source_image_url} alt={`第${index + 1}段分镜首帧来源`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
+                                          </>
                                         ) : (
                                           <div className="text-slate-400">空</div>
                                         )}
@@ -2067,7 +2089,10 @@ ${paceBlock}`
                                       <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/10 p-3 space-y-2">
                                         <div className="font-medium text-fuchsia-100">上一分镜传给这一段的有效锚点</div>
                                         {inheritedAnchor ? (
-                                          <a className="break-all text-fuchsia-300 underline" href={inheritedAnchor} target="_blank" rel="noreferrer">{inheritedAnchor}</a>
+                                          <>
+                                            <img src={inheritedAnchor} alt={`第${index + 1}段分镜继承锚点`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a className="break-all text-fuchsia-300 underline" href={inheritedAnchor} target="_blank" rel="noreferrer">{inheritedAnchor}</a>
+                                          </>
                                         ) : (
                                           <div className="text-slate-400">空</div>
                                         )}
@@ -2075,7 +2100,10 @@ ${paceBlock}`
                                       <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
                                         <div className="font-medium text-amber-100">本分镜产出的有效尾帧</div>
                                         {clip.end_frame_image_url ? (
-                                          <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
+                                          <>
+                                            <img src={clip.end_frame_image_url} alt={`第${index + 1}段分镜有效尾帧`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
+                                          </>
                                         ) : (
                                           <div className="text-slate-400">空</div>
                                         )}
@@ -2087,6 +2115,25 @@ ${paceBlock}`
                                         ) : (
                                           <div className="text-slate-400">空</div>
                                         )}
+                                      </div>
+                                    </div>
+
+                                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs text-slate-200">
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">生成这段视频用的场景描述</div>
+                                        <div className="whitespace-pre-wrap break-words text-slate-300">{clip.prompt_scene_description || '空'}</div>
+                                      </div>
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">生成这段视频用的台词 / 口播</div>
+                                        <div className="whitespace-pre-wrap break-words text-slate-300">{clip.prompt_dialogue || '空'}</div>
+                                      </div>
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">补充参数</div>
+                                        <div className="space-y-1 text-slate-300">
+                                          <div>镜头运动：{clip.prompt_camera_movement || '-'}</div>
+                                          <div>情绪：{clip.prompt_mood || '-'}</div>
+                                          <div>角色：{Array.isArray(clip.prompt_scene_characters) && clip.prompt_scene_characters.length ? clip.prompt_scene_characters.join(', ') : '-'}</div>
+                                        </div>
                                       </div>
                                     </div>
 
