@@ -1009,14 +1009,22 @@ ${paceBlock}`
       }) as { data?: { cdn_url?: string } }
       const uploadedUrl = String(uploadRes?.data?.cdn_url || '').trim()
       if (!uploadedUrl) throw new Error('首张分镜图上传成功，但未获取到可用链接')
-      await storyboardAPI.update(projectId, firstStoryboard.id, { image_url: uploadedUrl })
+      const updateRes = await storyboardAPI.update(projectId, firstStoryboard.id, { image_url: uploadedUrl }) as { data?: Storyboard }
+      let persistedUrl = String(updateRes?.data?.image_url || '').trim()
+      if (!persistedUrl) {
+        const verifyRes = await storyboardAPI.get(projectId, firstStoryboard.id) as { data?: Storyboard }
+        persistedUrl = String(verifyRes?.data?.image_url || '').trim()
+      }
+      if (!persistedUrl) {
+        throw new Error('首张分镜图已上传，但写回分镜记录失败，请重试')
+      }
       await mutateStoryboards((current) => {
         const items = Array.isArray(current) ? current : []
         return items.map((storyboard) => (
           storyboard.id === firstStoryboard.id
             ? {
                 ...storyboard,
-                image_url: uploadedUrl,
+                image_url: persistedUrl,
                 status: 'completed',
                 error_msg: '',
               }
