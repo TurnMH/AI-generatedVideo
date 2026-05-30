@@ -599,10 +599,6 @@ ${paceBlock}`
     [displayStoryboards],
   )
   const firstStoryboard = displayStoryboards[0] || null
-  const firstStoryboardAssets = useMemo(() => {
-    if (!firstStoryboard) return [] as Asset[]
-    return storyboardAssetDetailMap.get(firstStoryboard.id) || []
-  }, [firstStoryboard, storyboardAssetDetailMap])
   const firstStoryboardImageReady = Boolean(firstStoryboard && String(firstStoryboard.image_url || '').trim())
 
   const assetToStoryboardMap = useMemo(() => {
@@ -627,6 +623,11 @@ ${paceBlock}`
     }
     return map
   }, [displayStoryboards, scopeAssets, assets])
+
+  const firstStoryboardAssets = useMemo(() => {
+    if (!firstStoryboard) return [] as Asset[]
+    return storyboardAssetDetailMap.get(firstStoryboard.id) || []
+  }, [firstStoryboard, storyboardAssetDetailMap])
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
