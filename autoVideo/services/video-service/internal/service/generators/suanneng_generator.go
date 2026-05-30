@@ -342,9 +342,10 @@ func (g *SuannengGenerator) queryTask(ctx context.Context, taskID string, reques
 			return nil, false, fmt.Errorf("suanneng: succeeded but no video_url in content: %s", string(result.Content))
 		}
 		return &VideoClip{
-			ClipURL:     videoURL,
-			DurationSec: resolvedDurationSec(0, requestedDuration),
-			ModelUsed:   resolvedModelUsed(g.Model, g.Name()),
+			ClipURL:          videoURL,
+			EndFrameImageURL: extractDoubaoLastFrameURL(result.Content),
+			DurationSec:      resolvedDurationSec(0, requestedDuration),
+			ModelUsed:        resolvedModelUsed(g.Model, g.Name()),
 		}, true, nil
 	case "failed":
 		return nil, false, fmt.Errorf("suanneng: task %s failed", taskID)

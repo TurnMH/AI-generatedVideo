@@ -164,24 +164,71 @@ func extractDoubaoVideoURL(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	// Try object form: {"video_url": "https://..."}
+	// Try object form: {"video_url": "https://..."} or {"video_url":{"url":"https://..."}}
 	var obj struct {
-		VideoURL string `json:"video_url"`
+		VideoURL any `json:"video_url"`
 	}
-	if err := json.Unmarshal(raw, &obj); err == nil && obj.VideoURL != "" {
-		return obj.VideoURL
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if url := extractURLLikeValue(obj.VideoURL); url != "" {
+			return url
+		}
 	}
 	// Try array form: [{"type":"video_url","video_url":{"url":"..."}}]
-	var arr []struct {
-		Type     string `json:"type"`
-		VideoURL *struct {
-			URL string `json:"url"`
-		} `json:"video_url,omitempty"`
-	}
+	var arr []map[string]any
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		for _, item := range arr {
-			if item.Type == "video_url" && item.VideoURL != nil {
-				return item.VideoURL.URL
+			t, _ := item["type"].(string)
+			if t != "video_url" {
+				continue
+			}
+			if url := extractURLLikeValue(item["video_url"]); url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
+func extractDoubaoLastFrameURL(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try object form first. Be liberal because docs confirm request-side return_last_frame,
+	// but public retrieve examples currently only show video_url.
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		for _, key := range []string{"last_frame_image_url", "last_frame_url", "end_frame_image_url", "last_frame", "image_url"} {
+			if url := extractURLLikeValue(obj[key]); url != "" {
+				return url
+			}
+		}
+	}
+	// Try array form: items may use type=image_url with role=last_frame, or dedicated last_frame* types.
+	var arr []map[string]any
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		for _, item := range arr {
+			t, _ := item["type"].(string)
+			role, _ := item["role"].(string)
+			if role == "last_frame" || t == "last_frame" || t == "last_frame_image_url" || t == "end_frame_image_url" {
+				for _, key := range []string{"image_url", "last_frame", "last_frame_image_url", "end_frame_image_url", "video_url"} {
+					if url := extractURLLikeValue(item[key]); url != "" {
+						return url
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func extractURLLikeValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return strings.TrimSpace(val)
+	case map[string]any:
+		for _, key := range []string{"url", "uri", "href"} {
+			if s, ok := val[key].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
 			}
 		}
 	}
@@ -404,9 +451,10 @@ func (g *DoubaoGenerator) queryTask(ctx context.Context, taskID string, requeste
 			return nil, false, fmt.Errorf("doubao: succeeded but no video_url in content: %s", string(result.Content))
 		}
 		return &VideoClip{
-			ClipURL:     videoURL,
-			DurationSec: resolvedDurationSec(0, requestedDuration),
-			ModelUsed:   resolvedModelUsed(g.Model, g.genName),
+			ClipURL:          videoURL,
+			EndFrameImageURL: extractDoubaoLastFrameURL(result.Content),
+			DurationSec:      resolvedDurationSec(0, requestedDuration),
+			ModelUsed:        resolvedModelUsed(g.Model, g.genName),
 		}, true, nil
 	case "failed":
 		return nil, false, fmt.Errorf("doubao: task %s failed", taskID)
