@@ -611,6 +611,15 @@ ${paceBlock}`
     return storyboardAssetDetailMap.get(firstStoryboard.id) || []
   }, [firstStoryboard, storyboardAssetDetailMap])
 
+  const assetImageById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const asset of assets) {
+      const imageUrl = String(asset.image_url || '').trim()
+      if (imageUrl) map.set(asset.id, imageUrl)
+    }
+    return map
+  }, [assets])
+
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
     return new Set((assetToStoryboardMap.get(focusedAssetId) || []).map((storyboard) => storyboard.id))
