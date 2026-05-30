@@ -26,6 +26,35 @@ type VideoTask = {
   render_config?: Record<string, unknown>
 }
 
+type VideoTaskClipDebug = {
+  id: number
+  clip_order: number
+  scene_seq?: number
+  status?: string
+  error_msg?: string
+  source_image_url?: string
+  end_frame_image_url?: string
+  clip_url?: string
+  scene_group_key?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+}
+
+type VideoTaskDetailData = {
+  task: VideoTask
+  clips_debug?: VideoTaskClipDebug[]
+  task_debug_summary?: {
+    requested_model?: string
+    routed_generator?: string
+    runtime_provider?: string
+    effective_model?: string
+    route_reason?: string
+    clip_count?: number
+  }
+}
+
 type VideoModelParamOption = {
   value: string
   label: string
@@ -344,9 +373,36 @@ export default function AdVideoHistoryDetailPage() {
     const payload = res as { data?: { items?: VideoTask[] } }
     return payload?.data?.items || []
   }, {
-    refreshInterval: (latest) => Array.isArray(latest) && latest.some((task) => task.status === 'pending' || task.status === 'processing') ? 5000 : 0,
+    refreshInterval: (latest) => Array.isArray(latest) && latest.some((task) => task.status === 'pending' || task.status === 'processing' || task.status === 'running') ? 5000 : 0,
     revalidateOnFocus: true,
   })
+
+  const latestTaskId = useMemo(() => {
+    const items = Array.isArray(taskData) ? taskData : []
+    return items.slice().sort((a, b) => Number(b.id) - Number(a.id))[0]?.id || 0
+  }, [taskData])
+
+  const { data: latestTaskDetailData, mutate: mutateLatestTaskDetail } = useSWR(
+    projectId && latestTaskId ? ['ad-video-history-task-detail', latestTaskId] : null,
+    async () => {
+      const res = await videoAPI.getTask<VideoTask>(latestTaskId)
+      const payload = res as { data?: { task?: VideoTask; clips_debug?: VideoTaskClipDebug[]; task_debug_summary?: VideoTaskDetailData['task_debug_summary'] } }
+      const data = payload?.data || {}
+      if (!data?.task) return null
+      return {
+        task: data.task,
+        clips_debug: Array.isArray(data.clips_debug) ? data.clips_debug : [],
+        task_debug_summary: data.task_debug_summary,
+      } as VideoTaskDetailData
+    },
+    {
+      refreshInterval: (latest) => {
+        const status = String(latest?.task?.status || '').toLowerCase()
+        return status === 'pending' || status === 'processing' || status === 'running' ? 5000 : 0
+      },
+      revalidateOnFocus: true,
+    },
+  )
 
   const { data: assetsData, mutate: mutateAssets } = useSWR(projectId ? ['ad-video-history-assets', projectId] : null, async () => {
     const res = await assetAPI.list(projectId)
@@ -410,6 +466,11 @@ export default function AdVideoHistoryDetailPage() {
   const availableModels = (videoModelStatus || []).filter((item) => item.available)
   const availableImageModels = (imageModelStatus || []).filter((item) => item.available)
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
+  const latestTaskDetail = latestTaskDetailData || null
+  const latestTaskClips = useMemo(
+    () => (latestTaskDetail?.clips_debug || []).slice().sort((a, b) => Number(a.clip_order) - Number(b.clip_order)),
+    [latestTaskDetail],
+  )
   const autoSplit = project?.progress?.auto_split || null
   const realOptimizedScript = useMemo(
     () => String(adCopyState?.optimized_script || autoSplit?.optimized_script || '').trim(),
@@ -815,7 +876,7 @@ ${paceBlock}`
   }, [project?.storyboard_config?.generate_audio])
 
   const refreshAll = async () => {
-    await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateAssets(), mutateAdCopyState()])
+    await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateLatestTaskDetail(), mutateAssets(), mutateAdCopyState()])
   }
 
   const acquireActionLock = (action: string) => {
@@ -1886,6 +1947,87 @@ ${paceBlock}`
 
                     <div className="text-[11px] text-emerald-100/75">
                       真正提交给视频服务的是当前范围内从首张可用 `image_url` 开始的完整分镜序列；只有第一段带首图，后续片段依赖上一段视频尾帧串行衔接，同时会带上这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-white">Step3 串行链路记录（最新任务）</div>
+                          <div className="mt-1 text-[11px] text-emerald-100/75">这里直接展示最新任务每一段 clip 的首帧来源、尾帧落库和结果视频，方便你在步骤 3 里判断串行连续性有没有真的接上。</div>
+                        </div>
+                        <Button variant="outline" onClick={() => { void mutateLatestTaskDetail() }}>
+                          刷新这份串行记录
+                        </Button>
+                      </div>
+
+                      {!latestTask ? (
+                        <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">当前还没有视频任务。</div>
+                      ) : !latestTaskDetail ? (
+                        <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">正在读取 task #{latestTask.id} 的 clip 明细…</div>
+                      ) : (
+                        <>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs text-emerald-100/85">
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">最新任务：#{latestTaskDetail.task.id}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">状态：{latestTaskDetail.task.status || '-'}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">模型：{latestTaskDetail.task.model_name || '-'}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">clip 数：{latestTaskClips.length}</div>
+                          </div>
+
+                          {latestTaskDetail.task.result_url && (
+                            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-50 break-all">
+                              成片：<a className="text-cyan-300 underline" href={latestTaskDetail.task.result_url} target="_blank" rel="noreferrer">{latestTaskDetail.task.result_url}</a>
+                            </div>
+                          )}
+
+                          {latestTaskClips.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">这个任务的 clip 明细还没回流出来。</div>
+                          ) : (
+                            <div className="max-h-[720px] space-y-3 overflow-auto pr-1">
+                              {latestTaskClips.map((clip) => (
+                                <div key={`step3-clip-${clip.id}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-3 space-y-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="text-sm font-medium text-white">clip #{clip.id} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}</div>
+                                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '-'}</div>
+                                  </div>
+
+                                  <div className="grid gap-3 md:grid-cols-3 text-xs text-slate-200">
+                                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
+                                      <div className="font-medium text-cyan-100">source_image_url（本段首帧来源）</div>
+                                      {clip.source_image_url ? (
+                                        <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
+                                      ) : (
+                                        <div className="text-slate-400">空</div>
+                                      )}
+                                    </div>
+                                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                      <div className="font-medium text-amber-100">end_frame_image_url（本段尾帧记录）</div>
+                                      {clip.end_frame_image_url ? (
+                                        <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
+                                      ) : (
+                                        <div className="text-slate-400">空</div>
+                                      )}
+                                    </div>
+                                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2">
+                                      <div className="font-medium text-emerald-100">clip_url（本段结果）</div>
+                                      {clip.clip_url ? (
+                                        <a className="break-all text-emerald-300 underline" href={clip.clip_url} target="_blank" rel="noreferrer">{clip.clip_url}</a>
+                                      ) : (
+                                        <div className="text-slate-400">空</div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3">
+                                    <div>scene_group_key：{clip.scene_group_key || '-'}</div>
+                                    <div>effective_model：{clip.effective_model || '-'}</div>
+                                    <div>error：{clip.error_msg || '-'}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
