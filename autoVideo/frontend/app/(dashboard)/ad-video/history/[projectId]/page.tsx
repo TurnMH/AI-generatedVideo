@@ -1010,6 +1010,19 @@ ${paceBlock}`
       const uploadedUrl = String(uploadRes?.data?.cdn_url || '').trim()
       if (!uploadedUrl) throw new Error('首张分镜图上传成功，但未获取到可用链接')
       await storyboardAPI.update(projectId, firstStoryboard.id, { image_url: uploadedUrl })
+      await mutateStoryboards((current) => {
+        const items = Array.isArray(current) ? current : []
+        return items.map((storyboard) => (
+          storyboard.id === firstStoryboard.id
+            ? {
+                ...storyboard,
+                image_url: uploadedUrl,
+                status: 'completed',
+                error_msg: '',
+              }
+            : storyboard
+        ))
+      }, false)
       await refreshAll()
       toast({ title: `分镜 #${firstStoryboard.sequence_number} 首图上传完成`, variant: 'success' })
     } catch (error) {
