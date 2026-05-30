@@ -310,6 +310,7 @@ export default function AdVideoHistoryDetailPage() {
   const [selectedSpeechPace, setSelectedSpeechPace] = useState<SpeechPaceOption>('normal')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
   const [selectedStep3GenerateAudio, setSelectedStep3GenerateAudio] = useState(false)
+  const [selectedStoryboardImageModel, setSelectedStoryboardImageModel] = useState('')
   const [videoModelMismatch, setVideoModelMismatch] = useState('')
   const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
   const [focusedStoryboardId, setFocusedStoryboardId] = useState<number | null>(null)
@@ -376,6 +377,17 @@ export default function AdVideoHistoryDetailPage() {
     return []
   }, { revalidateOnFocus: false })
 
+  const { data: imageModelStatus } = useSWR(projectId ? ['ad-video-history-image-model-status'] : null, async () => {
+    const res = await assetAPI.modelStatus()
+    const payload = res as { data?: { models?: { key: string; available: boolean }[] } | { key: string; available: boolean }[]; models?: { key: string; available: boolean }[] }
+    if (Array.isArray(payload.models)) return payload.models
+    if (Array.isArray(payload.data)) return payload.data
+    if (payload.data && typeof payload.data === 'object' && Array.isArray((payload.data as { models?: { key: string; available: boolean }[] }).models)) {
+      return (payload.data as { models?: { key: string; available: boolean }[] }).models || []
+    }
+    return []
+  }, { revalidateOnFocus: false })
+
   const project = projectData || null
   const episodes = (episodesData || []).slice().sort((a, b) => a.episode_number - b.episode_number)
   const storyboards = (storyboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
@@ -396,6 +408,7 @@ export default function AdVideoHistoryDetailPage() {
   }, [project?.text_model_id, textModels])
   const assets = (assetsData || []).slice().sort((a, b) => Number(a.id) - Number(b.id))
   const availableModels = (videoModelStatus || []).filter((item) => item.available)
+  const availableImageModels = (imageModelStatus || []).filter((item) => item.available)
   const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
   const autoSplit = project?.progress?.auto_split || null
   const realOptimizedScript = useMemo(
@@ -952,7 +965,7 @@ ${paceBlock}`
     }
     await runScopedAction(
       `storyboard-image-first-${firstStoryboard.id}`,
-      () => storyboardAPI.generate(projectId, firstStoryboard.id),
+      () => storyboardAPI.generate(projectId, firstStoryboard.id, selectedStoryboardImageModel || undefined),
       `已按当前范围的第 1 条分镜继续生成首张分镜图`,
     )
   }
@@ -1612,17 +1625,45 @@ ${paceBlock}`
                               </div>
                             )}
 
-                            <div className="flex flex-wrap items-center gap-2">
-                              <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
-                                {uploadingAssetId === firstStoryboard.id ? '上传中…' : firstStoryboardImageReady ? '本地上传替换第 1 张分镜图' : '本地上传第 1 张分镜图'}
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  className="hidden"
-                                  disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy || !firstStoryboard}
-                                  onChange={(event) => { event.stopPropagation(); void handleFirstStoryboardUpload(event) }}
-                                />
-                              </label>
+                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                              <div className="space-y-2">
+                                <Label className="text-violet-100">首分镜图像模型</Label>
+                                <select
+                                  value={selectedStoryboardImageModel}
+                                  onChange={(e) => setSelectedStoryboardImageModel(e.target.value)}
+                                  disabled={pipelineBusy || !step2Enabled}
+                                  className="flex h-10 w-full rounded-xl border border-violet-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <option value="">使用系统默认图像模型</option>
+                                  {availableImageModels.map((item) => (
+                                    <option key={`storyboard-image-model-${item.key}`} value={item.key}>{item.key}</option>
+                                  ))}
+                                </select>
+                                <div className="text-[11px] text-violet-100/75">这里控制的是第 1 个分镜图片生成时实际传给后端的图像模型；你也可以不选，继续用系统默认。</div>
+                              </div>
+
+                              <div className="flex flex-wrap items-end gap-2 md:justify-end">
+                                <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                  {uploadingAssetId === firstStoryboard.id ? '上传中…' : firstStoryboardImageReady ? '本地上传替换第 1 张分镜图' : '本地上传第 1 张分镜图'}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy || !firstStoryboard}
+                                    onChange={(event) => { event.stopPropagation(); void handleFirstStoryboardUpload(event) }}
+                                  />
+                                </label>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
+                                  disabled={pipelineBusy || !step2Enabled || !firstStoryboard}
+                                  onClick={() => void triggerStoryboardImageGeneration()}
+                                >
+                                  {generationAction?.startsWith('storyboard-image-') ? '正在生成第 1 张分镜图…' : '用图像模型生成第 1 张分镜图'}
+                                </Button>
+                              </div>
                             </div>
                           </>
                         ) : null}
