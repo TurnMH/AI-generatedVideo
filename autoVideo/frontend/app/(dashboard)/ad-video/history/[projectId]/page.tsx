@@ -2049,8 +2049,8 @@ ${paceBlock}`
                               {latestStoryboardVideoRecords.map((clip, index) => {
                                 const previousClip = index > 0 ? latestStoryboardVideoRecords[index - 1] : null
                                 const inheritedAnchor = index === 0
-                                  ? clip.source_image_url || ''
-                                  : clip.source_image_url || previousClip?.end_frame_image_url || previousClip?.source_image_url || ''
+                                  ? ''
+                                  : previousClip?.end_frame_image_url || ''
                                 return (
                                   <div key={`step3-clip-${clip.id ?? `${clip.clip_order}-${clip.scene_seq ?? index}`}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
                                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2089,7 +2089,7 @@ ${paceBlock}`
                                         )}
                                       </div>
                                       <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/10 p-3 space-y-2">
-                                        <div className="font-medium text-fuchsia-100">上一分镜传给这一段的有效锚点</div>
+                                        <div className="font-medium text-fuchsia-100">上一分镜已产出的有效尾帧锚点</div>
                                         {inheritedAnchor ? (
                                           <>
                                             <a href={inheritedAnchor} target="_blank" rel="noreferrer" className="block">
