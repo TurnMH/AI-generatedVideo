@@ -9,7 +9,20 @@ import (
 
 	"github.com/autovideo/video-service/internal/model"
 	"github.com/autovideo/video-service/internal/repository"
+	"github.com/autovideo/video-service/internal/service/generators"
 )
+
+type testVideoGenerator struct{}
+
+func (testVideoGenerator) Name() string { return "test" }
+func (testVideoGenerator) Generate(context.Context, generators.VideoGenerateReq) (*generators.VideoClip, error) {
+	return nil, nil
+}
+func (testVideoGenerator) IsAvailable(context.Context) bool { return true }
+func (testVideoGenerator) SupportsNativeAudio() bool       { return false }
+func (testVideoGenerator) ParamOptions() []generators.ModelParamOption {
+	return nil
+}
 
 func TestPerClipCharacterAssetReferenceImages(t *testing.T) {
 	sceneAssetIDs := [][]int64{{11, 12, 13}}
@@ -42,6 +55,19 @@ func TestMergeReferenceURLsKeepsCharacterAssetRefsFirst(t *testing.T) {
 	}
 	if got[1] != "https://example.com/name-match.png" {
 		t.Fatalf("got[1]=%q", got[1])
+	}
+}
+
+func TestNormalizeVideoGenerateReqDoesNotMixSceneAssetRefsIntoCharacterRefs(t *testing.T) {
+	req := generators.VideoGenerateReq{
+		CharacterImageURLs: []string{"https://example.com/identity-anchor.png"},
+	}
+	got := normalizeVideoGenerateReq(testVideoGenerator{}, "vidu", req, []string{"https://example.com/scene-ref.png"})
+	if len(got.CharacterImageURLs) != 1 {
+		t.Fatalf("len(got.CharacterImageURLs)=%d, want 1", len(got.CharacterImageURLs))
+	}
+	if got.CharacterImageURLs[0] != "https://example.com/identity-anchor.png" {
+		t.Fatalf("got character ref %q, want identity anchor only", got.CharacterImageURLs[0])
 	}
 }
 

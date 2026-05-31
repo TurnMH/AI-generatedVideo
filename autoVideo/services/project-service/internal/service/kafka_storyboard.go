@@ -564,7 +564,7 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 		if len(prevCtx) > 400 {
 			prevCtx = prevCtx[:400] + "…"
 		}
-		parts = append(parts, "VISUAL CONTINUITY — previous scene (maintain identical character identity, hairstyle, makeup, wardrobe colors and garment layers, accessories, skin tone, and overall color grading; only pose, expression, and camera framing may change): "+prevCtx)
+		parts = append(parts, "VISUAL CONTINUITY — previous scene (use the previous frame only for scene layout, blocking, camera framing, lighting rhythm, and overall color continuity. Do NOT change character identity from this section. Character face, age impression, hairstyle, skin tone, accessories, and wardrobe must continue to follow the canonical character descriptions and reference images first; only pose, expression, gesture, blocking, and framing may evolve): "+prevCtx)
 	}
 	hasCharacters := len(req.Characters) > 0
 	if hasCharacters {
@@ -594,7 +594,7 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 			}
 		}
 		if len(descParts) > 0 {
-			parts = append(parts, "CHARACTER LOCK — every listed subject must match these canonical descriptions exactly across all storyboard frames; DO NOT alter face shape, skin tone, hairstyle, hair color, makeup, garment layers, fabric colors, accessories, or body build between frames unless the scene description explicitly changes outfit: "+strings.Join(descParts, " | ")+".")
+			parts = append(parts, "CHARACTER LOCK — every listed subject must match these canonical descriptions exactly across all storyboard frames. This character lock has higher priority than visual continuity notes, scene carry-over, or generic style cues. DO NOT alter face shape, facial proportions, eye/nose/mouth/jaw structure, age impression, skin tone, hairstyle, hair color, makeup, garment layers, fabric colors, accessories, or body build between frames unless the scene description explicitly changes outfit: "+strings.Join(descParts, " | ")+".")
 		}
 	}
 	if trimmedLocation := strings.TrimSpace(req.Location); trimmedLocation != "" {

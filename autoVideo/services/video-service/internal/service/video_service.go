@@ -426,7 +426,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		// 串行模式非首帧：文案基础可用时再额外注入强连续性提示，
 		// 但是否继承上一段尾帧由独立的串行链条件决定，不能被这里卡断。
 		if shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "" {
-			prompt = "Seamless continuation from previous scene clip. Maintain visual continuity with identical character appearance, lighting, and environment. " + prompt
+			prompt = "Seamless continuation from previous scene clip. Preserve motion flow, camera trajectory, lighting continuity, environment continuity, and action handoff from the previous clip, but do NOT let continuity cues override same-character identity anchors. The person must remain the exact same character defined by the identity reference images and canonical appearance lock. " + prompt
 		}
 		tailURL := tailImageURL(imageURLs, c.ClipOrder)
 		if overrideTailURL != "" {
@@ -1363,7 +1363,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 		// 非首帧连续性提示（与正常生成路径保持一致）：仅在文案基础可用时追加。
 		if shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "" {
-			retryPrompt = "Seamless continuation from previous scene clip. Maintain visual continuity with identical character appearance, lighting, and environment. " + retryPrompt
+			retryPrompt = "Seamless continuation from previous scene clip. Preserve motion flow, camera trajectory, lighting continuity, environment continuity, and action handoff from the previous clip, but do NOT let continuity cues override same-character identity anchors. The person must remain the exact same character defined by the identity reference images and canonical appearance lock. " + retryPrompt
 		}
 	}
 
@@ -3537,7 +3537,7 @@ func generatorSupportsStartEnd(modelName string) bool {
 func normalizeVideoGenerateReq(gen generators.VideoGenerator, modelName string, req generators.VideoGenerateReq, assetRefs []string) generators.VideoGenerateReq {
 	supportsRefs := generatorSupportsReferenceImages(modelName)
 	supportsStartEnd := generatorSupportsStartEnd(modelName)
-	req.CharacterImageURLs = mergeReferenceURLs(req.CharacterImageURLs, assetRefs)
+	_ = assetRefs // scene/prop refs stay in prompt hints; do not mix them into character identity references.
 	if !supportsRefs {
 		req.CharacterImageURLs = nil
 	}
@@ -3895,6 +3895,9 @@ func describeVideoNegativePrompt(stylePreset string) string {
 		"identity drift", "warped anatomy", "bad hands",
 		"extra fingers", "extra limbs", "duplicate subject",
 		"morphing face", "character transformation",
+		"lookalike stranger", "different person", "face swap",
+		"changed facial structure", "changed eye shape", "changed nose shape", "changed mouth shape", "changed jawline",
+		"age shift", "hairstyle change", "hair color change", "accessory change",
 		// Cross-clip coherence killers
 		"style change between clips", "inconsistent color palette",
 		"abrupt lighting change", "scene teleportation",
@@ -3936,7 +3939,7 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 	case "anime-3d":
 		return fmt.Sprintf("【全局风格锁定】%s，全片材质与渲染风格保持一致。%s", styleCN, charDescriptions)
 	case "live-action-film", "live-action-short":
-		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与演员外貌保持高度一致；同一人物在所有镜头中必须保持同一张脸、相同发型、相同眼镜、相同服装剪裁与配色、相近体型，不允许逐镜头发生五官漂移、年龄变化、发型变化或服装变形。%s", styleCN, charDescriptions)
+		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与演员外貌保持高度一致；同一人物在所有镜头中必须保持同一张脸、相同面部骨相与五官比例、相同年龄感、相同发型、相同眼镜、相同服装剪裁与配色、相近体型，不允许逐镜头发生五官漂移、年龄变化、发型变化、配饰变化或服装变形。人物身份锚点的优先级高于连续性镜头衔接，高于上一镜头尾帧的局部细节，高于场景/道具参考。%s", styleCN, charDescriptions)
 	default:
 		if charDescriptions != "" {
 			return fmt.Sprintf("全片风格统一，保持一致的视觉基调。%s", charDescriptions)
@@ -3948,7 +3951,7 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 // buildGlobalStyleAnchorEN is the English variant for Sora/Veo/generic models.
 func buildGlobalStyleAnchorEN(stylePreset, charDescriptions string) string {
 	style := describeVideoStyle(stylePreset)
-	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips; the same character must keep the same face identity, hairstyle, glasses, outfit silhouette/colors, and body shape across every shot, with no identity drift or appearance mutation", style)
+	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips; the same character must keep the same face identity, the same facial structure and proportions, the same age impression, hairstyle, glasses, outfit silhouette/colors, and body shape across every shot, with no identity drift or appearance mutation; identity reference images outrank continuity cues, previous-tail continuity, and non-character asset references", style)
 	if charDescriptions != "" {
 		base += "; consistent character appearance: " + charDescriptions
 	}
