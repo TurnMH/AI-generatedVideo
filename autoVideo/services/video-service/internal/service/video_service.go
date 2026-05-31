@@ -1821,59 +1821,60 @@ func newModelStatusItem(key string, gen generators.VideoGenerator, ctx context.C
 }
 
 func videoModelDisplayLabel(key, providerModel string) string {
+	pm := strings.ToLower(strings.TrimSpace(providerModel))
 	switch key {
 	case "wan":
-		if strings.Contains(strings.ToLower(strings.TrimSpace(providerModel)), "t2v") {
-			return "Wan 文生视频"
+		if strings.Contains(pm, "t2v") {
+			return "通义-Wan-文生视频"
 		}
-		return "Wan 图生视频"
+		return "通义-Wan-图生视频"
 	case "vidu":
-		return "Vidu"
+		return "生数-Vidu-标准版"
 	case "vidu-mix":
-		return "Vidu Mix"
+		return "生数-Vidu-Mix"
 	case "vidu-offpeak":
-		return "Vidu（离峰）"
+		return "生数-Vidu-离峰版"
 	case "vidu-mix-offpeak":
-		return "Vidu Mix（离峰）"
+		return "生数-Vidu-Mix离峰版"
 	case "kling":
-		return "Kling"
+		return "可灵-Kling-标准版"
 	case "aiping":
-		return "爱评 / Kling"
+		return "爱评-Kling-K3"
 	case "tencent-vclm":
-		return "Tencent VCLM / Kling"
+		return "腾讯-VCLM-Kling"
 	case "doubao":
-		return "Doubao"
+		return "豆包-视频生成-标准版"
 	case "doubao-seedance":
-		if providerModel != "" {
-			return "Doubao Seedance / " + providerModel
-		}
-		return "Doubao Seedance"
+		return "豆包-Seedance-2.0"
 	case "suanneng":
-		if providerModel != "" {
-			return "算能 / " + providerModel
+		if strings.Contains(pm, "1-5") || strings.Contains(pm, "1.5") {
+			return "算能-Seedance-1.5"
 		}
-		return "算能"
+		return "算能-视频生成-标准版"
 	case "hubagi-voe3.1":
-		return "Veo 3.1（Hubagi）"
+		return "Hubagi-Veo-3.1"
 	case "hubagi-TC-GV":
-		return "TC-GV（Hubagi）"
+		return "Hubagi-TC-GV-标准版"
 	case "sora2":
-		return "Sora 2"
+		return "OpenAI-Sora-2"
 	case "comfyui-video":
-		return "ComfyUI Video"
+		return "ComfyUI-Video-本地版"
 	case "runninghub":
-		return "RunningHub"
+		return "RunningHub-Video-标准版"
 	case "cogvideo":
-		return "CogVideo"
+		return "CogVideo-Video-标准版"
 	case "baidu-bce":
-		return "Baidu BCE"
+		return "百度-BCE-视频生成"
 	case "gaga":
-		return "Gaga"
+		return "Gaga-Video-标准版"
 	case "minmax":
-		if providerModel != "" {
-			return "MiniMax / " + providerModel
+		if strings.Contains(pm, "2.3") {
+			return "MiniMax-Hailuo-2.3"
 		}
-		return "MiniMax / Hailuo"
+		if strings.Contains(pm, "02") || strings.Contains(pm, "0-2") || strings.Contains(pm, "hailuo-02") {
+			return "MiniMax-Hailuo-02"
+		}
+		return "MiniMax-Hailuo-标准版"
 	default:
 		return ""
 	}

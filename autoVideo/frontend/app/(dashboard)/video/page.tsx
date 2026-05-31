@@ -183,27 +183,27 @@ function isModelKey(model: VideoModelStatus, ...prefixes: string[]) {
 
 function getFallbackModelDisplayName(key: string) {
   const map: Record<string, string> = {
-    'wan': 'Wan 图生视频',
-    'wan-t2v': 'Wan 文生视频',
-    'vidu': 'Vidu',
-    'vidu-mix': 'Vidu Mix',
-    'vidu-offpeak': 'Vidu（离峰）',
-    'vidu-mix-offpeak': 'Vidu Mix（离峰）',
-    'kling': 'Kling',
-    'tencent-vclm': 'Tencent VCLM / Kling',
-    'doubao': 'Doubao',
-    'doubao-seedance': 'Doubao Seedance',
-    'suanneng': '算能',
-    'hubagi-voe3.1': 'Veo 3.1（Hubagi）',
-    'hubagi-TC-GV': 'TC-GV（Hubagi）',
-    'sora2': 'Sora 2',
-    'comfyui-video': 'ComfyUI Video',
-    'runninghub': 'RunningHub',
-    'cogvideo': 'CogVideo',
-    'baidu-bce': 'Baidu BCE',
-    'gaga': 'Gaga',
-    'aiping': '爱评 / Kling',
-    'minmax': 'MiniMax / Hailuo',
+    'wan': '通义-Wan-图生视频',
+    'wan-t2v': '通义-Wan-文生视频',
+    'vidu': '生数-Vidu-标准版',
+    'vidu-mix': '生数-Vidu-Mix',
+    'vidu-offpeak': '生数-Vidu-离峰版',
+    'vidu-mix-offpeak': '生数-Vidu-Mix离峰版',
+    'kling': '可灵-Kling-标准版',
+    'tencent-vclm': '腾讯-VCLM-Kling',
+    'doubao': '豆包-视频生成-标准版',
+    'doubao-seedance': '豆包-Seedance-2.0',
+    'suanneng': '算能-视频生成-标准版',
+    'hubagi-voe3.1': 'Hubagi-Veo-3.1',
+    'hubagi-TC-GV': 'Hubagi-TC-GV-标准版',
+    'sora2': 'OpenAI-Sora-2',
+    'comfyui-video': 'ComfyUI-Video-本地版',
+    'runninghub': 'RunningHub-Video-标准版',
+    'cogvideo': 'CogVideo-Video-标准版',
+    'baidu-bce': '百度-BCE-视频生成',
+    'gaga': 'Gaga-Video-标准版',
+    'aiping': '爱评-Kling-K3',
+    'minmax': 'MiniMax-Hailuo-标准版',
   }
   return map[key] || key
 }
@@ -211,13 +211,7 @@ function getFallbackModelDisplayName(key: string) {
 function getModelDisplayName(model?: Pick<VideoModelStatus, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
   const key = model?.key || keyFallback || ''
   const label = model?.label?.trim()
-  const providerModel = model?.provider_model?.trim()
-  const provider = model?.provider?.trim()
-  const base = label || getFallbackModelDisplayName(key)
-  const extras = [providerModel, provider].filter(Boolean)
-  if (extras.length === 0) return base
-  const suffix = extras.join(' · ')
-  return base.includes(suffix) ? base : `${base} · ${suffix}`
+  return label || getFallbackModelDisplayName(key)
 }
 
 function inferModelCategories(model: VideoModelStatus): ManualMenuKey[] {

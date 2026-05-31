@@ -91,9 +91,44 @@ type VideoModelParam = {
 
 type VideoModelMeta = {
   key: string
+  label?: string
+  provider?: string
+  provider_model?: string
   available: boolean
   native_audio?: boolean
   params?: VideoModelParam[]
+}
+
+function getFallbackVideoModelLabel(key: string) {
+  const map: Record<string, string> = {
+    wan: '通义-Wan-图生视频',
+    'wan-t2v': '通义-Wan-文生视频',
+    vidu: '生数-Vidu-标准版',
+    'vidu-mix': '生数-Vidu-Mix',
+    'vidu-offpeak': '生数-Vidu-离峰版',
+    'vidu-mix-offpeak': '生数-Vidu-Mix离峰版',
+    kling: '可灵-Kling-标准版',
+    aiping: '爱评-Kling-K3',
+    'tencent-vclm': '腾讯-VCLM-Kling',
+    doubao: '豆包-视频生成-标准版',
+    'doubao-seedance': '豆包-Seedance-2.0',
+    suanneng: '算能-视频生成-标准版',
+    'hubagi-voe3.1': 'Hubagi-Veo-3.1',
+    'hubagi-TC-GV': 'Hubagi-TC-GV-标准版',
+    sora2: 'OpenAI-Sora-2',
+    'comfyui-video': 'ComfyUI-Video-本地版',
+    runninghub: 'RunningHub-Video-标准版',
+    cogvideo: 'CogVideo-Video-标准版',
+    'baidu-bce': '百度-BCE-视频生成',
+    gaga: 'Gaga-Video-标准版',
+    minmax: 'MiniMax-Hailuo-标准版',
+  }
+  return map[key] || key
+}
+
+function formatVideoModelLabel(status?: Pick<VideoModelMeta, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const key = status?.key || keyFallback || ''
+  return status?.label?.trim() || getFallbackVideoModelLabel(key)
 }
 
 function formatModelParamValues(param?: VideoModelParam) {
@@ -604,6 +639,14 @@ ${paceBlock}`
   const selectedModelMeta = useMemo(
     () => availableModels.find((item) => item.key === effectiveSelectedVideoModel) || null,
     [availableModels, effectiveSelectedVideoModel],
+  )
+  const selectedConstraintModelLabel = useMemo(
+    () => formatVideoModelLabel(constraintModelMeta, effectiveConstraintVideoModel),
+    [constraintModelMeta, effectiveConstraintVideoModel],
+  )
+  const selectedGenerationModelLabel = useMemo(
+    () => formatVideoModelLabel(selectedModelMeta, effectiveSelectedVideoModel),
+    [selectedModelMeta, effectiveSelectedVideoModel],
   )
   const selectedModelParams = useMemo(() => selectedModelMeta?.params || [], [selectedModelMeta])
 
@@ -1505,7 +1548,7 @@ ${paceBlock}`
                       >
                         <option value="">请选择模型</option>
                         {availableModels.map((item) => (
-                          <option key={item.key} value={item.key}>{item.key}</option>
+                          <option key={item.key} value={item.key}>{formatVideoModelLabel(item, item.key)}</option>
                         ))}
                       </select>
                     </div>
@@ -1597,7 +1640,7 @@ ${paceBlock}`
 
                   {videoModelMismatch && (
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
-                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{effectiveConstraintVideoModel || effectiveSelectedVideoModel || '未选择'}`。请确认运行态模型配置是否变更。
+                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedConstraintModelLabel || selectedGenerationModelLabel || '未选择'}`。请确认运行态模型配置是否变更。
                     </div>
                   )}
 
@@ -1899,7 +1942,7 @@ ${paceBlock}`
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
                         <div>当前范围：{scopeLabel}</div>
-                        <div>目标模型：{effectiveSelectedVideoModel || '未选择'}</div>
+                        <div>目标模型：{selectedGenerationModelLabel || '未选择'}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                       </div>
@@ -1972,7 +2015,7 @@ ${paceBlock}`
                     </div>
 
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2 text-xs text-emerald-50">
-                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{effectiveSelectedVideoModel || '未选择'}</div>
+                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{selectedGenerationModelLabel || '未选择'}</div>
                       {selectedModelMeta ? (
                         <>
                           <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>

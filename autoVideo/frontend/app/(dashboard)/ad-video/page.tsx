@@ -13,7 +13,47 @@ import { modelAPI, projectAPI, videoAPI, type Model, type Project } from '@/lib/
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
-type VideoModelStatus = { key: string; available: boolean; native_audio?: boolean; params?: ModelParamOption[] }
+type VideoModelStatus = {
+  key: string
+  label?: string
+  provider?: string
+  provider_model?: string
+  available: boolean
+  native_audio?: boolean
+  params?: ModelParamOption[]
+}
+
+function getFallbackVideoModelLabel(key: string) {
+  const map: Record<string, string> = {
+    wan: '通义-Wan-图生视频',
+    'wan-t2v': '通义-Wan-文生视频',
+    vidu: '生数-Vidu-标准版',
+    'vidu-mix': '生数-Vidu-Mix',
+    'vidu-offpeak': '生数-Vidu-离峰版',
+    'vidu-mix-offpeak': '生数-Vidu-Mix离峰版',
+    kling: '可灵-Kling-标准版',
+    aiping: '爱评-Kling-K3',
+    'tencent-vclm': '腾讯-VCLM-Kling',
+    doubao: '豆包-视频生成-标准版',
+    'doubao-seedance': '豆包-Seedance-2.0',
+    suanneng: '算能-视频生成-标准版',
+    'hubagi-voe3.1': 'Hubagi-Veo-3.1',
+    'hubagi-TC-GV': 'Hubagi-TC-GV-标准版',
+    sora2: 'OpenAI-Sora-2',
+    'comfyui-video': 'ComfyUI-Video-本地版',
+    runninghub: 'RunningHub-Video-标准版',
+    cogvideo: 'CogVideo-Video-标准版',
+    'baidu-bce': '百度-BCE-视频生成',
+    gaga: 'Gaga-Video-标准版',
+    minmax: 'MiniMax-Hailuo-标准版',
+  }
+  return map[key] || key
+}
+
+function formatVideoModelLabel(status?: Pick<VideoModelStatus, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const key = status?.key || keyFallback || ''
+  return status?.label?.trim() || getFallbackVideoModelLabel(key)
+}
 
 type ProjectPayload = {
   code?: number
@@ -129,6 +169,10 @@ export default function AdVideoWorkbenchPage() {
     if (!modelKey) return null
     return videoModelStatuses.find((item) => item.key === modelKey) || null
   }, [selectedVideoModel, videoModelStatuses])
+  const selectedVideoDisplayLabel = useMemo(
+    () => formatVideoModelLabel(selectedVideoStatus, String(selectedVideoModel?.model_key || '').trim()),
+    [selectedVideoModel?.model_key, selectedVideoStatus],
+  )
   const selectedVideoParamEntries = useMemo(() => {
     const cfg = selectedVideoModel?.config
     if (!cfg || typeof cfg !== 'object') return [] as Array<{ key: string; value: string }>
@@ -371,11 +415,14 @@ export default function AdVideoWorkbenchPage() {
                 className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
               >
                 <option value="default">系统默认</option>
-                {creatableVideoModels.map((model) => (
-                  <option key={model.id} value={String(model.id)}>
-                    {model.name} · {model.model_key}
-                  </option>
-                ))}
+                {creatableVideoModels.map((model) => {
+                  const status = videoModelStatuses.find((item) => item.key === String(model.model_key || '').trim())
+                  return (
+                    <option key={model.id} value={String(model.id)}>
+                      {formatVideoModelLabel(status, String(model.model_key || '').trim())}
+                    </option>
+                  )
+                })}
               </select>
             </div>
             <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4 md:col-span-2">
@@ -384,7 +431,7 @@ export default function AdVideoWorkbenchPage() {
                 <div className="space-y-4 text-xs text-slate-300">
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
                     <div className="text-[11px] text-slate-500">当前模型</div>
-                    <div className="mt-1 break-all text-white">{selectedVideoModel.name} · {selectedVideoModel.model_key}</div>
+                    <div className="mt-1 break-all text-white">{selectedVideoDisplayLabel}</div>
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
