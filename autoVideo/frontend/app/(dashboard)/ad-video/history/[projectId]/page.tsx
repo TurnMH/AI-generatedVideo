@@ -222,8 +222,6 @@ function softenDialogueText(input: string) {
   const text = String(input || '')
   if (!text.trim()) return ''
   return text
-    .replace(/李恩泽/g, '我')
-    .replace(/Li Enze/gi, 'I')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -246,6 +244,12 @@ function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payloa
     source_prompt_softened: true,
   }
 }
+
+const CHARACTER_IDENTITY_CONSTRAINTS = [
+  'All shots must depict the same person as the uploaded character reference.',
+  'Keep the same face structure, eye shape, nose shape, mouth shape, jawline, age impression, and overall identity.',
+  'Do not switch identity, do not generate a lookalike stranger, and do not let continuity replace identity anchoring.',
+]
 
 function humanizeVideoTaskError(task?: VideoTask | null) {
   const msg = String(task?.error_msg || '')
@@ -336,7 +340,31 @@ function buildEpisodeVideoPayload(
 
   const firstImageIndex = sorted.findIndex((item) => resolveSeedImage(item))
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
-  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(item.prompt_used || item.scene_description || ''))
+  const pickStoryboardPrompt = (storyboard: Storyboard) => {
+    const sceneDescription = String(storyboard.scene_description || '').trim()
+    const promptUsed = String(storyboard.prompt_used || '').trim()
+    const hasSceneCharacters = Array.isArray(storyboard.characters) && storyboard.characters.length > 0
+    const hasBoundAssets = Array.isArray(storyboard.asset_ids) && storyboard.asset_ids.length > 0
+
+    if (!promptUsed) return sceneDescription
+    if (!sceneDescription) return promptUsed
+
+    const normalizedPrompt = promptUsed.toLowerCase()
+    const looksForeignToScene = (
+      normalizedPrompt.includes('lakeside')
+      || normalizedPrompt.includes('pine trees')
+      || normalizedPrompt.includes('mist rising over calm water')
+      || normalizedPrompt.includes('pastel sky')
+    )
+
+    if (looksForeignToScene && (hasSceneCharacters || hasBoundAssets)) {
+      return sceneDescription
+    }
+
+    return promptUsed
+  }
+
+  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(pickStoryboardPrompt(item)))
   const dialogues = serialStoryboards.map((item) => softenDialogueText(item.dialogue || ''))
   const durations = serialStoryboards.map((item) => item.duration || 0)
   const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
@@ -750,6 +778,8 @@ ${paceBlock}`
   )
   const firstStoryboard = displayStoryboards[0] || null
   const firstStoryboardImageReady = Boolean(firstStoryboard && String(firstStoryboard.image_url || '').trim())
+  const firstFrameIdentityReviewStatus = String(project?.storyboard_config?.first_frame_identity_review_status || 'unreviewed').trim() || 'unreviewed'
+  const firstFrameIdentityApproved = firstFrameIdentityReviewStatus === 'approved'
 
   const assetToStoryboardMap = useMemo(() => {
     const map = new Map<number, Storyboard[]>()
@@ -794,6 +824,20 @@ ${paceBlock}`
     return map
   }, [assets])
 
+  const characterAnchorAsset = useMemo(() => {
+    const firstWithImage = characterAssets.find((asset) => String(asset.image_url || '').trim())
+    return firstWithImage || null
+  }, [characterAssets])
+
+  const characterAnchorImageUrl = String(characterAnchorAsset?.image_url || project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim()
+  const characterAnchorSource = characterAnchorAsset?.image_url
+    ? 'asset'
+    : project?.storyboard_config?.approved_first_frame_image_url
+      ? 'approved_first_frame'
+      : firstStoryboard?.image_url
+        ? 'storyboard_image'
+        : 'none'
+
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
     return new Set((assetToStoryboardMap.get(focusedAssetId) || []).map((storyboard) => storyboard.id))
@@ -818,7 +862,7 @@ ${paceBlock}`
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && (firstStoryboardImageReady || serialVideoSeedReady)
   const latestTaskIsPaused = String(latestTask?.status || '').toLowerCase() === 'paused'
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = latestTaskIsPaused || (step1Done && serialVideoSeedReady && step3ConfigReady)
+  const step3Enabled = latestTaskIsPaused || (step1Done && serialVideoSeedReady && step3ConfigReady && firstFrameIdentityApproved)
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -861,23 +905,29 @@ ${paceBlock}`
           ? '先把当前范围需要的参考图补齐；没上传完之前，不建议生成首张分镜图。'
           : !firstStoryboardImageReady
             ? '参考图已经齐了，下一步只需要生成第 1 张分镜图；其余分镜只展示文本，不再继续批量生成图片。'
-            : '当前范围的第 1 张分镜图已经就绪，步骤 2 可以视为完成。'
+            : !firstFrameIdentityApproved
+              ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
+              : '当前范围的第 1 张分镜图已经就绪，且已确认角色正确，步骤 2 可以视为完成。'
 
   const step3Hint = latestTaskIsPaused
     ? '检测到上一步有已暂停但未完成的视频任务；这里会优先继续旧任务，而不是重新新建一条视频任务。'
-    : !step3Enabled
-      ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
-      : !step3ConfigReady
-        ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
-        : step3Running
-          ? '当前已经有视频任务在执行，先等这一轮结果。'
-        : completedStoryboardImages === 0
-          ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
-          : !step2Done
-            ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
-            : step3Done
-              ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
-              : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
+    : !firstStoryboardImageReady
+      ? '当前范围还没有可用的首张分镜图。先在步骤 2 至少生成或上传第 1 张分镜图。'
+      : !firstFrameIdentityApproved
+        ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
+        : !step3Enabled
+          ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
+          : !step3ConfigReady
+            ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
+            : step3Running
+              ? '当前已经有视频任务在执行，先等这一轮结果。'
+              : completedStoryboardImages === 0
+                ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
+                : !step2Done
+                  ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
+                  : step3Done
+                    ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
+                    : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1182,6 +1232,39 @@ ${paceBlock}`
     }
   }
 
+  const saveFirstFrameIdentityReview = async (status: 'approved' | 'rejected') => {
+    const note = status === 'approved'
+      ? '首镜角色已人工确认正确'
+      : '首镜角色与当前上传角色不一致，需重做'
+    await storyboardAPI.updateConfig(projectId, {
+      first_frame_identity_review_status: status,
+      first_frame_identity_reviewed_at: new Date().toISOString(),
+      first_frame_identity_review_note: note,
+      approved_first_frame_image_url: status === 'approved' ? String(firstStoryboard?.image_url || '').trim() : '',
+      character_consistency_enabled: true,
+      require_same_character: true,
+      character_anchor_asset_id: characterAnchorAsset?.id,
+      character_anchor_image_url: String(characterAnchorAsset?.image_url || '').trim() || undefined,
+      character_anchor_source: characterAnchorSource,
+    })
+    await mutateProject()
+  }
+
+  const clearFirstFrameIdentityReview = async () => {
+    await storyboardAPI.updateConfig(projectId, {
+      first_frame_identity_review_status: 'unreviewed',
+      first_frame_identity_reviewed_at: new Date().toISOString(),
+      first_frame_identity_review_note: '角色图/首镜已变化，需重新确认',
+      approved_first_frame_image_url: '',
+      character_consistency_enabled: true,
+      require_same_character: true,
+      character_anchor_asset_id: characterAnchorAsset?.id,
+      character_anchor_image_url: String(characterAnchorAsset?.image_url || '').trim() || undefined,
+      character_anchor_source: characterAnchorSource,
+    })
+    await mutateProject()
+  }
+
   const handleFirstStoryboardUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1217,8 +1300,9 @@ ${paceBlock}`
             : storyboard
         ))
       }, false)
+      await clearFirstFrameIdentityReview()
       await refreshAll()
-      toast({ title: `分镜 #${firstStoryboard.sequence_number} 首图上传完成`, variant: 'success' })
+      toast({ title: `分镜 #${firstStoryboard.sequence_number} 首图上传完成，已重置首镜角色确认`, variant: 'success' })
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '上传首张分镜图失败', variant: 'destructive' })
     } finally {
@@ -1234,8 +1318,9 @@ ${paceBlock}`
     setUploadingAssetId(asset.id)
     try {
       await assetAPI.upload(projectId, asset.id, file)
+      await clearFirstFrameIdentityReview()
       await refreshAll()
-      toast({ title: `人物素材「${asset.name || `#${asset.id}`}」上传完成`, variant: 'success' })
+      toast({ title: `人物素材「${asset.name || `#${asset.id}`}」上传完成，已重置首镜角色确认`, variant: 'success' })
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '上传人物图失败', variant: 'destructive' })
     } finally {
@@ -1299,6 +1384,18 @@ ${paceBlock}`
       return
     }
 
+    if (!firstStoryboardImageReady) {
+      toast({ title: '请先准备首镜图，再进入步骤 3', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!firstFrameIdentityApproved) {
+      toast({ title: '请先在步骤 2 确认首镜人物就是当前上传角色本人', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
     if (!step3ConfigReady) {
       toast({ title: '步骤 3 当前模型没有完整声明 aspect_ratio / resolution / duration，不能直接提交视频生成', variant: 'destructive' })
       releaseActionLock('video-start')
@@ -1336,6 +1433,14 @@ ${paceBlock}`
         generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
       }
       const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
+      renderConfig.character_consistency_enabled = true
+      renderConfig.require_same_character = true
+      renderConfig.character_anchor_asset_id = characterAnchorAsset?.id
+      renderConfig.character_anchor_image_url = characterAnchorImageUrl || undefined
+      renderConfig.character_anchor_source = characterAnchorSource
+      renderConfig.identity_constraints = CHARACTER_IDENTITY_CONSTRAINTS
+      renderConfig.same_character_as_first_scene = true
+      renderConfig.approved_first_frame_image_url = String(project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim() || undefined
       await videoAPI.generate(projectId, {
         image_urls: payload.image_urls,
         scene_descriptions: payload.scene_descriptions,
@@ -1350,6 +1455,13 @@ ${paceBlock}`
         scene_asset_ids: payload.scene_asset_ids,
         scene_description: payload.scene_description,
         scene_group_keys: payload.scene_group_keys,
+        character_consistency_enabled: true,
+        require_same_character: true,
+        character_anchor_asset_id: characterAnchorAsset?.id,
+        character_anchor_image_url: characterAnchorImageUrl || undefined,
+        character_anchor_source: characterAnchorSource,
+        identity_constraints: CHARACTER_IDENTITY_CONSTRAINTS,
+        same_character_as_first_scene: true,
         model_name: effectiveSelectedVideoModel,
         style_preset: stylePreset,
         motion_mode: motionMode,
@@ -1796,7 +1908,7 @@ ${paceBlock}`
                       )}
                     </div>
 
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
                         <div className="text-[11px] text-violet-200/70">当前范围</div>
                         <div className="mt-1 text-sm text-white">{scopeLabel}</div>
@@ -1808,6 +1920,10 @@ ${paceBlock}`
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
                         <div className="text-[11px] text-violet-200/70">首分镜图片</div>
                         <div className="mt-1 text-sm text-white">{firstStoryboardImageReady ? '已准备' : '待准备'}</div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">首镜角色确认</div>
+                        <div className="mt-1 text-sm text-white">{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
                         <div className="text-[11px] text-violet-200/70">文本检查范围</div>
@@ -1970,6 +2086,10 @@ ${paceBlock}`
                                 ? `分镜 #${firstStoryboard.sequence_number} · episode ${firstStoryboard.episode_id || '-'} · asset_ids：${firstStoryboard.asset_ids?.length ? firstStoryboard.asset_ids.join(', ') : '-'}`
                                 : '当前范围还没有分镜，先完成步骤 1'}
                             </div>
+                            <div className="mt-2 text-[11px] text-violet-100/80">
+                              角色锚点来源：{characterAnchorSource === 'asset' ? '角色素材图' : characterAnchorSource === 'approved_first_frame' ? '已确认首镜图' : characterAnchorSource === 'storyboard_image' ? '当前首镜图' : '暂无'}
+                              {characterAnchorAsset ? ` · 人物 #${characterAnchorAsset.id} ${characterAnchorAsset.name || ''}` : ''}
+                            </div>
                           </div>
                           <div className={`rounded-full border px-2 py-0.5 text-[11px] ${firstStoryboardImageReady ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-violet-400/30 bg-violet-500/10 text-violet-100'}`}>
                             {firstStoryboardImageReady ? '已准备' : '待上传 / 待生成'}
@@ -1998,6 +2118,39 @@ ${paceBlock}`
                                 ))}
                               </div>
                             )}
+
+                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-xs font-medium text-amber-100">首镜角色一致性确认</div>
+                                  <div className="mt-1 text-[11px] text-amber-100/75">首镜将作为后续角色一致性的基准。若人物不是当前上传角色本人，请不要继续进入步骤 3。</div>
+                                </div>
+                                <div className={`rounded-full border px-2 py-0.5 text-[11px] ${firstFrameIdentityApproved ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : firstFrameIdentityReviewStatus === 'rejected' ? 'border-rose-400/30 bg-rose-500/10 text-rose-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                  {firstFrameIdentityApproved ? '已确认角色正确' : firstFrameIdentityReviewStatus === 'rejected' ? '已标记需重做' : '待确认'}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="h-9 rounded-lg bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
+                                  disabled={pipelineBusy || !firstStoryboardImageReady}
+                                  onClick={() => void saveFirstFrameIdentityReview('approved')}
+                                >
+                                  确认角色正确，继续
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-9 rounded-lg border-rose-400/30 bg-rose-500/10 px-3 text-xs text-rose-100 hover:bg-rose-500/20"
+                                  disabled={pipelineBusy || !firstStoryboardImageReady}
+                                  onClick={() => void saveFirstFrameIdentityReview('rejected')}
+                                >
+                                  角色不对，重新生成首镜
+                                </Button>
+                              </div>
+                            </div>
 
                             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
                               <div className="space-y-2">
@@ -2148,6 +2301,8 @@ ${paceBlock}`
                         <div>目标模型：{selectedGenerationModelLabel || '未选择'}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                        <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
+                        <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id}` : ''}` : '缺失'}</div>
                       </div>
                     </div>
 
@@ -2242,7 +2397,7 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !serialVideoSeedReady))}
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !serialVideoSeedReady || !firstFrameIdentityApproved))}
                       onClick={() => void startScopedVideoGeneration()}
                     >
                       {generationAction === 'video-start'

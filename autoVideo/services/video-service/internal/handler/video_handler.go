@@ -148,6 +148,26 @@ func normalizeContinuityRenderConfig(rc model.RenderConfig, spatialAnchors, subj
 	return rc
 }
 
+func applyCharacterIdentityConfig(rc model.RenderConfig, enabled bool, requireSameCharacter bool, anchorAssetID int64, anchorImageURL string, anchorSource string, identityConstraints []string, sameCharacterAsFirstScene bool) model.RenderConfig {
+	rc = normalizeRenderConfig(rc)
+	rc["character_consistency_enabled"] = enabled
+	rc["require_same_character"] = requireSameCharacter
+	if anchorAssetID > 0 {
+		rc["character_anchor_asset_id"] = anchorAssetID
+	}
+	if trimmed := strings.TrimSpace(anchorImageURL); trimmed != "" {
+		rc["character_anchor_image_url"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(anchorSource); trimmed != "" {
+		rc["character_anchor_source"] = trimmed
+	}
+	if len(identityConstraints) > 0 {
+		rc["identity_constraints"] = identityConstraints
+	}
+	rc["same_character_as_first_scene"] = sameCharacterAsFirstScene
+	return rc
+}
+
 func firstNonEmptyString(vals ...string) string {
 	for _, v := range vals {
 		if trimmed := strings.TrimSpace(v); trimmed != "" {
@@ -368,26 +388,33 @@ func summarizeRouteCoverage(task *model.VideoTask) routeCoverageSummary {
 }
 
 type generateReq struct {
-	ProjectID         int64              `json:"project_id" binding:"required"`
-	EpisodeID         *int64             `json:"episode_id"`
-	ImageURLs         []string           `json:"image_urls"`
-	SceneDescriptions []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
-	Dialogues         []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
-	MotionDescs       []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
-	SpatialAnchors    []string           `json:"spatial_anchors"`
-	SubjectPositions  []string           `json:"subject_positions"`
-	TransitionNotes   []string           `json:"transition_notes"`
-	SceneCharacters   [][]string         `json:"scene_characters"`
-	StylePreset       string             `json:"style_preset"`
-	MotionMode        string             `json:"motion_mode"`
-	ModelName         string             `json:"model_name"`
-	AudioURL          string             `json:"audio_url"`
-	SubtitleText      string             `json:"subtitle_text"`
-	SceneDescription  string             `json:"scene_description"`
-	RenderConfig      model.RenderConfig `json:"render_config"`
-	ClipDurationSec   float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
-	SerialScene       bool               `json:"serial_scene"`
-	SceneGroupKeys    []string           `json:"scene_group_keys"`
+	ProjectID                  int64              `json:"project_id" binding:"required"`
+	EpisodeID                  *int64             `json:"episode_id"`
+	ImageURLs                  []string           `json:"image_urls"`
+	SceneDescriptions          []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
+	Dialogues                  []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
+	MotionDescs                []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
+	SpatialAnchors             []string           `json:"spatial_anchors"`
+	SubjectPositions           []string           `json:"subject_positions"`
+	TransitionNotes            []string           `json:"transition_notes"`
+	SceneCharacters            [][]string         `json:"scene_characters"`
+	StylePreset                string             `json:"style_preset"`
+	MotionMode                 string             `json:"motion_mode"`
+	ModelName                  string             `json:"model_name"`
+	AudioURL                   string             `json:"audio_url"`
+	SubtitleText               string             `json:"subtitle_text"`
+	SceneDescription           string             `json:"scene_description"`
+	RenderConfig               model.RenderConfig `json:"render_config"`
+	ClipDurationSec            float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
+	SerialScene                bool               `json:"serial_scene"`
+	SceneGroupKeys             []string           `json:"scene_group_keys"`
+	CharacterConsistencyEnabled bool              `json:"character_consistency_enabled"`
+	RequireSameCharacter       bool               `json:"require_same_character"`
+	CharacterAnchorAssetID     int64              `json:"character_anchor_asset_id"`
+	CharacterAnchorImageURL    string             `json:"character_anchor_image_url"`
+	CharacterAnchorSource      string             `json:"character_anchor_source"`
+	IdentityConstraints        []string           `json:"identity_constraints"`
+	SameCharacterAsFirstScene  bool               `json:"same_character_as_first_scene"`
 }
 
 type extractVideoContentReq struct {
@@ -445,6 +472,7 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 
 	// Store per-clip scene descriptions in render_config for use during generation.
 	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
+	req.RenderConfig = applyCharacterIdentityConfig(req.RenderConfig, req.CharacterConsistencyEnabled, req.RequireSameCharacter, req.CharacterAnchorAssetID, req.CharacterAnchorImageURL, req.CharacterAnchorSource, req.IdentityConstraints, req.SameCharacterAsFirstScene)
 	if len(req.Dialogues) == 0 && strings.TrimSpace(req.SubtitleText) != "" {
 		for _, line := range strings.Split(strings.ReplaceAll(req.SubtitleText, "\r\n", "\n"), "\n") {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
@@ -805,28 +833,35 @@ func (h *VideoHandler) ListProjectVideos(c *gin.Context) {
 }
 
 type projectGenerateReq struct {
-	EpisodeID         *int64             `json:"episode_id"`
-	ImageURLs         []string           `json:"image_urls" binding:"required,min=1"`
-	SceneDescriptions []string           `json:"scene_descriptions"` // per-clip visual descriptions
-	Dialogues         []string           `json:"dialogues"`          // per-clip dialogue/subtitle text
-	Durations         []float64          `json:"durations"`          // per-clip duration in seconds (from storyboard)
-	CameraMovements   []string           `json:"camera_movements"`   // per-clip camera movement hint
-	Moods             []string           `json:"moods"`              // per-clip mood/emotion
-	SpatialAnchors    []string           `json:"spatial_anchors"`
-	SubjectPositions  []string           `json:"subject_positions"`
-	TransitionNotes   []string           `json:"transition_notes"`
-	SceneCharacters   [][]string         `json:"scene_characters"` // per-clip character names for ref image filtering
-	SceneAssetIDs     [][]int64          `json:"scene_asset_ids"`  // per-clip related asset IDs for scene/prop continuity
-	StylePreset       string             `json:"style_preset"`
-	MotionMode        string             `json:"motion_mode"`
-	ModelName         string             `json:"model_name"`
-	AudioURL          string             `json:"audio_url"`
-	SubtitleText      string             `json:"subtitle_text"`
-	VideoMode         string             `json:"video_mode"`
-	ExportFormat      string             `json:"export_format"`
-	SceneDescription  string             `json:"scene_description"`
-	RenderConfig      model.RenderConfig `json:"render_config"`
-	ClipDurationSec   float64            `json:"clip_duration_sec"`
+	EpisodeID                   *int64             `json:"episode_id"`
+	ImageURLs                   []string           `json:"image_urls" binding:"required,min=1"`
+	SceneDescriptions           []string           `json:"scene_descriptions"` // per-clip visual descriptions
+	Dialogues                   []string           `json:"dialogues"`          // per-clip dialogue/subtitle text
+	Durations                   []float64          `json:"durations"`          // per-clip duration in seconds (from storyboard)
+	CameraMovements             []string           `json:"camera_movements"`   // per-clip camera movement hint
+	Moods                       []string           `json:"moods"`              // per-clip mood/emotion
+	SpatialAnchors              []string           `json:"spatial_anchors"`
+	SubjectPositions            []string           `json:"subject_positions"`
+	TransitionNotes             []string           `json:"transition_notes"`
+	SceneCharacters             [][]string         `json:"scene_characters"` // per-clip character names for ref image filtering
+	SceneAssetIDs               [][]int64          `json:"scene_asset_ids"`  // per-clip related asset IDs for scene/prop continuity
+	StylePreset                 string             `json:"style_preset"`
+	MotionMode                  string             `json:"motion_mode"`
+	ModelName                   string             `json:"model_name"`
+	AudioURL                    string             `json:"audio_url"`
+	SubtitleText                string             `json:"subtitle_text"`
+	VideoMode                   string             `json:"video_mode"`
+	ExportFormat                string             `json:"export_format"`
+	SceneDescription            string             `json:"scene_description"`
+	RenderConfig                model.RenderConfig `json:"render_config"`
+	ClipDurationSec             float64            `json:"clip_duration_sec"`
+	CharacterConsistencyEnabled bool               `json:"character_consistency_enabled"`
+	RequireSameCharacter        bool               `json:"require_same_character"`
+	CharacterAnchorAssetID      int64              `json:"character_anchor_asset_id"`
+	CharacterAnchorImageURL     string             `json:"character_anchor_image_url"`
+	CharacterAnchorSource       string             `json:"character_anchor_source"`
+	IdentityConstraints         []string           `json:"identity_constraints"`
+	SameCharacterAsFirstScene   bool               `json:"same_character_as_first_scene"`
 	// 视频串行生成
 	SerialScene    bool     `json:"serial_scene"`     // true = 同场景分镜串行生成（末帧约束）
 	SceneGroupKeys []string `json:"scene_group_keys"` // 与 image_urls 一一对应的场景 key
@@ -862,6 +897,7 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 	}
 
 	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
+	req.RenderConfig = applyCharacterIdentityConfig(req.RenderConfig, req.CharacterConsistencyEnabled, req.RequireSameCharacter, req.CharacterAnchorAssetID, req.CharacterAnchorImageURL, req.CharacterAnchorSource, req.IdentityConstraints, req.SameCharacterAsFirstScene)
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
 	}

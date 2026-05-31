@@ -675,6 +675,13 @@ export interface VideoGenerateRequest {
   clip_duration_sec?: number
   serial_scene?: boolean
   scene_group_keys?: string[]
+  character_consistency_enabled?: boolean
+  require_same_character?: boolean
+  character_anchor_asset_id?: number
+  character_anchor_image_url?: string
+  character_anchor_source?: string
+  identity_constraints?: string[]
+  same_character_as_first_scene?: boolean
 }
 
 export interface VideoGenerateBatchRequest {

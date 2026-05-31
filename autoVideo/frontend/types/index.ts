@@ -114,6 +114,15 @@ export interface StoryboardConfig {
   speech_pace?: 'normal' | 'slightly_fast' | 'with_pauses' | 'very_fast' | 'medium_fast' | 'medium_steady'
   ad_copy_optimization_prompt?: string
   storyboard_split_prompt?: string
+  first_frame_identity_review_status?: 'unreviewed' | 'approved' | 'rejected'
+  first_frame_identity_reviewed_at?: string
+  first_frame_identity_review_note?: string
+  approved_first_frame_image_url?: string
+  character_consistency_enabled?: boolean
+  require_same_character?: boolean
+  character_anchor_asset_id?: number
+  character_anchor_image_url?: string
+  character_anchor_source?: 'asset' | 'approved_first_frame' | 'storyboard_image' | 'none' | string
 }
 
 export interface WatermarkConfig {
