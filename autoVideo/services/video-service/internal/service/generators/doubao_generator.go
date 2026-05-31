@@ -272,8 +272,8 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 
 	switch req.GenerateMode {
 	case "startEnd2video":
-		// 首尾帧生视频：text prompt + first_frame + last_frame
-		// 同时继续附带 reference_image，避免后续 clip 仅靠尾帧连续、人物脸和服装逐渐漂移。
+		// 首尾帧生视频：只传 first_frame + last_frame，不与 reference_image 混用。
+		// Seedance 当前接口会拒绝 first/last frame 与 reference media 同时出现。
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
@@ -289,16 +289,6 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 				Type:     "image_url",
 				Role:     "last_frame",
 				ImageURL: &doubaoImageURLItem{URL: req.TailImageURL},
-			})
-		}
-		for _, imgURL := range req.CharacterImageURLs {
-			if strings.TrimSpace(imgURL) == "" {
-				continue
-			}
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
 			})
 		}
 
@@ -326,34 +316,20 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		}
 
 	default:
-		// img2video（默认）: source image + text (+ optional reference_image items).
-		// 仅对 Seedance 做额外兼容：当同时附带 reference_image 时，主 source image 也必须显式带 role，
-		// 否则 provider 会拒绝 mixed-role image contents（task 203 的 400）。
-		content = make([]doubaoContentItem, 0, 2+len(req.CharacterImageURLs))
+		// img2video（默认）: 只传 source + text。
+		// 对 Seedance 不能再把 source 标成 first_frame 再混 reference_image，
+		// 否则会触发 task 204 的 first/last frame 与 reference media 互斥错误。
+		content = make([]doubaoContentItem, 0, 2)
 		if req.SourceImageURL != "" {
-			item := doubaoContentItem{
+			content = append(content, doubaoContentItem{
 				Type:     "image_url",
 				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			}
-			if g.isSeedance() && len(req.CharacterImageURLs) > 0 {
-				item.Role = "first_frame"
-			}
-			content = append(content, item)
+			})
 		}
 		content = append(content, doubaoContentItem{
 			Type: "text",
 			Text: textPrompt,
 		})
-		for _, imgURL := range req.CharacterImageURLs {
-			if strings.TrimSpace(imgURL) == "" {
-				continue
-			}
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
-			})
-		}
 	}
 
 	body := doubaoSubmitReq{
