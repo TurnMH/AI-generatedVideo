@@ -124,6 +124,40 @@ func TestClipMotionPromptChineseFamilyForDoubaoIncludesReferenceSections(t *test
 	}
 }
 
+func TestBuildClipIdentityTraceSummarizesSources(t *testing.T) {
+	trace := buildClipIdentityTrace(
+		"doubao-seedance",
+		"startEnd2video",
+		generators.VideoGenerateReq{
+			GenerateMode:       "startEnd2video",
+			SourceImageURL:     "https://example.com/source.png",
+			TailImageURL:       "https://example.com/tail.png",
+			CharacterImageURLs: []string{"https://example.com/char-a.png", "https://example.com/char-b.png"},
+		},
+		true,
+		[]string{"https://example.com/project-anchor.png", "https://example.com/approved-first.png"},
+		[]string{"https://example.com/char-a.png", "https://example.com/char-b.png"},
+		[]string{"https://example.com/scene-ref.png"},
+		true,
+		true,
+	)
+	if trace.ModelFamily != "doubao" {
+		t.Fatalf("trace.ModelFamily=%q", trace.ModelFamily)
+	}
+	if trace.RequestedGenerateMode != "startEnd2video" || trace.FinalGenerateMode != "startEnd2video" {
+		t.Fatalf("unexpected modes: %#v", trace)
+	}
+	if !trace.PreferredStartEndIdentity || !trace.HasSourceImage || !trace.HasTailImage {
+		t.Fatalf("expected source/tail/preferred flags to be true: %#v", trace)
+	}
+	if len(trace.ProjectIdentityRefs) != 2 || len(trace.CharacterRefs) != 2 || len(trace.AssetRefs) != 1 {
+		t.Fatalf("unexpected ref counts: %#v", trace)
+	}
+	if !trace.SerialContinuityPromptAdded || !trace.SerialChainingSourceActive {
+		t.Fatalf("expected serial flags to be true: %#v", trace)
+	}
+}
+
 func TestFetchAssetPromptAnchorsUsesServiceJWT(t *testing.T) {
 	var gotAuth string
 	var gotInternal string

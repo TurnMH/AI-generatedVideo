@@ -473,13 +473,27 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				genReq.SourceImageURL = startURL
 			}
 		}
-		if shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq) {
+		preferredStartEndIdentity := shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq)
+		if preferredStartEndIdentity {
 			genReq.GenerateMode = "startEnd2video"
 		}
+		requestedGenerateMode := genReq.GenerateMode
 		genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, clipAssetRefs)
 		if renderConfigBool(task.RenderConfig, "require_same_character") && len(projectIdentityRefs) > 0 {
 			genReq.CharacterImageURLs = mergeReferenceURLs(projectIdentityRefs, genReq.CharacterImageURLs)
 		}
+		trace := buildClipIdentityTrace(
+			resolvedModelName,
+			requestedGenerateMode,
+			genReq,
+			preferredStartEndIdentity,
+			projectIdentityRefs,
+			clipCharURLs,
+			clipAssetRefs,
+			shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "",
+			shouldChainSerialSource(task, c.SceneSeq, c.SceneGroupKey),
+		)
+		logClipIdentityTrace(s.logger, "clip identity trace", taskID, c.ID, c.ClipOrder, resolvedModelName, trace)
 		s.logger.Info("native-audio request prepared",
 			zap.Int64("task_id", taskID),
 			zap.Int64("clip_id", c.ID),
@@ -1407,10 +1421,24 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 			genReq.SourceImageURL = startURL
 		}
 	}
-	if shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq) {
+	preferredStartEndIdentity := shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq)
+	if preferredStartEndIdentity {
 		genReq.GenerateMode = "startEnd2video"
 	}
+	requestedGenerateMode := genReq.GenerateMode
 	genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, retryClipAssetRefs)
+	trace := buildClipIdentityTrace(
+		resolvedModelName,
+		requestedGenerateMode,
+		genReq,
+		preferredStartEndIdentity,
+		identityAnchorReferences(task.RenderConfig),
+		retryClipCharURLs,
+		retryClipAssetRefs,
+		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
+		shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey),
+	)
+	logClipIdentityTrace(s.logger, "retry clip identity trace", taskID, clip.ID, clip.ClipOrder, resolvedModelName, trace)
 	s.logger.Info("retry clip generation request prepared",
 		zap.Int64("task_id", taskID),
 		zap.Int64("clip_id", clip.ID),
@@ -3660,6 +3688,78 @@ func truncateForPrompt(text string, limit int) string {
 		return text
 	}
 	return string([]rune(text)[:limit]) + "..."
+}
+
+type clipIdentityTrace struct {
+	ModelFamily                 string
+	RequestedGenerateMode       string
+	FinalGenerateMode           string
+	PreferredStartEndIdentity   bool
+	HasSourceImage              bool
+	HasTailImage                bool
+	ProjectIdentityRefs         []string
+	CharacterRefs               []string
+	AssetRefs                   []string
+	SerialContinuityPromptAdded bool
+	SerialChainingSourceActive  bool
+}
+
+func trimReferenceURLs(urls []string, limit int) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	trimmed := make([]string, 0, len(urls))
+	for _, url := range urls {
+		if u := strings.TrimSpace(url); u != "" {
+			trimmed = append(trimmed, u)
+		}
+	}
+	if limit > 0 && len(trimmed) > limit {
+		trimmed = trimmed[:limit]
+	}
+	return trimmed
+}
+
+func buildClipIdentityTrace(modelName string, requestedMode string, finalReq generators.VideoGenerateReq, preferredStartEnd bool, projectIdentityRefs, characterRefs, assetRefs []string, serialPromptAdded, serialChainingSourceActive bool) clipIdentityTrace {
+	return clipIdentityTrace{
+		ModelFamily:                 videoModelFamily(modelName),
+		RequestedGenerateMode:       strings.TrimSpace(requestedMode),
+		FinalGenerateMode:           normalizedGenerateMode(finalReq),
+		PreferredStartEndIdentity:   preferredStartEnd,
+		HasSourceImage:              strings.TrimSpace(finalReq.SourceImageURL) != "",
+		HasTailImage:                strings.TrimSpace(finalReq.TailImageURL) != "",
+		ProjectIdentityRefs:         trimReferenceURLs(projectIdentityRefs, 4),
+		CharacterRefs:               trimReferenceURLs(characterRefs, 4),
+		AssetRefs:                   trimReferenceURLs(assetRefs, 4),
+		SerialContinuityPromptAdded: serialPromptAdded,
+		SerialChainingSourceActive:  serialChainingSourceActive,
+	}
+}
+
+func logClipIdentityTrace(logger *zap.Logger, message string, taskID, clipID int64, clipOrder int, modelName string, trace clipIdentityTrace) {
+	if logger == nil {
+		return
+	}
+	logger.Info(message,
+		zap.Int64("task_id", taskID),
+		zap.Int64("clip_id", clipID),
+		zap.Int("clip_order", clipOrder),
+		zap.String("model", modelName),
+		zap.String("model_family", trace.ModelFamily),
+		zap.String("requested_generate_mode", trace.RequestedGenerateMode),
+		zap.String("final_generate_mode", trace.FinalGenerateMode),
+		zap.Bool("preferred_start_end_identity", trace.PreferredStartEndIdentity),
+		zap.Bool("has_source_image", trace.HasSourceImage),
+		zap.Bool("has_tail_image", trace.HasTailImage),
+		zap.Int("project_identity_ref_count", len(trace.ProjectIdentityRefs)),
+		zap.Strings("project_identity_refs", trace.ProjectIdentityRefs),
+		zap.Int("character_ref_count", len(trace.CharacterRefs)),
+		zap.Strings("character_refs", trace.CharacterRefs),
+		zap.Int("asset_ref_count", len(trace.AssetRefs)),
+		zap.Strings("asset_refs", trace.AssetRefs),
+		zap.Bool("serial_continuity_prompt_added", trace.SerialContinuityPromptAdded),
+		zap.Bool("serial_chaining_source_active", trace.SerialChainingSourceActive),
+	)
 }
 
 func countNonEmptyStrings(items []string) int {
