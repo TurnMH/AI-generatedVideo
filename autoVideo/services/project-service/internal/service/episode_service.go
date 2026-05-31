@@ -5004,18 +5004,7 @@ func enrichSceneDescription(scene llmScene, prevScene *llmScene, kwLib *KeywordL
 		extras = append(extras, eraHint)
 	}
 
-	appearanceMap := buildCharacterAppearanceMap(kwLib)
-	if len(scene.Characters) > 0 {
-		var appearanceNotes []string
-		for _, name := range scene.Characters {
-			if app := strings.TrimSpace(appearanceMap[name]); app != "" {
-				appearanceNotes = append(appearanceNotes, fmt.Sprintf("%s保持%s", name, app))
-			}
-		}
-		if len(appearanceNotes) > 0 {
-			extras = append(extras, "人物造型："+strings.Join(appearanceNotes, "；")+"。")
-		}
-	}
+	_ = buildCharacterAppearanceMap(kwLib)
 
 	if prevScene != nil {
 		sharedLocation := strings.TrimSpace(prevScene.Location) != "" && strings.TrimSpace(prevScene.Location) == strings.TrimSpace(scene.Location)
