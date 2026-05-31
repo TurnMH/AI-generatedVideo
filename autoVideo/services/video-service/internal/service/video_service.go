@@ -3,6 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +35,7 @@ type VideoService struct {
 	generators            map[string]generators.VideoGenerator
 	storageURL            string
 	characterBaseURL      string
+	jwtSecret             string
 	logger                *zap.Logger
 	kafkaWriter           *kafka.Writer
 	kafkaTopic            string
@@ -51,6 +55,7 @@ func NewVideoService(
 	gens []generators.VideoGenerator,
 	storageURL string,
 	characterBaseURL string,
+	jwtSecret string,
 	logger *zap.Logger,
 	maxClips int,
 	localMaxClips int,
@@ -71,6 +76,7 @@ func NewVideoService(
 		generators:       genMap,
 		storageURL:       storageURL,
 		characterBaseURL: characterBaseURL,
+		jwtSecret:        jwtSecret,
 		logger:           logger,
 		maxClips:         maxClips,
 		localMaxClips:    localMaxClips,
@@ -406,7 +412,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// ─── 辅助函数：为单个 clip 构建 VideoGenerateReq 并执行生成 ─────────────────
 	// maxAttempts: 串行模式传 3，并行模式传 6
 	buildAndGenClip := func(c *model.VideoClip, overrideTailURL string, maxAttempts int) error {
-		clipCharURLs := perSceneCharacterImages(characterImageURLs, characterImagesByName, clipScenePersons(perClipSceneChars, c.ClipOrder))
+		projectIdentityRefs := identityAnchorReferences(task.RenderConfig)
+		clipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
+		clipCharURLs := mergeReferenceURLs(projectIdentityRefs, clipCharacterAssetRefs, perSceneCharacterImages(characterImageURLs, characterImagesByName, clipScenePersons(perClipSceneChars, c.ClipOrder)))
 		clipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		assetAnchorHint := perClipAssetAnchorHint(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		prompt := appendAssetAnchorHint(appendCharacterSheetHint(clipMotionPromptWithHints(
@@ -466,6 +474,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			}
 		}
 		genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, clipAssetRefs)
+		if renderConfigBool(task.RenderConfig, "require_same_character") && len(projectIdentityRefs) > 0 {
+			genReq.CharacterImageURLs = mergeReferenceURLs(projectIdentityRefs, genReq.CharacterImageURLs)
+		}
 		s.logger.Info("native-audio request prepared",
 			zap.Int64("task_id", taskID),
 			zap.Int64("clip_id", c.ID),
@@ -1274,6 +1285,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	charDescriptions := s.fetchCharacterDescriptions(ctx, task.ProjectID)
 	retryAllCharURLs, retryCharByName := s.fetchCharacterImageMap(ctx, task.ProjectID)
 	retryAssetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, collectUniqueInt64(perClipAssetIDs))
+	retryClipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	retryClipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	if s.motionPromptSvc != nil {
 		family := videoModelFamily(resolvedModelName)
@@ -1295,7 +1307,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 	}
 
-	retryClipCharURLs := perSceneCharacterImages(retryAllCharURLs, retryCharByName, clipScenePersons(perClipSceneChars, clip.ClipOrder))
+	retryClipCharURLs := mergeReferenceURLs(retryClipCharacterAssetRefs, perSceneCharacterImages(retryAllCharURLs, retryCharByName, clipScenePersons(perClipSceneChars, clip.ClipOrder)))
 	retryPrompt := clipMotionPromptWithHints(
 		clip.ClipOrder, totalClips, perClipDescs,
 		task.MotionMode, task.StylePreset, resolvedModelName,
@@ -3309,6 +3321,35 @@ type videoAssetPromptAnchor struct {
 	Description string
 }
 
+func (s *VideoService) buildServiceToken() string {
+	if strings.TrimSpace(s.jwtSecret) == "" {
+		return ""
+	}
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims, _ := json.Marshal(map[string]interface{}{
+		"user_id":    "1",
+		"role":       "service",
+		"token_type": "access",
+		"iat":        time.Now().Unix(),
+		"exp":        time.Now().Add(5 * time.Minute).Unix(),
+	})
+	payload := base64.RawURLEncoding.EncodeToString(claims)
+	unsigned := header + "." + payload
+	mac := hmac.New(sha256.New, []byte(s.jwtSecret))
+	_, _ = mac.Write([]byte(unsigned))
+	return unsigned + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *VideoService) applyInternalAuth(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if token := s.buildServiceToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Internal-Service", "video-service")
+	}
+}
+
 func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID int64, assetIDs []int64) map[int64]videoAssetPromptAnchor {
 	if s.characterBaseURL == "" || len(assetIDs) == 0 {
 		return nil
@@ -3331,6 +3372,7 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 	if err != nil {
 		return nil
 	}
+	s.applyInternalAuth(req)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -3371,6 +3413,37 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 		}
 	}
 	return out
+}
+
+func perClipCharacterAssetReferenceImages(sceneAssetIDs [][]int64, anchorMap map[int64]videoAssetPromptAnchor, clipIndex int) []string {
+	if clipIndex < 0 || clipIndex >= len(sceneAssetIDs) || len(anchorMap) == 0 {
+		return nil
+	}
+	const maxCharacterRefs = 2
+	seen := make(map[string]struct{}, maxCharacterRefs)
+	refs := make([]string, 0, maxCharacterRefs)
+	for _, assetID := range sceneAssetIDs[clipIndex] {
+		anchor, ok := anchorMap[assetID]
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(anchor.Type), "character") {
+			continue
+		}
+		url := strings.TrimSpace(anchor.ImageURL)
+		if url == "" {
+			continue
+		}
+		if _, dup := seen[url]; dup {
+			continue
+		}
+		seen[url] = struct{}{}
+		refs = append(refs, url)
+		if len(refs) >= maxCharacterRefs {
+			break
+		}
+	}
+	return refs
 }
 
 func perClipAssetReferenceImages(sceneAssetIDs [][]int64, anchorMap map[int64]videoAssetPromptAnchor, clipIndex int) []string {
@@ -3428,6 +3501,19 @@ func mergeReferenceURLs(groups ...[]string) []string {
 		}
 	}
 	return merged
+}
+
+func identityAnchorReferences(renderConfig model.RenderConfig) []string {
+	if len(renderConfig) == 0 {
+		return nil
+	}
+	var refs []string
+	for _, key := range []string{"character_anchor_image_url", "approved_first_frame_image_url", "start_image_url"} {
+		if url := renderConfigString(renderConfig, key); url != "" {
+			refs = append(refs, url)
+		}
+	}
+	return mergeReferenceURLs(refs)
 }
 
 func generatorSupportsReferenceImages(modelName string) bool {
@@ -4113,6 +4199,7 @@ func (s *VideoService) fetchCharacterImageMap(ctx context.Context, projectID int
 		if err != nil {
 			break
 		}
+		s.applyInternalAuth(req)
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -4157,6 +4244,7 @@ func (s *VideoService) fetchCharacterImageMap(ctx context.Context, projectID int
 	if s.characterBaseURL != "" {
 		charURL := fmt.Sprintf("%s/api/v1/characters?project_id=%d&page=1&page_size=200", s.characterBaseURL, projectID)
 		if req, err := http.NewRequestWithContext(ctx, http.MethodGet, charURL, nil); err == nil {
+			s.applyInternalAuth(req)
 			client := &http.Client{Timeout: 5 * time.Second}
 			if resp, err := client.Do(req); err == nil {
 				var cr struct {
@@ -4239,6 +4327,7 @@ func (s *VideoService) fetchCharacterDescriptions(ctx context.Context, projectID
 		if err != nil {
 			break
 		}
+		s.applyInternalAuth(req)
 		resp, err := client.Do(req)
 		if err != nil {
 			break
@@ -4271,6 +4360,7 @@ func (s *VideoService) fetchCharacterDescriptions(ctx context.Context, projectID
 	// covered by an asset's PromptUsed.
 	charURL := fmt.Sprintf("%s/api/v1/characters?project_id=%d&page=1&page_size=200", s.characterBaseURL, projectID)
 	if req, err := http.NewRequestWithContext(ctx, http.MethodGet, charURL, nil); err == nil {
+		s.applyInternalAuth(req)
 		if resp, err := client.Do(req); err == nil {
 			var cr struct {
 				Data struct {
