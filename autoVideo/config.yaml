@@ -201,6 +201,17 @@ video-service:
     kling_omni_model: "kling-v3-omni"
     aiping_key: "replace-with-aiping-key"
     aiping_base: "https://aiping.cn"
+    aiping_model: "kling-v3"
+    minmax_key: "replace-with-minmax-key"
+    minmax_base: "https://api.wavespeed.ai"
+    minmax_model: "MiniMax-Hailuo-02"
+    # dumps1 历史线索表明 Hailuo 2.3 常见 fast 路径为 /api/v3/minimax/hailuo-2.3/fast；
+    # 当前实现会按 model 家族自动切换 02 / 2.3 默认端点，下面仅用于显式覆盖。
+    minmax_img2video_endpoint_std: "/api/v3/minimax/hailuo-02/standard"
+    minmax_img2video_endpoint_pro: "/api/v3/minimax/hailuo-02/pro"
+    minmax_img2video_endpoint_fast: "/api/v3/minimax/hailuo-02/fast"
+    minmax_query_endpoint: "/api/v3/predictions/{requestId}/result"
+    minmax_file_retrieve_endpoint: "/v1/files/retrieve"
     vclm_secret_id: "replace-with-vclm-secret-id"
     vclm_secret_key: "replace-with-vclm-secret-key"
     vclm_region: "ap-guangzhou"

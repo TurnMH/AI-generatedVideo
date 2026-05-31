@@ -51,45 +51,45 @@ type Config struct {
 		KlingKeys       []string `mapstructure:"kling_keys"` // multi-key pool for rotation
 		KlingBase       string   `mapstructure:"kling_base"`
 		KlingSecret     string   `mapstructure:"kling_secret"` // Tencent Cloud SecretKey (paired with kling_key as SecretId)
-		WanKey          string `mapstructure:"wan_key"`    // Volcengine Access Key ID
-		WanSecret       string `mapstructure:"wan_secret"` // Volcengine Secret Access Key
-		WanBase         string `mapstructure:"wan_base"`
-		ComfyUIURL      string `mapstructure:"comfyui_url"`
-		ComfyUIWorkflow string `mapstructure:"comfyui_workflow"`
+		WanKey          string   `mapstructure:"wan_key"`      // Volcengine Access Key ID
+		WanSecret       string   `mapstructure:"wan_secret"`   // Volcengine Secret Access Key
+		WanBase         string   `mapstructure:"wan_base"`
+		ComfyUIURL      string   `mapstructure:"comfyui_url"`
+		ComfyUIWorkflow string   `mapstructure:"comfyui_workflow"`
 		// char-c5: IP-Adapter model for character reference in ComfyUI workflow
 		ComfyUIIPAdapter string `mapstructure:"comfyui_ipadapter"`
 		// char-c6: LoRA model and weight for character style binding
-		ComfyUILoRAModel  string  `mapstructure:"comfyui_lora_model"`
-		ComfyUILoRAWeight float64 `mapstructure:"comfyui_lora_weight"`
-		Sora2Key        string `mapstructure:"sora2_key"`
-		Sora2Base       string `mapstructure:"sora2_base"`
-		HubagiKey       string `mapstructure:"hubagi_key"`
-		HubagiBase      string `mapstructure:"hubagi_base"`
-		HubagiModel     string `mapstructure:"hubagi_model"`
-		VeoKey          string `mapstructure:"veo_key"`
-		VeoBase         string `mapstructure:"veo_base"`
-		VeoModel        string `mapstructure:"veo_model"`
-		DoubaoKey              string `mapstructure:"doubao_key"`
-		DoubaoBase             string `mapstructure:"doubao_base"`
-		DoubaoModel            string `mapstructure:"doubao_model"`
-		DoubaoSeedanceKey      string `mapstructure:"doubao_seedance_key"`
-		DoubaoSeedanceBase     string `mapstructure:"doubao_seedance_base"`
-		DoubaoSeedanceModel    string `mapstructure:"doubao_seedance_model"`
-		ViduKey                string `mapstructure:"vidu_key"`
-		ViduOffpeakKey         string `mapstructure:"vidu_offpeak_key"`
-		ViduBase               string `mapstructure:"vidu_base"`
-		ViduModel              string `mapstructure:"vidu_model"`
-		ViduMixModel           string `mapstructure:"vidu_mix_model"`
-		SuannengKey     string `mapstructure:"suanneng_key"`
-		SuannengBase    string `mapstructure:"suanneng_base"`
-		SuannengModel   string `mapstructure:"suanneng_model"`
-		GagaKey         string `mapstructure:"gaga_key"`
-		GagaBase        string `mapstructure:"gaga_base"`
+		ComfyUILoRAModel    string  `mapstructure:"comfyui_lora_model"`
+		ComfyUILoRAWeight   float64 `mapstructure:"comfyui_lora_weight"`
+		Sora2Key            string  `mapstructure:"sora2_key"`
+		Sora2Base           string  `mapstructure:"sora2_base"`
+		HubagiKey           string  `mapstructure:"hubagi_key"`
+		HubagiBase          string  `mapstructure:"hubagi_base"`
+		HubagiModel         string  `mapstructure:"hubagi_model"`
+		VeoKey              string  `mapstructure:"veo_key"`
+		VeoBase             string  `mapstructure:"veo_base"`
+		VeoModel            string  `mapstructure:"veo_model"`
+		DoubaoKey           string  `mapstructure:"doubao_key"`
+		DoubaoBase          string  `mapstructure:"doubao_base"`
+		DoubaoModel         string  `mapstructure:"doubao_model"`
+		DoubaoSeedanceKey   string  `mapstructure:"doubao_seedance_key"`
+		DoubaoSeedanceBase  string  `mapstructure:"doubao_seedance_base"`
+		DoubaoSeedanceModel string  `mapstructure:"doubao_seedance_model"`
+		ViduKey             string  `mapstructure:"vidu_key"`
+		ViduOffpeakKey      string  `mapstructure:"vidu_offpeak_key"`
+		ViduBase            string  `mapstructure:"vidu_base"`
+		ViduModel           string  `mapstructure:"vidu_model"`
+		ViduMixModel        string  `mapstructure:"vidu_mix_model"`
+		SuannengKey         string  `mapstructure:"suanneng_key"`
+		SuannengBase        string  `mapstructure:"suanneng_base"`
+		SuannengModel       string  `mapstructure:"suanneng_model"`
+		GagaKey             string  `mapstructure:"gaga_key"`
+		GagaBase            string  `mapstructure:"gaga_base"`
 		// 百度 BCE 视频生成（BCE-AUTH-V1 签名）
 		BaiduBCEKey    string `mapstructure:"baidu_bce_key"`
 		BaiduBCESecret string `mapstructure:"baidu_bce_secret"`
 		BaiduBCEModel  string `mapstructure:"baidu_bce_model"` // V10/V15/V20/VQ1
-		ReplicateKey    string `mapstructure:"replicate_key"`
+		ReplicateKey   string `mapstructure:"replicate_key"`
 		// RunningHub cloud ComfyUI (opt-p3)
 		RunningHubKey      string `mapstructure:"runninghub_key"`
 		RunningHubBase     string `mapstructure:"runninghub_base"`
@@ -99,15 +99,26 @@ type Config struct {
 		UploadPostKey string `mapstructure:"upload_post_key"`
 		UploadPostURL string `mapstructure:"upload_post_url"`
 		// Kling 3.0 (星澜3.0) — same APPID/Secret as kling_key/kling_secret but with v3 model names
-		KlingModel      string `mapstructure:"kling_model"`      // e.g. "kling-v3" for v3.0
-		KlingOmniModel  string `mapstructure:"kling_omni_model"` // e.g. "kling-v3-omni" for fusion
+		KlingModel     string `mapstructure:"kling_model"`      // e.g. "kling-v3" for v3.0
+		KlingOmniModel string `mapstructure:"kling_omni_model"` // e.g. "kling-v3-omni" for fusion
 		// aiping channel (Kling-compatible API for high-concurrency scenarios)
-		AipingKey  string `mapstructure:"aiping_key"`
-		AipingBase string `mapstructure:"aiping_base"`
-		// Tencent VCLM (vclm.tencentcloudapi.com) — TC3-HMAC-SHA256 signing
-		VclmSecretID  string `mapstructure:"vclm_secret_id"`
-		VclmSecretKey string `mapstructure:"vclm_secret_key"`
-		VclmRegion    string `mapstructure:"vclm_region"` // default: ap-guangzhou
+		AipingKey   string `mapstructure:"aiping_key"`
+		AipingBase  string `mapstructure:"aiping_base"`
+		AipingModel string `mapstructure:"aiping_model"`
+		// MiniMax / Hailuo
+		MinMaxKey                  string `mapstructure:"minmax_key"`
+		MinMaxBase                 string `mapstructure:"minmax_base"`
+		MinMaxModel                string `mapstructure:"minmax_model"`
+		MinMaxImg2VideoEndpointStd  string `mapstructure:"minmax_img2video_endpoint_std"`
+		MinMaxImg2VideoEndpointPro  string `mapstructure:"minmax_img2video_endpoint_pro"`
+		MinMaxImg2VideoEndpointFast string `mapstructure:"minmax_img2video_endpoint_fast"`
+		MinMaxQueryEndpoint         string `mapstructure:"minmax_query_endpoint"`
+		MinMaxFileRetrieveEndpoint string `mapstructure:"minmax_file_retrieve_endpoint"`
+		MinMaxFastPretreatment     string `mapstructure:"minmax_fast_pretreatment"`
+		MinMaxPromptOptimizer      string `mapstructure:"minmax_prompt_optimizer"`
+		VclmSecretID               string `mapstructure:"vclm_secret_id"`
+		VclmSecretKey              string `mapstructure:"vclm_secret_key"`
+		VclmRegion                 string `mapstructure:"vclm_region"` // default: ap-guangzhou
 		// LLM for video motion prompt refinement (opt-motion-llm)
 		// Uses any OpenAI-compatible endpoint; defaults to sora2 channel if unset.
 		LLMKey   string `mapstructure:"llm_key"`
@@ -127,8 +138,8 @@ type Config struct {
 
 	Concurrency struct {
 		MaxClips      int `mapstructure:"max_clips"`
-		LocalMaxClips int `mapstructure:"local_max_clips"`  // clips per task for local models (ComfyUI)
-		MaxKafkaTasks int `mapstructure:"max_kafka_tasks"`  // concurrent Kafka video tasks
+		LocalMaxClips int `mapstructure:"local_max_clips"` // clips per task for local models (ComfyUI)
+		MaxKafkaTasks int `mapstructure:"max_kafka_tasks"` // concurrent Kafka video tasks
 	} `mapstructure:"concurrency"`
 	AuthService struct {
 		BaseURL string `mapstructure:"base_url"`
@@ -156,13 +167,22 @@ func Load() (*Config, error) {
 	viper.SetDefault("kafka.consumer_group", "video-service")
 	viper.SetDefault("kafka.consumer_topic", "video.generate.request")
 	viper.SetDefault("kafka.producer_topic", "video.generate.result")
-	viper.SetDefault("models.kling_base", "https://api.klingai.com")
-	viper.SetDefault("models.wan_base", "https://visual.volcengineapi.com")
+	viper.SetDefault("models.aiping_base", "https://aiping.cn")
+	viper.SetDefault("models.aiping_model", "kling-v3")
+	viper.SetDefault("models.minmax_base", "https://api.wavespeed.ai")
+	viper.SetDefault("models.minmax_model", "MiniMax-Hailuo-02")
+	viper.SetDefault("models.minmax_img2video_endpoint_std", "/api/v3/minimax/hailuo-02/standard")
+	viper.SetDefault("models.minmax_img2video_endpoint_pro", "/api/v3/minimax/hailuo-02/pro")
+	viper.SetDefault("models.minmax_img2video_endpoint_fast", "/api/v3/minimax/hailuo-02/fast")
+	viper.SetDefault("models.minmax_query_endpoint", "/api/v3/predictions/{requestId}/result")
+	viper.SetDefault("models.minmax_file_retrieve_endpoint", "/v1/files/retrieve")
+	viper.SetDefault("models.minmax_fast_pretreatment", "")
+	viper.SetDefault("models.minmax_prompt_optimizer", "")
 	viper.SetDefault("models.llm_model", "gpt-4.1-mini") // opt-motion-llm
 	viper.SetDefault("models.music_base", "https://api.siliconflow.cn")
 	viper.SetDefault("models.music_model", "fishaudio/fish-speech-1.5")
 	viper.SetDefault("concurrency.max_clips", 10)
-	viper.SetDefault("concurrency.local_max_clips", 1)  // local GPU: 1 clip at a time
+	viper.SetDefault("concurrency.local_max_clips", 1) // local GPU: 1 clip at a time
 	viper.SetDefault("concurrency.max_kafka_tasks", 3)
 	viper.SetDefault("auth_service.base_url", "http://localhost:8001")
 	viper.SetDefault("gateway.addr", "http://localhost:8000")

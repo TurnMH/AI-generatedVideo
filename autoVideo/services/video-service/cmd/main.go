@@ -61,6 +61,8 @@ func runtimeProviderForGeneratorName(name string) string {
 		return "runtime.video.vidu.offpeak"
 	case "suanneng":
 		return "runtime.video.suanneng"
+	case "minmax":
+		return "runtime.video.minmax"
 	case "gaga":
 		return "runtime.video.gaga"
 	case "baidu-bce":
@@ -140,8 +142,8 @@ func main() {
 		}
 		aipingGen := generators.NewKlingGeneratorWithKeys(aipingBase, cfg.Models.AipingKey)
 		aipingModel := "kling-v3"
-		if cfg.Models.KlingModel != "" {
-			aipingModel = cfg.Models.KlingModel
+		if cfg.Models.AipingModel != "" {
+			aipingModel = cfg.Models.AipingModel
 		}
 		aipingGen.WithModel(aipingModel)
 		aipingGen.WithName("aiping")
@@ -248,6 +250,18 @@ func main() {
 		gen := generators.NewSuannengGenerator(cfg.Models.SuannengKey, cfg.Models.SuannengBase, cfg.Models.SuannengModel)
 		gens = append(gens, gen)
 		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.SuannengModel, BaseHint: cfg.Models.SuannengBase})
+	}
+	if cfg.Models.MinMaxKey != "" {
+		minmaxBase := cfg.Models.MinMaxBase
+		if minmaxBase == "" {
+			minmaxBase = "https://api.wavespeed.ai"
+		}
+		minmaxGen := generators.NewMinMaxGenerator(cfg.Models.MinMaxKey, minmaxBase, cfg.Models.MinMaxModel,
+			generators.WithMinMaxEndpoints(cfg.Models.MinMaxImg2VideoEndpointStd, cfg.Models.MinMaxImg2VideoEndpointPro, cfg.Models.MinMaxImg2VideoEndpointFast, cfg.Models.MinMaxQueryEndpoint, cfg.Models.MinMaxFileRetrieveEndpoint),
+			generators.WithMinMaxFlags(cfg.Models.MinMaxFastPretreatment, cfg.Models.MinMaxPromptOptimizer),
+		)
+		gens = append(gens, minmaxGen)
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: minmaxGen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(minmaxGen.Name()), NativeAudio: minmaxGen.SupportsNativeAudio(), Available: true, ModelHint: cfg.Models.MinMaxModel, BaseHint: minmaxBase})
 	}
 	if cfg.Models.GagaKey != "" {
 		gen := generators.NewGagaGenerator(cfg.Models.GagaKey, cfg.Models.GagaBase, "gaga-1")
