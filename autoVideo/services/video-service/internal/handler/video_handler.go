@@ -1164,7 +1164,7 @@ func (h *VideoHandler) ResumeVideo(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{"task_id": vid, "status": model.StatusProcessing})
+	response.OK(c, gin.H{"task_id": vid, "status": model.StatusPending})
 }
 
 // ExportVideo —— 返回已完成视频的导出信息（URL、格式、时长等）

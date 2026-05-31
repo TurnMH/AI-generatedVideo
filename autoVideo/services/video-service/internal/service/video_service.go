@@ -231,8 +231,8 @@ func (s *VideoService) PauseTask(ctx context.Context, taskID int64) error {
 	return s.repo.UpdateTaskStatus(ctx, taskID, model.StatusPaused, "", "", 0)
 }
 
-// ResumeTask —— 将暂停的任务恢复为处理中状态
-// ResumeTask transitions a task from paused back to pending.
+// ResumeTask —— 将暂停的任务恢复为待分发状态
+// ResumeTask transitions a task from paused back to pending so the dispatcher can continue it.
 func (s *VideoService) ResumeTask(ctx context.Context, taskID int64) error {
 	task, err := s.repo.GetTask(ctx, taskID)
 	if err != nil {
@@ -241,7 +241,10 @@ func (s *VideoService) ResumeTask(ctx context.Context, taskID int64) error {
 	if task.Status != model.StatusPaused {
 		return fmt.Errorf("cannot resume task in status %q", task.Status)
 	}
-	return s.repo.UpdateTaskStatus(ctx, taskID, model.StatusProcessing, "", "", 0)
+	if err := s.repo.UpdateTaskStatus(ctx, taskID, model.StatusPending, "", "", 0); err != nil {
+		return err
+	}
+	return s.DispatchTask(ctx, task)
 }
 
 // ProcessTask —— 驱动完整的视频生成流水线：生成片段、拼接、添加音频字幕并上传
@@ -1852,9 +1855,9 @@ func videoModelDisplayLabel(key, providerModel string) string {
 		}
 		return "算能-视频生成-标准版"
 	case "hubagi-voe3.1":
-		return "Hubagi-Veo-3.1"
+		return "Google-Veo-3.1"
 	case "hubagi-TC-GV":
-		return "Hubagi-TC-GV-标准版"
+		return "Google-TC-GV-标准版"
 	case "sora2":
 		return "OpenAI-Sora-2"
 	case "comfyui-video":

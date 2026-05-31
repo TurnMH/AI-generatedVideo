@@ -113,8 +113,8 @@ function getFallbackVideoModelLabel(key: string) {
     doubao: '豆包-视频生成-标准版',
     'doubao-seedance': '豆包-Seedance-2.0',
     suanneng: '算能-视频生成-标准版',
-    'hubagi-voe3.1': 'Hubagi-Veo-3.1',
-    'hubagi-TC-GV': 'Hubagi-TC-GV-标准版',
+    'hubagi-voe3.1': 'Google-Veo-3.1',
+    'hubagi-TC-GV': 'Google-TC-GV-标准版',
     sora2: 'OpenAI-Sora-2',
     'comfyui-video': 'ComfyUI-Video-本地版',
     runninghub: 'RunningHub-Video-标准版',
@@ -809,8 +809,9 @@ ${paceBlock}`
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && (firstStoryboardImageReady || serialVideoSeedReady)
+  const latestTaskIsPaused = String(latestTask?.status || '').toLowerCase() === 'paused'
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = step1Done && serialVideoSeedReady && step3ConfigReady
+  const step3Enabled = latestTaskIsPaused || (step1Done && serialVideoSeedReady && step3ConfigReady)
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -855,19 +856,21 @@ ${paceBlock}`
             ? '参考图已经齐了，下一步只需要生成第 1 张分镜图；其余分镜只展示文本，不再继续批量生成图片。'
             : '当前范围的第 1 张分镜图已经就绪，步骤 2 可以视为完成。'
 
-  const step3Hint = !step3Enabled
-    ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
-    : !step3ConfigReady
-      ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
-      : step3Running
-        ? '当前已经有视频任务在执行，先等这一轮结果。'
-      : completedStoryboardImages === 0
-        ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
-        : !step2Done
-          ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
-          : step3Done
-            ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
-            : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
+  const step3Hint = latestTaskIsPaused
+    ? '检测到上一步有已暂停但未完成的视频任务；这里会优先继续旧任务，而不是重新新建一条视频任务。'
+    : !step3Enabled
+      ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
+      : !step3ConfigReady
+        ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
+        : step3Running
+          ? '当前已经有视频任务在执行，先等这一轮结果。'
+        : completedStoryboardImages === 0
+          ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
+          : !step2Done
+            ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
+            : step3Done
+              ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
+              : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1219,6 +1222,22 @@ ${paceBlock}`
   const startScopedVideoGeneration = async () => {
     if (!acquireActionLock('video-start')) {
       toast({ title: '步骤 3 已在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+
+    if (latestTask && String(latestTask.status || '').toLowerCase() === 'paused') {
+      setGenerationAction('video-start')
+      try {
+        await videoAPI.resume(projectId, latestTask.id)
+        await refreshAll()
+        await mutateLatestTaskDetail()
+        toast({ title: '已从上一步暂停处继续未完成的视频任务', variant: 'success' })
+      } catch (error) {
+        toast({ title: error instanceof Error ? error.message : '继续未完成视频任务失败', variant: 'destructive' })
+      } finally {
+        setGenerationAction(null)
+        releaseActionLock('video-start')
+      }
       return
     }
 
@@ -1640,7 +1659,7 @@ ${paceBlock}`
 
                   {videoModelMismatch && (
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
-                      当前项目创建时保存的视频模型是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedConstraintModelLabel || selectedGenerationModelLabel || '未选择'}`。请确认运行态模型配置是否变更。
+                      当前项目创建时保存的视频模型 key 是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedConstraintModelLabel || selectedGenerationModelLabel || '未选择'}` 这个展示模型。请确认运行态模型配置是否变更。
                     </div>
                   )}
 
@@ -1934,10 +1953,10 @@ ${paceBlock}`
                             const suffix = item.available
                               ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，参数需手动补齐）` : ''
                               : '（当前运行态不可用）'
-                            return <option key={item.key} value={item.key} disabled={!item.available}>{item.key}{suffix}</option>
+                            return <option key={item.key} value={item.key} disabled={!item.available}>{formatVideoModelLabel(item, item.key)}{suffix}</option>
                           })}
                         </select>
-                        <div className="text-[11px] text-emerald-100/75">这里选择的是步骤 3 真正提交给 video-service 的 `model_name`；如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
+                        <div className="text-[11px] text-emerald-100/75">这里展示的是步骤 3 的模型名称；实际提交给 video-service 的仍然是内部 `model_name` / key。如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
                       </div>
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
@@ -2039,10 +2058,14 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || !splitConfigReady || !serialVideoSeedReady}
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !serialVideoSeedReady))}
                       onClick={() => void startScopedVideoGeneration()}
                     >
-                      {generationAction === 'video-start' ? '正在提交视频任务…' : '开始生成整条广告视频'}
+                      {generationAction === 'video-start'
+                        ? '正在提交/继续视频任务…'
+                        : latestTaskIsPaused
+                          ? '从上一步暂停处继续未完成任务'
+                          : '开始生成整条广告视频'}
                     </Button>
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
