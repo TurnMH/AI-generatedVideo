@@ -388,33 +388,39 @@ func summarizeRouteCoverage(task *model.VideoTask) routeCoverageSummary {
 }
 
 type generateReq struct {
-	ProjectID                  int64              `json:"project_id" binding:"required"`
-	EpisodeID                  *int64             `json:"episode_id"`
-	ImageURLs                  []string           `json:"image_urls"`
-	SceneDescriptions          []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
-	Dialogues                  []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
-	MotionDescs                []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
-	SpatialAnchors             []string           `json:"spatial_anchors"`
-	SubjectPositions           []string           `json:"subject_positions"`
-	TransitionNotes            []string           `json:"transition_notes"`
-	SceneCharacters            [][]string         `json:"scene_characters"`
-	StylePreset                string             `json:"style_preset"`
-	MotionMode                 string             `json:"motion_mode"`
-	ModelName                  string             `json:"model_name"`
-	AudioURL                   string             `json:"audio_url"`
-	SubtitleText               string             `json:"subtitle_text"`
-	SceneDescription           string             `json:"scene_description"`
-	RenderConfig               model.RenderConfig `json:"render_config"`
-	ClipDurationSec            float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
-	SerialScene                bool               `json:"serial_scene"`
-	SceneGroupKeys             []string           `json:"scene_group_keys"`
-	CharacterConsistencyEnabled bool              `json:"character_consistency_enabled"`
-	RequireSameCharacter       bool               `json:"require_same_character"`
-	CharacterAnchorAssetID     int64              `json:"character_anchor_asset_id"`
-	CharacterAnchorImageURL    string             `json:"character_anchor_image_url"`
-	CharacterAnchorSource      string             `json:"character_anchor_source"`
-	IdentityConstraints        []string           `json:"identity_constraints"`
-	SameCharacterAsFirstScene  bool               `json:"same_character_as_first_scene"`
+	ProjectID                   int64              `json:"project_id" binding:"required"`
+	EpisodeID                   *int64             `json:"episode_id"`
+	ImageURLs                   []string           `json:"image_urls"`
+	SceneDescriptions           []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
+	Dialogues                   []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
+	MotionDescs                 []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
+	Durations                   []float64          `json:"durations"`          // per-clip duration in seconds
+	CameraMovements             []string           `json:"camera_movements"`
+	Moods                       []string           `json:"moods"`
+	SpatialAnchors              []string           `json:"spatial_anchors"`
+	SubjectPositions            []string           `json:"subject_positions"`
+	TransitionNotes             []string           `json:"transition_notes"`
+	SceneCharacters             [][]string         `json:"scene_characters"`
+	SceneAssetIDs               [][]int64          `json:"scene_asset_ids"`
+	StylePreset                 string             `json:"style_preset"`
+	MotionMode                  string             `json:"motion_mode"`
+	ModelName                   string             `json:"model_name"`
+	AudioURL                    string             `json:"audio_url"`
+	SubtitleText                string             `json:"subtitle_text"`
+	VideoMode                   string             `json:"video_mode"`
+	ExportFormat                string             `json:"export_format"`
+	SceneDescription            string             `json:"scene_description"`
+	RenderConfig                model.RenderConfig `json:"render_config"`
+	ClipDurationSec             float64            `json:"clip_duration_sec"` // desired clip duration from project storyboard_config
+	SerialScene                 bool               `json:"serial_scene"`
+	SceneGroupKeys              []string           `json:"scene_group_keys"`
+	CharacterConsistencyEnabled bool               `json:"character_consistency_enabled"`
+	RequireSameCharacter        bool               `json:"require_same_character"`
+	CharacterAnchorAssetID      int64              `json:"character_anchor_asset_id"`
+	CharacterAnchorImageURL     string             `json:"character_anchor_image_url"`
+	CharacterAnchorSource       string             `json:"character_anchor_source"`
+	IdentityConstraints         []string           `json:"identity_constraints"`
+	SameCharacterAsFirstScene   bool               `json:"same_character_as_first_scene"`
 }
 
 type extractVideoContentReq struct {
@@ -493,6 +499,18 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	if len(req.MotionDescs) > 0 {
 		req.RenderConfig["motion_descs"] = req.MotionDescs
 	}
+	if len(req.Durations) > 0 {
+		req.RenderConfig["durations"] = req.Durations
+	}
+	if len(req.CameraMovements) > 0 {
+		req.RenderConfig["camera_movements"] = req.CameraMovements
+	}
+	if len(req.Moods) > 0 {
+		req.RenderConfig["moods"] = req.Moods
+	}
+	if len(req.SceneAssetIDs) > 0 {
+		req.RenderConfig["scene_asset_ids"] = req.SceneAssetIDs
+	}
 
 	task := &model.VideoTask{
 		ProjectID:        req.ProjectID,
@@ -505,6 +523,8 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 		SubtitleText:     req.SubtitleText,
 		ModelName:        req.ModelName,
 		RequestedModel:   req.ModelName,
+		VideoMode:        setDefault(req.VideoMode, "frame_animation"),
+		ExportFormat:     setDefault(req.ExportFormat, "mp4"),
 		SceneDescription: req.SceneDescription,
 		RenderConfig:     req.RenderConfig,
 		DurationSec:      req.ClipDurationSec,
