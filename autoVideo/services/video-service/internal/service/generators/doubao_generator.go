@@ -317,8 +317,11 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		}
 
 	default:
-		// img2video（默认）: image_url (no role) + text
-		content = make([]doubaoContentItem, 0, 2)
+		// img2video（默认）: source image + text + reference_image items.
+		// 对 Seedance/豆包串行链路，后续 clip 常会把上一段尾帧作为 source。
+		// 如果这里不继续附带角色 identity refs，请求就会退化成“只靠上一段生成结果续写”，
+		// 真人角色会在多段续写里逐渐串脸/漂移。
+		content = make([]doubaoContentItem, 0, 2+len(req.CharacterImageURLs))
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
@@ -329,6 +332,16 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 			Type: "text",
 			Text: textPrompt,
 		})
+		for _, imgURL := range req.CharacterImageURLs {
+			if strings.TrimSpace(imgURL) == "" {
+				continue
+			}
+			content = append(content, doubaoContentItem{
+				Type:     "image_url",
+				Role:     "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
+			})
+		}
 	}
 
 	body := doubaoSubmitReq{

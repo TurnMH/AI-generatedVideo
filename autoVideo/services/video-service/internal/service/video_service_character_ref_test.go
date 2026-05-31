@@ -111,6 +111,21 @@ func TestShouldPreferStartEndIdentityModeForDoubaoSameCharacter(t *testing.T) {
 	}
 }
 
+func TestNormalizeVideoGenerateReqKeepsImg2VideoForDoubaoWhenSourcePresent(t *testing.T) {
+	req := generators.VideoGenerateReq{
+		SourceImageURL:     "https://example.com/current-first.png",
+		CharacterImageURLs: []string{"https://example.com/identity-anchor.png"},
+		GenerateMode:       "",
+	}
+	got := normalizeVideoGenerateReq(testVideoGenerator{}, "doubao-seedance", req, nil)
+	if got.GenerateMode != "" {
+		t.Fatalf("got.GenerateMode=%q, want empty so downstream doubao img2video path can carry source + reference_image", got.GenerateMode)
+	}
+	if len(got.CharacterImageURLs) != 1 || got.CharacterImageURLs[0] != "https://example.com/identity-anchor.png" {
+		t.Fatalf("got.CharacterImageURLs=%v", got.CharacterImageURLs)
+	}
+}
+
 func TestClipMotionPromptChineseFamilyForDoubaoIncludesReferenceSections(t *testing.T) {
 	prompt := clipMotionPromptChineseFamily(1, 3, "人物从门口快步走向镜头", "cinematic", "live-action-short", "doubao", nil, "")
 	for _, want := range []string{
