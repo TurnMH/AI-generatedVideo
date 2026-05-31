@@ -3850,7 +3850,7 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 	case "anime-3d":
 		return fmt.Sprintf("【全局风格锁定】%s，全片材质与渲染风格保持一致。%s", styleCN, charDescriptions)
 	case "live-action-film", "live-action-short":
-		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与演员外貌保持高度一致。%s", styleCN, charDescriptions)
+		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与演员外貌保持高度一致；同一人物在所有镜头中必须保持同一张脸、相同发型、相同眼镜、相同服装剪裁与配色、相近体型，不允许逐镜头发生五官漂移、年龄变化、发型变化或服装变形。%s", styleCN, charDescriptions)
 	default:
 		if charDescriptions != "" {
 			return fmt.Sprintf("全片风格统一，保持一致的视觉基调。%s", charDescriptions)
@@ -3862,7 +3862,7 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 // buildGlobalStyleAnchorEN is the English variant for Sora/Veo/generic models.
 func buildGlobalStyleAnchorEN(stylePreset, charDescriptions string) string {
 	style := describeVideoStyle(stylePreset)
-	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips", style)
+	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips; the same character must keep the same face identity, hairstyle, glasses, outfit silhouette/colors, and body shape across every shot, with no identity drift or appearance mutation", style)
 	if charDescriptions != "" {
 		base += "; consistent character appearance: " + charDescriptions
 	}
@@ -3943,9 +3943,9 @@ func motionPromptChinese(motionMode, stylePreset, sceneDescription string, rende
 	default:
 		basePart = "轻柔运动，流畅过渡，克制的镜头漂移"
 	}
-	qualityPart := "主体身份稳定，骨骼结构清晰，光影自然，服装和头发运动真实，画面连贯流畅"
+	qualityPart := "主体身份稳定，保持同一张脸、同一发型、同一眼镜、同一服装配色与版型，骨骼结构清晰，光影自然，服装和头发运动真实，画面连贯流畅"
 	renderPart := describeRenderConfig(renderConfig)
-	negativePart := "避免：画面闪烁，帧抖动，身份漂移，扭曲肢体，多余手指，文字叠加，水印"
+	negativePart := "避免：画面闪烁，帧抖动，身份漂移，脸部变化，发型变化，服装变形，扭曲肢体，多余手指，文字叠加，水印"
 
 	parts := []string{stylePart, basePart, qualityPart}
 	if sceneDescription != "" {

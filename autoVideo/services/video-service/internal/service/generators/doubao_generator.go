@@ -14,13 +14,13 @@ import (
 // DoubaoGenerator wraps the ByteDance Ark video generation API.
 // Supports models: V4.0 (xingguang-3.0), doubao-seedream-4-0-250828 (doubao-seedance), etc.
 type DoubaoGenerator struct {
-	APIKey         string
-	BaseURL        string // e.g. "https://ark.cn-beijing.volces.com"
-	Model          string // e.g. "V4.0" or "doubao-seedream-4-0-250828"
-	genName        string // canonical name returned by Name()
-	supportsAudio  bool   // true for seedance models that support generate_audio
-	supportsRatio  bool   // true for seedance models that support ratio/aspect_ratio
-	client         *http.Client
+	APIKey        string
+	BaseURL       string // e.g. "https://ark.cn-beijing.volces.com"
+	Model         string // e.g. "V4.0" or "doubao-seedream-4-0-250828"
+	genName       string // canonical name returned by Name()
+	supportsAudio bool   // true for seedance models that support generate_audio
+	supportsRatio bool   // true for seedance models that support ratio/aspect_ratio
+	client        *http.Client
 }
 
 // NewDoubaoGenerator —— 创建豆包视频生成器实例
@@ -127,7 +127,7 @@ func (g *DoubaoGenerator) ParamOptions() []ModelParamOption {
 
 type doubaoContentItem struct {
 	Type     string              `json:"type"`
-	Role     string              `json:"role,omitempty"`      // first_frame | last_frame | reference_image
+	Role     string              `json:"role,omitempty"` // first_frame | last_frame | reference_image
 	Text     string              `json:"text,omitempty"`
 	ImageURL *doubaoImageURLItem `json:"image_url,omitempty"`
 }
@@ -264,6 +264,7 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	switch req.GenerateMode {
 	case "startEnd2video":
 		// 首尾帧生视频：text prompt + first_frame + last_frame
+		// 同时继续附带 reference_image，避免后续 clip 仅靠尾帧连续、人物脸和服装逐渐漂移。
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
@@ -279,6 +280,16 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 				Type:     "image_url",
 				Role:     "last_frame",
 				ImageURL: &doubaoImageURLItem{URL: req.TailImageURL},
+			})
+		}
+		for _, imgURL := range req.CharacterImageURLs {
+			if strings.TrimSpace(imgURL) == "" {
+				continue
+			}
+			content = append(content, doubaoContentItem{
+				Type:     "image_url",
+				Role:     "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
 			})
 		}
 
