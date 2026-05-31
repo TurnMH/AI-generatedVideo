@@ -600,7 +600,7 @@ export const videoAPI = {
       }
     }>('/api/v1/videos/ad-compose', { task_ids: taskIds }),
   modelStatus: () =>
-    api.get<{ models: { key: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] }>('/api/v1/videos/model-status'),
+    api.get<{ models: { key: string; label?: string; provider?: string; provider_model?: string; available: boolean; native_audio?: boolean; params?: { key: string; label: string; default: string; values: { value: string; label: string }[] }[] }[] }>('/api/v1/videos/model-status'),
   getShotsMetadata: (projectId: number, episodeId: number) =>
     api.get(`/api/v1/projects/${projectId}/episodes/${episodeId}/videos/shots-metadata`),
   triggerClipPipeline: (projectId: number, episodeId: number, scriptText: string) =>

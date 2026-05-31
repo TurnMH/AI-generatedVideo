@@ -1767,10 +1767,13 @@ func (s *VideoService) StatusCounts(ctx context.Context, projectID int64) (map[s
 
 // ModelStatusItem represents a single video model's availability.
 type ModelStatusItem struct {
-	Key         string                        `json:"key"`
-	Available   bool                          `json:"available"`
-	NativeAudio bool                          `json:"native_audio"`
-	Params      []generators.ModelParamOption `json:"params"`
+	Key           string                        `json:"key"`
+	Label         string                        `json:"label,omitempty"`
+	Provider      string                        `json:"provider,omitempty"`
+	ProviderModel string                        `json:"provider_model,omitempty"`
+	Available     bool                          `json:"available"`
+	NativeAudio   bool                          `json:"native_audio"`
+	Params        []generators.ModelParamOption `json:"params"`
 }
 
 // ModelStatus —— 检查所有已注册视频生成器的可用状态，按质量排序返回
@@ -1781,15 +1784,99 @@ func (s *VideoService) ModelStatus(ctx context.Context) []ModelStatusItem {
 	for _, key := range primary {
 		if gen, ok := s.generators[key]; ok {
 			seen[key] = true
-			items = append(items, ModelStatusItem{Key: key, Available: gen.IsAvailable(ctx), NativeAudio: gen.SupportsNativeAudio(), Params: gen.ParamOptions()})
+			items = append(items, newModelStatusItem(key, gen, ctx))
 		}
 	}
 	for key, gen := range s.generators {
 		if !seen[key] {
-			items = append(items, ModelStatusItem{Key: key, Available: gen.IsAvailable(ctx), NativeAudio: gen.SupportsNativeAudio(), Params: gen.ParamOptions()})
+			items = append(items, newModelStatusItem(key, gen, ctx))
 		}
 	}
 	return items
+}
+
+func newModelStatusItem(key string, gen generators.VideoGenerator, ctx context.Context) ModelStatusItem {
+	explain := explainVideoGeneratorRoute(key)
+	provider := explain.RuntimeProvider
+	providerModel := explain.ProviderModel
+	label := videoModelDisplayLabel(key, providerModel)
+	if provider == "" {
+		provider = runtimeProviderForGenerator(gen.Name())
+	}
+	if label == "" {
+		label = videoModelDisplayLabel(gen.Name(), providerModel)
+	}
+	if label == "" {
+		label = key
+	}
+	return ModelStatusItem{
+		Key:           key,
+		Label:         label,
+		Provider:      provider,
+		ProviderModel: providerModel,
+		Available:     gen.IsAvailable(ctx),
+		NativeAudio:   gen.SupportsNativeAudio(),
+		Params:        gen.ParamOptions(),
+	}
+}
+
+func videoModelDisplayLabel(key, providerModel string) string {
+	switch key {
+	case "wan":
+		if strings.Contains(strings.ToLower(strings.TrimSpace(providerModel)), "t2v") {
+			return "Wan 文生视频"
+		}
+		return "Wan 图生视频"
+	case "vidu":
+		return "Vidu"
+	case "vidu-mix":
+		return "Vidu Mix"
+	case "vidu-offpeak":
+		return "Vidu（离峰）"
+	case "vidu-mix-offpeak":
+		return "Vidu Mix（离峰）"
+	case "kling":
+		return "Kling"
+	case "aiping":
+		return "爱评 / Kling"
+	case "tencent-vclm":
+		return "Tencent VCLM / Kling"
+	case "doubao":
+		return "Doubao"
+	case "doubao-seedance":
+		if providerModel != "" {
+			return "Doubao Seedance / " + providerModel
+		}
+		return "Doubao Seedance"
+	case "suanneng":
+		if providerModel != "" {
+			return "算能 / " + providerModel
+		}
+		return "算能"
+	case "hubagi-voe3.1":
+		return "Veo 3.1（Hubagi）"
+	case "hubagi-TC-GV":
+		return "TC-GV（Hubagi）"
+	case "sora2":
+		return "Sora 2"
+	case "comfyui-video":
+		return "ComfyUI Video"
+	case "runninghub":
+		return "RunningHub"
+	case "cogvideo":
+		return "CogVideo"
+	case "baidu-bce":
+		return "Baidu BCE"
+	case "gaga":
+		return "Gaga"
+	case "minmax":
+		if providerModel != "" {
+			return "MiniMax / " + providerModel
+		}
+		return "MiniMax / Hailuo"
+	default:
+		return ""
+	}
 }
 
 func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (generators.VideoGenerator, VideoRouteExplain, error) {
@@ -2196,6 +2283,8 @@ func runtimeProviderForGenerator(generatorKey string) string {
 		return "runtime.video.sora2"
 	case "wan":
 		return "runtime.video.wan"
+	case "minmax":
+		return "runtime.video.minmax"
 	case "hubagi-voe3.1", "hubagi-TC-GV":
 		return "runtime.video.veo"
 	case "tencent-vclm":
@@ -2331,9 +2420,12 @@ func explainVideoGeneratorRoute(modelName string) VideoRouteExplain {
 		explain.ProviderModel = "doubao-seedance-1-5-pro-251215"
 		explain.RouteReason = "suanneng-ark-compatible-route"
 		explain.IsConfiguredAlias = true
-	case "gaga", "gaga-1", "xingdian2.0", "xingdian-2.0":
-		explain.RoutedGenerator = "gaga"
-		explain.RouteReason = "gaga-family"
+	case "minmax", "hailuo", "hailuo-02", "hailuo2", "minimax-hailuo-02", "minimax-hailuo-2.3", "minimax-hailuo-2.3-fast", "MiniMax-Hailuo-02", "MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast":
+		explain.RoutedGenerator = "minmax"
+		if raw != "" && raw != "minmax" && raw != "hailuo" && raw != "hailuo-02" && raw != "hailuo2" {
+			explain.ProviderModel = raw
+		}
+		explain.RouteReason = "minmax-family"
 		explain.IsConfiguredAlias = true
 	default:
 		explain.RoutedGenerator = raw
@@ -2359,6 +2451,8 @@ func bindRequestedVideoModel(gen generators.VideoGenerator, generatorKey, provid
 	case *generators.HubagiGenerator:
 		return typed.CloneWithModel(providerModel)
 	case *generators.SuannengGenerator:
+		return typed.CloneWithModel(providerModel)
+	case *generators.MinMaxGenerator:
 		return typed.CloneWithModel(providerModel)
 	default:
 		return gen
@@ -3334,7 +3428,7 @@ func mergeReferenceURLs(groups ...[]string) []string {
 
 func generatorSupportsReferenceImages(modelName string) bool {
 	switch videoModelFamily(modelName) {
-	case "doubao", "suanneng", "vidu", "wan":
+	case "doubao", "suanneng", "vidu", "wan", "minmax":
 		return true
 	default:
 		return false
@@ -3343,7 +3437,7 @@ func generatorSupportsReferenceImages(modelName string) bool {
 
 func generatorSupportsStartEnd(modelName string) bool {
 	switch videoModelFamily(modelName) {
-	case "doubao", "suanneng", "kling":
+	case "doubao", "suanneng", "kling", "minmax":
 		return true
 	default:
 		return false
@@ -3796,6 +3890,8 @@ func videoModelFamily(modelName string) string {
 		return "vidu"
 	case strings.Contains(lower, "suanneng"), strings.Contains(lower, "sophnet"):
 		return "suanneng"
+	case strings.Contains(lower, "minmax"), strings.Contains(lower, "hailuo"):
+		return "minmax"
 	case strings.Contains(lower, "gaga"):
 		return "gaga"
 	default:

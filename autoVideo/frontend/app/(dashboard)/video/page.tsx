@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type React from 'react'
 import useSWR from 'swr'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -18,7 +19,7 @@ import {
   Volume2,
   AlertTriangle,
 } from 'lucide-react'
-import { projectAPI, storageAPI, videoAPI } from '@/lib/api'
+import { modelAPI, projectAPI, storageAPI, utilsAPI, videoAPI } from '@/lib/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,12 +31,21 @@ import { useToast } from '@/components/ui/toast'
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
-type VideoModelStatus = { key: string; available: boolean; native_audio?: boolean; params?: ModelParamOption[] }
+type VideoModelStatus = {
+  key: string
+  label?: string
+  provider?: string
+  provider_model?: string
+  available: boolean
+  native_audio?: boolean
+  params?: ModelParamOption[]
+}
 type ManualMenuKey = 'text' | 'image' | 'reference' | 'start-end' | 'face-swap'
 type ManualMenuDef = { key: ManualMenuKey; label: string; description: string; icon: React.ComponentType<{ className?: string }> }
 
 type ManualFormState = {
   prompt: string
+  dialogueText: string
   sourceImageUrl: string
   tailImageUrl: string
   referenceImages: string
@@ -45,6 +55,9 @@ type ManualFormState = {
   aspectRatio: string
   resolution: string
   duration: string
+  stylePreset: 'anime' | 'realistic'
+  optimizeTextModel: string
+  generateAudio: boolean
   sourceImageFile: File | null
   referenceImageFiles: File[]
 }
@@ -54,13 +67,75 @@ type SubmitSummary = {
   taskId: number
   mode: ManualMenuKey
   modelName: string
+  modelLabel: string
   generateMode: string
   sourceCount: number
   referenceCount: number
   hasStartImage: boolean
   hasTailImage: boolean
+  generateAudio: boolean
   routeNote: string
   createdAt: string
+}
+
+type PromptOptimizePreview = {
+  original: string
+  optimized: string
+  visualPrompt: string
+  dialogue?: string
+  warning?: string
+  modelLabel: string
+}
+
+function splitVisualPromptAndDialogue(raw: string) {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length <= 1) {
+    return { visualPrompt: raw.trim(), dialogue: '' }
+  }
+
+  const inlineDialoguePrefix = /^(台词|对白|旁白|配音|人物说|角色说|dialogue|voiceover|voice over|vo)[:：]\s*/i
+  const dialogueHeader = /^(台词如下|台词如下所示|台词如下内容|以下是台词|以下为台词|旁白如下|以下是旁白|以下为旁白|口播如下|以下是口播|以下为口播|配音如下|以下是配音|以下为配音|配音文案|解说词|以下是解说词|以下为解说词)([:：]?)$/i
+  const visualLines: string[] = []
+  const dialogueLines: string[] = []
+  let inDialogueBlock = false
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (!line) continue
+
+    if (inlineDialoguePrefix.test(line)) {
+      const value = line.replace(inlineDialoguePrefix, '').trim()
+      if (value) dialogueLines.push(value)
+      inDialogueBlock = true
+      continue
+    }
+
+    if (dialogueHeader.test(line)) {
+      inDialogueBlock = true
+      continue
+    }
+
+    if (inDialogueBlock) {
+      const looksLikeVisualInstruction = /^(镜头|画面|场景|环境|人物|主体|构图|运镜|光线|氛围|风格|动作|特写|远景|中景|近景|航拍|俯拍|仰拍|转场|镜头语言)[:：]/.test(line)
+      if (looksLikeVisualInstruction) {
+        inDialogueBlock = false
+        visualLines.push(line)
+        continue
+      }
+      dialogueLines.push(line)
+      continue
+    }
+
+    visualLines.push(line)
+  }
+
+  return {
+    visualPrompt: (visualLines.join('\n') || raw).trim(),
+    dialogue: dialogueLines.join('\n').trim(),
+  }
 }
 
 const MANUAL_VIDEO_HISTORY_KEY = 'manual-video-history-v1'
@@ -75,6 +150,7 @@ const MANUAL_MENU_ITEMS: ManualMenuDef[] = [
 
 const EMPTY_FORM: ManualFormState = {
   prompt: '',
+  dialogueText: '',
   sourceImageUrl: '',
   tailImageUrl: '',
   referenceImages: '',
@@ -84,6 +160,9 @@ const EMPTY_FORM: ManualFormState = {
   aspectRatio: '',
   resolution: '',
   duration: '',
+  stylePreset: 'anime',
+  optimizeTextModel: 'default',
+  generateAudio: false,
   sourceImageFile: null,
   referenceImageFiles: [],
 }
@@ -102,14 +181,16 @@ function isModelKey(model: VideoModelStatus, ...prefixes: string[]) {
   return prefixes.some((prefix) => model.key === prefix || model.key.startsWith(`${prefix}-`))
 }
 
-function getModelDisplayName(key: string) {
+function getFallbackModelDisplayName(key: string) {
   const map: Record<string, string> = {
     'wan': 'Wan 图生视频',
     'wan-t2v': 'Wan 文生视频',
     'vidu': 'Vidu',
+    'vidu-mix': 'Vidu Mix',
     'vidu-offpeak': 'Vidu（离峰）',
+    'vidu-mix-offpeak': 'Vidu Mix（离峰）',
     'kling': 'Kling',
-    'tencent-vclm': 'Tencent VCLM / Kling 路由',
+    'tencent-vclm': 'Tencent VCLM / Kling',
     'doubao': 'Doubao',
     'doubao-seedance': 'Doubao Seedance',
     'suanneng': '算能',
@@ -121,9 +202,22 @@ function getModelDisplayName(key: string) {
     'cogvideo': 'CogVideo',
     'baidu-bce': 'Baidu BCE',
     'gaga': 'Gaga',
-    'aiping': '爱评',
+    'aiping': '爱评 / Kling',
+    'minmax': 'MiniMax / Hailuo',
   }
   return map[key] || key
+}
+
+function getModelDisplayName(model?: Pick<VideoModelStatus, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const key = model?.key || keyFallback || ''
+  const label = model?.label?.trim()
+  const providerModel = model?.provider_model?.trim()
+  const provider = model?.provider?.trim()
+  const base = label || getFallbackModelDisplayName(key)
+  const extras = [providerModel, provider].filter(Boolean)
+  if (extras.length === 0) return base
+  const suffix = extras.join(' · ')
+  return base.includes(suffix) ? base : `${base} · ${suffix}`
 }
 
 function inferModelCategories(model: VideoModelStatus): ManualMenuKey[] {
@@ -195,11 +289,17 @@ export default function VideoManualPage() {
   const [activeMenu, setActiveMenu] = useState<ManualMenuKey>('text')
   const [form, setForm] = useState<ManualFormState>(EMPTY_FORM)
   const [submitting, setSubmitting] = useState(false)
+  const [optimizingPrompt, setOptimizingPrompt] = useState(false)
+  const [promptPreview, setPromptPreview] = useState<PromptOptimizePreview | null>(null)
   const [submitResult, setSubmitResult] = useState<SubmitSummary | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const { data, isLoading } = useSWR('video-model-status', () => videoAPI.modelStatus())
+  const { data: llmModelResp } = useSWR('llm-model-list', () => modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' }))
 
-  const models: VideoModelStatus[] = useMemo(() => ((data as { models?: VideoModelStatus[] } | undefined)?.models || []), [data])
+  const models: VideoModelStatus[] = useMemo(() => {
+    const payload = data as { models?: VideoModelStatus[]; data?: { models?: VideoModelStatus[] } } | undefined
+    return payload?.data?.models || payload?.models || []
+  }, [data])
 
   const grouped = useMemo(() => {
     const next: Record<ManualMenuKey, VideoModelStatus[]> = { text: [], image: [], reference: [], 'start-end': [], 'face-swap': [] }
@@ -208,6 +308,22 @@ export default function VideoManualPage() {
     }
     return next
   }, [models])
+
+  const optimizeTextModels = useMemo(() => {
+    const payload = llmModelResp as { data?: { items?: Array<{ id: number; name: string; model_key: string; is_active: boolean }> } | Array<{ id: number; name: string; model_key: string; is_active: boolean }> } | undefined
+    const raw = Array.isArray(payload?.data) ? payload?.data : payload?.data?.items || []
+    const seen = new Set<string>()
+    const active = raw
+      .filter((item) => item?.is_active !== false && item?.model_key)
+      .map((item) => ({ value: item.model_key, label: item.name || item.model_key }))
+      .filter((item) => {
+        if (seen.has(item.value)) return false
+        seen.add(item.value)
+        return true
+      })
+    if (active.length > 0) return active
+    return [{ value: 'default', label: '系统默认文本模型' }]
+  }, [llmModelResp])
 
   const activeModels = useMemo(() => grouped[activeMenu] || [], [grouped, activeMenu])
   const activeMeta = MANUAL_MENU_ITEMS.find((item) => item.key === activeMenu) || MANUAL_MENU_ITEMS[0]
@@ -239,6 +355,12 @@ export default function VideoManualPage() {
     })
   }, [activeMenu, activeModels])
 
+  useEffect(() => {
+    if (!optimizeTextModels.some((item) => item.value === form.optimizeTextModel)) {
+      setForm((prev) => ({ ...prev, optimizeTextModel: optimizeTextModels[0]?.value || 'default' }))
+    }
+  }, [optimizeTextModels, form.optimizeTextModel])
+
   const selectedAspectValues = (selectedModel?.params || []).find((p) => p.key === 'aspect_ratio')?.values || []
   const selectedResolutionValues = (selectedModel?.params || []).find((p) => p.key === 'resolution')?.values || []
   const selectedDurationValues = (selectedModel?.params || []).find((p) => p.key === 'duration')?.values || []
@@ -257,6 +379,12 @@ export default function VideoManualPage() {
       .split(/\r?\n/)
       .map((item) => item.trim())
       .filter(Boolean)
+
+    const requestedReferenceCount = referenceUrlLines.length + (form.faceSourceUrl.trim() ? 1 : 0) + form.referenceImageFiles.length
+    if ((mode === 'reference' || mode === 'face-swap') && /kling|aiping|tencent-vclm/i.test(form.modelName) && requestedReferenceCount > 3) {
+      toast({ title: '当前 Kling 系模型最多支持 3 张参考图', description: `你现在提供了 ${requestedReferenceCount} 张，请删减后再提交。`, variant: 'destructive' })
+      return
+    }
 
     if ((mode === 'image' || mode === 'start-end') && !form.sourceImageUrl.trim() && !form.sourceImageFile) {
       toast({ title: '请先填写首帧图片 URL 或上传本地图片', variant: 'destructive' })
@@ -330,7 +458,9 @@ export default function VideoManualPage() {
       const renderConfig: Record<string, unknown> = {}
       if (form.aspectRatio) renderConfig.aspect_ratio = form.aspectRatio
       if (form.resolution) renderConfig.resolution = form.resolution
-      if (mode === 'text' && form.modelName.includes('vidu')) renderConfig.generate_mode = 'text2video'
+      renderConfig.style_preset = form.stylePreset
+      renderConfig.generate_audio = Boolean(selectedModel?.native_audio && form.generateAudio)
+      if (mode === 'text') renderConfig.generate_mode = 'text2video'
       if (mode === 'reference' || mode === 'face-swap') renderConfig.generate_mode = 'reference2video'
       if (mode === 'face-swap') {
         renderConfig.reference_mode = 'identity-consistency'
@@ -353,14 +483,23 @@ export default function VideoManualPage() {
         renderConfig.character_image_urls = referenceImageUrls
       }
 
-      const generateRes = await videoAPI.generate(projectId, {
+      const { visualPrompt, dialogue } = splitVisualPromptAndDialogue(form.prompt)
+      const finalDialogue = form.dialogueText.trim() || dialogue
+      const requestBody = {
+        project_id: projectId,
         image_urls: imageUrls,
-        scene_descriptions: [form.prompt.trim()],
-        scene_description: form.prompt.trim(),
+        scene_descriptions: [visualPrompt],
+        scene_description: visualPrompt,
+        dialogues: finalDialogue ? [finalDialogue] : undefined,
         model_name: form.modelName,
+        style_preset: form.stylePreset,
         render_config: renderConfig,
         clip_duration_sec: Number.isFinite(duration) && duration > 0 ? duration : undefined,
-      }) as { data?: { task_id?: number } }
+      }
+
+      const generateRes = await (mode === 'text'
+        ? videoAPI.generateManual(requestBody)
+        : videoAPI.generate(projectId, requestBody)) as { data?: { task_id?: number } }
 
       const taskId = Number(generateRes?.data?.task_id || 0)
       if (!taskId) throw new Error('视频任务创建成功，但未返回 task_id')
@@ -380,11 +519,13 @@ export default function VideoManualPage() {
         taskId,
         mode,
         modelName: form.modelName,
+        modelLabel: getModelDisplayName(selectedModel, form.modelName),
         generateMode,
         sourceCount: imageUrls.filter(Boolean).length,
         referenceCount: referenceImageUrls.filter(Boolean).length,
         hasStartImage: Boolean(imageUrls[0]),
         hasTailImage: Boolean(renderConfig.tail_image_url),
+        generateAudio: Boolean(renderConfig.generate_audio),
         routeNote,
         createdAt: new Date().toISOString(),
       }
@@ -411,11 +552,70 @@ export default function VideoManualPage() {
     await createManualVideoTask('image')
   }
 
+  const optimizePromptForCurrentMode = async () => {
+    const rawPrompt = form.prompt.trim()
+    if (!rawPrompt) {
+      toast({ title: '请先填写提示词', variant: 'destructive' })
+      return
+    }
+    setOptimizingPrompt(true)
+    try {
+      const modeLabel = activeMeta.label
+      const modelLabel = selectedModel ? getModelDisplayName(selectedModel) : form.modelName || '当前模型'
+      const payload = await utilsAPI.optimizeVideoPrompt({
+        prompt: rawPrompt,
+        target_model: modelLabel,
+        text_model: form.optimizeTextModel === 'default' ? '' : form.optimizeTextModel,
+        mode: modeLabel,
+        style_preset: form.stylePreset,
+        aspect_ratio: form.aspectRatio,
+        duration: form.duration,
+        generate_audio: Boolean(selectedModel?.native_audio && form.generateAudio),
+      }) as { optimized?: string; warning?: string }
+      const optimized = payload?.optimized?.trim()
+      if (!optimized) throw new Error(payload?.warning || '优化结果为空')
+      const optimizeModelLabel = optimizeTextModels.find((item) => item.value === form.optimizeTextModel)?.label || '系统默认文本模型'
+      const { visualPrompt, dialogue } = splitVisualPromptAndDialogue(optimized)
+      setPromptPreview({
+        original: rawPrompt,
+        optimized,
+        visualPrompt,
+        dialogue: form.dialogueText.trim() || dialogue,
+        warning: payload?.warning,
+        modelLabel: optimizeModelLabel,
+      })
+      if (optimized === rawPrompt) {
+        toast({ title: '优化已返回，但内容无变化', description: payload?.warning || `文本模型：${optimizeModelLabel}；当前返回结果与原提示词一致。`, variant: 'default' })
+        return
+      }
+      toast({ title: '已生成优化结果，请确认是否应用', description: `文本模型：${optimizeModelLabel}`, variant: 'success' })
+    } catch (error: any) {
+      toast({ title: '提示词优化失败', description: error?.message || '请稍后重试', variant: 'destructive' })
+    } finally {
+      setOptimizingPrompt(false)
+    }
+  }
+
   const renderForm = () => {
     const noModelsAvailable = activeModels.length === 0
     const disabledReason = noModelsAvailable
       ? `当前「${activeMeta.label}」没有可用视频模型，请切换分类或检查 model-status。`
       : ''
+    const selectedGenerateModes = selectedModel ? getModelGenerateModes(selectedModel) : []
+    const selectedHints = selectedModel ? capabilityHints(selectedModel, inferModelCategories(selectedModel)) : []
+    const styleLabel = form.stylePreset === 'realistic' ? '真实环境 / 写实风格' : '动漫风格'
+    const nativeAudioSupported = Boolean(selectedModel?.native_audio)
+    const isKlingFamily = Boolean(selectedModel?.key && /kling|aiping|tencent-vclm/i.test(selectedModel.key))
+    const maxReferenceImages = isKlingFamily ? 3 : null
+    const imageSupportSummary = activeMenu === 'text'
+      ? '文生：0 张图片，直接用提示词提交。'
+      : activeMenu === 'image'
+        ? '图生：1 张首帧图。多传不会变成“多图融合”，而是可能被当成多 clip。'
+        : activeMenu === 'reference'
+          ? `融合：1 张首帧图可选 + 多张参考图。${maxReferenceImages ? `当前模型建议最多 ${maxReferenceImages} 张参考图。` : '当前模型代码层未额外限死参考图张数。'}`
+          : activeMenu === 'start-end'
+            ? '首尾针：固定 2 张，首帧 + 尾帧。'
+            : `人物一致性参考：1 张目标首帧 + 多张人物参考图。${maxReferenceImages ? `当前模型建议最多 ${maxReferenceImages} 张参考图。` : '当前模型代码层未额外限死参考图张数。'}`
 
     return (
       <Card className="border-white/10 bg-slate-900/60 text-slate-100">
@@ -425,9 +625,89 @@ export default function VideoManualPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2 md:col-span-2">
-              <Label>提示词</Label>
-              <Textarea value={form.prompt} onChange={(e) => setForm((prev) => ({ ...prev, prompt: e.target.value }))} placeholder="输入视频提示词 / 场景描述 / 镜头要求" className="min-h-[120px]" />
+            <div className="space-y-3 md:col-span-2 rounded-xl border border-white/10 bg-slate-950/30 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-1">
+                  <Label className="text-sm text-slate-100">提示词</Label>
+                  <div className="text-xs text-slate-500">输入视频提示词、场景描述或镜头要求；可先写粗稿，再用下方文本模型做优化。</div>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="self-start" onClick={optimizePromptForCurrentMode} disabled={optimizingPrompt || !form.prompt.trim()}>
+                  {optimizingPrompt ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  优化提示词
+                </Button>
+              </div>
+
+              <Textarea value={form.prompt} onChange={(e) => setForm((prev) => ({ ...prev, prompt: e.target.value }))} placeholder="输入视频提示词 / 场景描述 / 镜头要求" className="min-h-[160px]" />
+
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-300">对白 / 旁白（可手动编辑，优先于自动提取）</Label>
+                <Textarea
+                  value={form.dialogueText}
+                  onChange={(e) => setForm((prev) => ({ ...prev, dialogueText: e.target.value }))}
+                  placeholder="可选：手动填写旁白、口播、对白。若填写，这里会优先作为 dialogues 提交。"
+                  className="min-h-[120px]"
+                />
+                <div className="text-xs text-slate-500">如果优化结果里的“台词如下 / 旁白如下”提取不准，可以直接在这里手动改；创建视频时这里的内容优先提交到 dialogues。</div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,320px)_1fr] lg:items-end">
+                <div className="space-y-2">
+                  <Label className="text-xs text-slate-300">优化用文本大模型</Label>
+                  <Select value={form.optimizeTextModel} onValueChange={(value) => setForm((prev) => ({ ...prev, optimizeTextModel: value }))}>
+                    <SelectTrigger><SelectValue placeholder="选择文本模型" /></SelectTrigger>
+                    <SelectContent>
+                      {optimizeTextModels.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="rounded-lg border border-dashed border-white/10 bg-slate-900/40 px-3 py-2 text-xs leading-5 text-slate-500">
+                  文本模型列表优先读取系统当前已配置的 LLM 模型；如果暂时取不到，会回退为系统默认文本模型。优化时会把当前视频模型、模式、风格、音频、画幅和时长一起传给后端。
+                </div>
+              </div>
+
+              {promptPreview && (
+                <div className="space-y-3 rounded-xl border border-cyan-400/20 bg-cyan-500/5 p-3">
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-slate-300">优化前</div>
+                      <div className="max-h-56 overflow-auto rounded-lg border border-white/10 bg-slate-950/50 p-3 text-sm leading-6 text-slate-300 whitespace-pre-wrap">{promptPreview.original}</div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-cyan-200">优化结果（完整文本）</div>
+                        <div className="text-[11px] text-slate-400">{promptPreview.modelLabel}</div>
+                      </div>
+                      <div className="max-h-56 overflow-auto rounded-lg border border-cyan-400/20 bg-slate-950/60 p-3 text-sm leading-6 text-slate-100 whitespace-pre-wrap">{promptPreview.optimized}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-emerald-200">最终视觉提示词（实际送视频生成器）</div>
+                      <div className="max-h-56 overflow-auto rounded-lg border border-emerald-400/20 bg-slate-950/60 p-3 text-sm leading-6 text-slate-100 whitespace-pre-wrap">{promptPreview.visualPrompt || '（空）'}</div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-violet-200">对白 / 旁白（实际送 dialogues）</div>
+                      <div className="max-h-56 overflow-auto rounded-lg border border-violet-400/20 bg-slate-950/60 p-3 text-sm leading-6 text-slate-100 whitespace-pre-wrap">{promptPreview.dialogue || '（未提取到对白/旁白，且当前未手动填写，将不会单独提交 dialogues）'}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-dashed border-cyan-400/20 bg-slate-950/30 px-3 py-2 text-xs leading-5 text-slate-400">
+                    创建视频时会按上面两块自动拆分提交：视觉提示词进入 <span className="font-mono text-slate-200">scene_description / scene_descriptions</span>，对白/旁白进入 <span className="font-mono text-slate-200">dialogues</span>，因此“优化结果完整文本”和“最终送视频生成器的文本”可能不完全相同。
+                  </div>
+
+                  {promptPreview.warning && <div className="text-xs text-amber-300">提示：{promptPreview.warning}</div>}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" onClick={() => {
+                      setForm((prev) => ({ ...prev, prompt: promptPreview.optimized, dialogueText: prev.dialogueText || promptPreview.dialogue || '' }))
+                      toast({ title: '已应用优化后的提示词', description: '创建视频时会按视觉提示词 / 对白自动拆分提交，手动填写的对白优先。', variant: 'success' })
+                    }}>应用优化结果</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setPromptPreview(null)}>关闭预览</Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {(activeMenu === 'image' || activeMenu === 'reference' || activeMenu === 'start-end') && (
@@ -436,7 +716,7 @@ export default function VideoManualPage() {
                 <Input value={form.sourceImageUrl} onChange={(e) => setForm((prev) => ({ ...prev, sourceImageUrl: e.target.value }))} placeholder="https://..." />
                 {activeMenu === 'image' && (
                   <>
-                    <div className="text-xs text-slate-500">或上传本地图片（会自动上传到 storage-service）</div>
+                    <div className="text-xs text-slate-500">图生当前按真实链路只支持 1 张首帧图；也可上传本地图片（会自动上传到 storage-service）</div>
                     <Input type="file" accept="image/*" onChange={(e) => setForm((prev) => ({ ...prev, sourceImageFile: e.target.files?.[0] || null }))} />
                     {form.sourceImageFile && <div className="text-xs text-slate-400">已选择：{form.sourceImageFile.name}</div>}
                     {submitting && uploadProgress > 0 && uploadProgress < 100 && <div className="text-xs text-cyan-300">上传进度：{uploadProgress}%</div>}
@@ -458,9 +738,9 @@ export default function VideoManualPage() {
                 <Textarea value={form.referenceImages} onChange={(e) => setForm((prev) => ({ ...prev, referenceImages: e.target.value }))} placeholder={'https://ref-1\nhttps://ref-2'} className="min-h-[100px]" />
                 {activeMenu === 'reference' && (
                   <>
-                    <div className="text-xs text-slate-500">也可上传多张本地参考图</div>
+                    <div className="text-xs text-slate-500">也可上传多张本地参考图{maxReferenceImages ? `（当前模型建议最多 ${maxReferenceImages} 张）` : ''}</div>
                     <Input type="file" accept="image/*" multiple onChange={(e) => setForm((prev) => ({ ...prev, referenceImageFiles: Array.from(e.target.files || []) }))} />
-                    {form.referenceImageFiles.length > 0 && <div className="text-xs text-slate-400">已选择 {form.referenceImageFiles.length} 张参考图</div>}
+                    {form.referenceImageFiles.length > 0 && <div className="text-xs text-slate-400">已选择 {form.referenceImageFiles.length} 张参考图{maxReferenceImages ? ` / 建议上限 ${maxReferenceImages} 张` : ''}</div>}
                   </>
                 )}
               </div>
@@ -485,11 +765,23 @@ export default function VideoManualPage() {
                 <SelectTrigger><SelectValue placeholder={noModelsAvailable ? '当前分类无可用模型' : '选择模型'} /></SelectTrigger>
                 <SelectContent>
                   {activeModels.map((model) => (
-                    <SelectItem key={model.key} value={model.key}>{getModelDisplayName(model.key)}</SelectItem>
+                    <SelectItem key={model.key} value={model.key}>{getModelDisplayName(model)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {noModelsAvailable && <div className="text-xs text-amber-300">当前分类暂无可用模型，提交已禁用。</div>}
+            </div>
+
+            <div className="space-y-2">
+              <Label>画面风格</Label>
+              <Select value={form.stylePreset} onValueChange={(value: 'anime' | 'realistic') => setForm((prev) => ({ ...prev, stylePreset: value }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="anime">动漫风格</SelectItem>
+                  <SelectItem value="realistic">真实环境 / 写实风格</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="text-xs text-slate-500">这个风格会真实写入本次视频任务的 `style_preset`，用于提示模型偏向动漫感还是写实真人感。</div>
             </div>
 
             <div className="space-y-2">
@@ -530,6 +822,92 @@ export default function VideoManualPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {nativeAudioSupported && (
+              <div className="space-y-2 md:col-span-2">
+                <Label>原生音频</Label>
+                <Select value={form.generateAudio ? 'true' : 'false'} onValueChange={(value) => setForm((prev) => ({ ...prev, generateAudio: value === 'true' }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="false">关闭</SelectItem>
+                    <SelectItem value="true">开启</SelectItem>
+                  </SelectContent>
+                </Select>
+                <div className="text-xs text-slate-500">当前模型支持原生音频，会真实写入 `render_config.generate_audio`。关闭时只生成视频画面，不请求模型内置音频。</div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="text-sm font-medium text-white">当前参数摘要</div>
+            <div className="mt-3 grid gap-3 text-xs text-slate-300 md:grid-cols-2 xl:grid-cols-3">
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">当前分类</div>
+                <div className="mt-1 text-white">{activeMeta.label}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">当前模型</div>
+                <div className="mt-1 break-all text-white">{selectedModel ? getModelDisplayName(selectedModel) : '未选择'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">画面风格</div>
+                <div className="mt-1 text-white">{styleLabel}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">画幅比例</div>
+                <div className="mt-1 text-white">{form.aspectRatio || selectedAspectValues[0]?.label || '自动'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">分辨率</div>
+                <div className="mt-1 text-white">{form.resolution || selectedResolutionValues[0]?.label || '自动'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">时长</div>
+                <div className="mt-1 text-white">{form.duration || selectedDurationValues[0]?.label || '默认'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                <div className="text-[11px] text-slate-500">模式参数</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(selectedGenerateModes.length > 0 ? selectedGenerateModes : ['未返回 generate_mode']).map((mode) => (
+                    <span key={mode} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-200">{mode}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                <div className="text-[11px] text-slate-500">能力提示</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(selectedHints.length > 0 ? selectedHints : ['暂无能力提示']).map((hint) => (
+                    <span key={hint} className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">{hint}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">原生音频能力</div>
+                <div className="mt-1 text-white">{nativeAudioSupported ? '支持' : '不支持'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+                <div className="text-[11px] text-slate-500">当前音频配置</div>
+                <div className="mt-1 text-white">{nativeAudioSupported ? (form.generateAudio ? '已开启原生音频' : '未开启原生音频') : '当前模型无此配置'}</div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                <div className="text-[11px] text-slate-500">当前输入要求</div>
+                <div className="mt-1 leading-5 text-slate-300">
+                  {activeMenu === 'text'
+                    ? '只需要提示词；当前风格选择会影响文生视频画面偏向。'
+                    : activeMenu === 'image'
+                      ? '需要首帧图，可填 URL 或上传本地图片。'
+                      : activeMenu === 'reference'
+                        ? '至少需要首帧图或参考图；参考图可多张。'
+                        : activeMenu === 'start-end'
+                          ? '必须同时提供首帧图与尾帧图。'
+                          : '需要目标首帧 + 主参考脸/人物参考图，用人物一致性链提交。'}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2 md:col-span-2 xl:col-span-3">
+                <div className="text-[11px] text-slate-500">图片支持真相</div>
+                <div className="mt-1 leading-5 text-slate-300">{imageSupportSummary}</div>
+              </div>
+            </div>
           </div>
 
           {submitResult && (
@@ -537,12 +915,13 @@ export default function VideoManualPage() {
               <div className="font-medium">任务已创建：{submitResult.mode === 'text' ? '文生视频' : submitResult.mode === 'image' ? '图生视频' : submitResult.mode === 'reference' ? '融合生视频' : submitResult.mode === 'start-end' ? '首尾针视频' : '人物一致性参考'}</div>
               <div className="mt-1">项目 ID：{submitResult.projectId}，任务 ID：{submitResult.taskId}</div>
               <div className="mt-3 grid gap-2 text-xs text-emerald-50/90 md:grid-cols-2">
-                <div>模型：{getModelDisplayName(submitResult.modelName)}</div>
+                <div>模型：{submitResult.modelLabel || getFallbackModelDisplayName(submitResult.modelName)}</div>
                 <div>实际模式：{submitResult.generateMode}</div>
                 <div>首帧输入：{submitResult.hasStartImage ? '有' : '无'}</div>
                 <div>尾帧输入：{submitResult.hasTailImage ? '有' : '无'}</div>
                 <div>首帧数量：{submitResult.sourceCount}</div>
                 <div>参考图数量：{submitResult.referenceCount}</div>
+                <div>原生音频：{submitResult.generateAudio ? '开启' : '关闭/不支持'}</div>
               </div>
               <div className="mt-3 rounded-lg border border-emerald-300/15 bg-black/10 px-3 py-2 text-xs text-emerald-50/85">
                 {submitResult.routeNote}
@@ -669,69 +1048,28 @@ export default function VideoManualPage() {
               ) : activeModels.length === 0 ? (
                 <div className="space-y-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-100">
                   <div>当前分类下没有可识别模型。</div>
-                  <div className="text-xs text-amber-100/80">可先检查 `/api/v1/videos/model-status` 是否返回了 `generate_mode`，或查看其它分类的模型卡片里的 raw key / generate_mode / 前端分类结果。</div>
+                  <div className="text-xs text-amber-100/80">可先检查 `/api/v1/videos/model-status` 是否返回了 `generate_mode`，或切换其它分类。</div>
                 </div>
               ) : (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {activeModels.map((model) => {
-                    const categories = inferModelCategories(model)
-                    const hints = capabilityHints(model, categories)
-                    const generateModes = getModelGenerateModes(model)
-                    return (
-                      <div key={`${activeMenu}-${model.key}`} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h3 className="text-base font-semibold text-white">{getModelDisplayName(model.key)}</h3>
-                            <p className="mt-1 text-xs text-slate-400">模型键：{model.key}</p>
-                          </div>
-                          <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs', model.available ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300')}>
-                            {model.available ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {model.available ? '可用' : '不可用'}
-                          </span>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {hints.map((hint) => <span key={hint} className="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-300">{hint}</span>)}
-                        </div>
-                        <div className="mt-4 grid gap-3 text-xs text-slate-300 md:grid-cols-3">
-                          <div className="rounded-xl bg-slate-950/50 p-3">
-                            <div className="text-[10px] uppercase tracking-wider text-slate-500">raw key</div>
-                            <div className="mt-1 break-all text-slate-200">{model.key}</div>
-                          </div>
-                          <div className="rounded-xl bg-slate-950/50 p-3 md:col-span-2">
-                            <div className="text-[10px] uppercase tracking-wider text-slate-500">generate_mode</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {generateModes.length > 0 ? generateModes.map((mode) => (
-                                <span key={`${model.key}-${mode}`} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-300">{mode}</span>
-                              )) : <span className="text-slate-500">未返回 generate_mode</span>}
-                            </div>
-                          </div>
-                          <div className="rounded-xl bg-slate-950/50 p-3 md:col-span-3">
-                            <div className="text-[10px] uppercase tracking-wider text-slate-500">前端判定分类</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {categories.length > 0 ? categories.map((category) => (
-                                <span key={`${model.key}-${category}`} className="rounded-md border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[11px] text-cyan-200">{getCategoryLabel(category)}</span>
-                              )) : <span className="text-slate-500">未命中任何分类</span>}
-                            </div>
-                          </div>
-                        </div>
-                        {!!model.params?.length && (
-                          <div className="mt-4 space-y-2">
-                            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">可配置参数</div>
-                            <div className="space-y-2">
-                              {model.params.map((param) => (
-                                <div key={`${model.key}-${param.key}`} className="rounded-xl bg-slate-950/50 p-3">
-                                  <div className="flex items-center justify-between gap-2 text-sm">
-                                    <span className="text-slate-200">{param.label}</span>
-                                    <span className="text-xs text-slate-500">默认：{param.default || '-'}</span>
-                                  </div>
-                                  {!!param.values?.length && <div className="mt-2 flex flex-wrap gap-2">{param.values.map((value) => <span key={`${param.key}-${value.value}`} className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-300">{value.label}</span>)}</div>}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
+                <div className="rounded-xl border border-slate-700/60 bg-slate-950/40 p-4 text-sm text-slate-300 space-y-3">
+                  <div>当前分类的模型展开诊断列表先统一隐藏，避免页面被大块模型卡片干扰。</div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                      <div className="text-[11px] text-slate-500">当前分类</div>
+                      <div className="mt-1 font-medium text-white">{activeMeta.label}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                      <div className="text-[11px] text-slate-500">可识别模型数</div>
+                      <div className="mt-1 font-medium text-white">{activeModels.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                      <div className="text-[11px] text-slate-500">当前选中模型</div>
+                      <div className="mt-1 font-medium text-white break-all">{selectedModel ? getModelDisplayName(selectedModel) : '未选择'}</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    保留左侧分类入口、表单与真实提交链；如需再看详细 raw key / generate_mode / 参数展开，再单独做诊断开关。
+                  </div>
                 </div>
               )}
             </CardContent>
