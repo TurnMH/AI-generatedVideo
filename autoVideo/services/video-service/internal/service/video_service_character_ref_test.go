@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/autovideo/video-service/internal/model"
@@ -89,6 +90,37 @@ func TestIdentityAnchorReferencesPreferProjectLevelAnchor(t *testing.T) {
 	}
 	if got[2] != "https://example.com/start-image.png" {
 		t.Fatalf("got[2]=%q", got[2])
+	}
+}
+
+func TestShouldPreferStartEndIdentityModeForDoubaoSameCharacter(t *testing.T) {
+	rc := model.RenderConfig{
+		"require_same_character":         true,
+		"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
+	}
+	req := generators.VideoGenerateReq{
+		SourceImageURL:     "https://example.com/current-first.png",
+		TailImageURL:       "https://example.com/current-last.png",
+		CharacterImageURLs: []string{"https://example.com/identity-anchor.png"},
+	}
+	if !shouldPreferStartEndIdentityMode("doubao-seedance", rc, req) {
+		t.Fatalf("expected doubao same-character clip to prefer startEnd2video")
+	}
+	if shouldPreferStartEndIdentityMode("vidu", rc, req) {
+		t.Fatalf("did not expect non-doubao model to force startEnd2video here")
+	}
+}
+
+func TestClipMotionPromptChineseFamilyForDoubaoIncludesReferenceSections(t *testing.T) {
+	prompt := clipMotionPromptChineseFamily(1, 3, "人物从门口快步走向镜头", "cinematic", "live-action-short", "doubao", nil, "")
+	for _, want := range []string{
+		"参考人物参考图中的同一主体生成当前镜头",
+		"参考上一镜头中的动作衔接、运镜方向与节奏",
+		"参考场景与道具素材中的环境氛围和空间关系",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt %q does not contain %q", prompt, want)
+		}
 	}
 }
 

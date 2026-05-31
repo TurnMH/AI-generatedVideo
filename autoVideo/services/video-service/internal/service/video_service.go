@@ -473,6 +473,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				genReq.SourceImageURL = startURL
 			}
 		}
+		if shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq) {
+			genReq.GenerateMode = "startEnd2video"
+		}
 		genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, clipAssetRefs)
 		if renderConfigBool(task.RenderConfig, "require_same_character") && len(projectIdentityRefs) > 0 {
 			genReq.CharacterImageURLs = mergeReferenceURLs(projectIdentityRefs, genReq.CharacterImageURLs)
@@ -1403,6 +1406,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		if !task.SerialScene || clip.SceneSeq == 0 {
 			genReq.SourceImageURL = startURL
 		}
+	}
+	if shouldPreferStartEndIdentityMode(resolvedModelName, task.RenderConfig, genReq) {
+		genReq.GenerateMode = "startEnd2video"
 	}
 	genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, retryClipAssetRefs)
 	s.logger.Info("retry clip generation request prepared",
@@ -2685,6 +2691,13 @@ func clipMotionPromptChineseFamily(clipIdx, totalClips int, sceneDesc, motionMod
 	}
 
 	parts := []string{anchor, stylePart, basePart, positionCue, qualityPart}
+	if family == "doubao" {
+		parts = append(parts,
+			"参考人物参考图中的同一主体生成当前镜头，人物身份必须严格保持一致",
+			"参考上一镜头中的动作衔接、运镜方向与节奏，只延续动作、镜头和光线连续性，不得用连续性线索改写人物脸部特征",
+			"参考场景与道具素材中的环境氛围和空间关系，但场景/道具参考只用于环境控制，不用于修改人物样貌",
+		)
+	}
 	if familyHint != "" {
 		parts = append(parts, familyHint)
 	}
@@ -3532,6 +3545,19 @@ func generatorSupportsStartEnd(modelName string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldPreferStartEndIdentityMode(modelName string, renderConfig model.RenderConfig, req generators.VideoGenerateReq) bool {
+	if videoModelFamily(modelName) != "doubao" {
+		return false
+	}
+	if !renderConfigBool(renderConfig, "require_same_character") {
+		return false
+	}
+	if strings.TrimSpace(req.SourceImageURL) == "" || strings.TrimSpace(req.TailImageURL) == "" {
+		return false
+	}
+	return len(identityAnchorReferences(renderConfig)) > 0 || len(req.CharacterImageURLs) > 0
 }
 
 func normalizeVideoGenerateReq(gen generators.VideoGenerator, modelName string, req generators.VideoGenerateReq, assetRefs []string) generators.VideoGenerateReq {
