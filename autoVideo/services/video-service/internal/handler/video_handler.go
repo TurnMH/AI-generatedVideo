@@ -131,6 +131,23 @@ func renderConfigBoolValue(rc model.RenderConfig, key string) bool {
 	return v
 }
 
+func normalizeContinuityRenderConfig(rc model.RenderConfig, spatialAnchors, subjectPositions, transitionNotes []string, sceneCharacters [][]string) model.RenderConfig {
+	rc = normalizeRenderConfig(rc)
+	if len(spatialAnchors) > 0 {
+		rc["spatial_anchors"] = spatialAnchors
+	}
+	if len(subjectPositions) > 0 {
+		rc["subject_positions"] = subjectPositions
+	}
+	if len(transitionNotes) > 0 {
+		rc["transition_notes"] = transitionNotes
+	}
+	if len(sceneCharacters) > 0 {
+		rc["scene_characters"] = sceneCharacters
+	}
+	return rc
+}
+
 func firstNonEmptyString(vals ...string) string {
 	for _, v := range vals {
 		if trimmed := strings.TrimSpace(v); trimmed != "" {
@@ -357,6 +374,10 @@ type generateReq struct {
 	SceneDescriptions []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
 	Dialogues         []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
 	MotionDescs       []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
+	SpatialAnchors    []string           `json:"spatial_anchors"`
+	SubjectPositions  []string           `json:"subject_positions"`
+	TransitionNotes   []string           `json:"transition_notes"`
+	SceneCharacters   [][]string         `json:"scene_characters"`
 	StylePreset       string             `json:"style_preset"`
 	MotionMode        string             `json:"motion_mode"`
 	ModelName         string             `json:"model_name"`
@@ -423,7 +444,7 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	req.ModelName = setDefault(req.ModelName, "kling")
 
 	// Store per-clip scene descriptions in render_config for use during generation.
-	req.RenderConfig = normalizeRenderConfig(req.RenderConfig)
+	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
 	if len(req.Dialogues) == 0 && strings.TrimSpace(req.SubtitleText) != "" {
 		for _, line := range strings.Split(strings.ReplaceAll(req.SubtitleText, "\r\n", "\n"), "\n") {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
@@ -791,8 +812,11 @@ type projectGenerateReq struct {
 	Durations         []float64          `json:"durations"`          // per-clip duration in seconds (from storyboard)
 	CameraMovements   []string           `json:"camera_movements"`   // per-clip camera movement hint
 	Moods             []string           `json:"moods"`              // per-clip mood/emotion
-	SceneCharacters   [][]string         `json:"scene_characters"`   // per-clip character names for ref image filtering
-	SceneAssetIDs     [][]int64          `json:"scene_asset_ids"`    // per-clip related asset IDs for scene/prop continuity
+	SpatialAnchors    []string           `json:"spatial_anchors"`
+	SubjectPositions  []string           `json:"subject_positions"`
+	TransitionNotes   []string           `json:"transition_notes"`
+	SceneCharacters   [][]string         `json:"scene_characters"` // per-clip character names for ref image filtering
+	SceneAssetIDs     [][]int64          `json:"scene_asset_ids"`  // per-clip related asset IDs for scene/prop continuity
 	StylePreset       string             `json:"style_preset"`
 	MotionMode        string             `json:"motion_mode"`
 	ModelName         string             `json:"model_name"`
@@ -837,10 +861,7 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 		return v
 	}
 
-	if req.RenderConfig == nil {
-		req.RenderConfig = model.RenderConfig{}
-	}
-	req.RenderConfig = normalizeRenderConfig(req.RenderConfig)
+	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
 	}
@@ -1021,8 +1042,11 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		Durations         []float64  `json:"durations"`          // per-clip duration in seconds
 		CameraMovements   []string   `json:"camera_movements"`   // per-clip camera movement hint
 		Moods             []string   `json:"moods"`              // per-clip mood
-		SceneCharacters   [][]string `json:"scene_characters"`   // per-clip character names
-		SceneAssetIDs     [][]int64  `json:"scene_asset_ids"`    // per-clip related asset IDs
+		SpatialAnchors    []string   `json:"spatial_anchors"`
+		SubjectPositions  []string   `json:"subject_positions"`
+		TransitionNotes   []string   `json:"transition_notes"`
+		SceneCharacters   [][]string `json:"scene_characters"` // per-clip character names
+		SceneAssetIDs     [][]int64  `json:"scene_asset_ids"`  // per-clip related asset IDs
 		AudioURL          string     `json:"audio_url"`
 		SceneDescription  string     `json:"scene_description"`
 		SceneGroupKeys    []string   `json:"scene_group_keys"` // 串行模式：每 clip 的场景 key
@@ -1074,7 +1098,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 			}
 			rc = copy
 		}
-		rc = normalizeRenderConfig(rc)
+		rc = normalizeContinuityRenderConfig(rc, ep.SpatialAnchors, ep.SubjectPositions, ep.TransitionNotes, ep.SceneCharacters)
 		if len(ep.SceneDescriptions) > 0 {
 			rc["scene_descriptions"] = ep.SceneDescriptions
 		}
