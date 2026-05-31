@@ -72,6 +72,15 @@ func (g *DoubaoGenerator) IsAvailable(_ context.Context) bool { return g.APIKey 
 // SupportsNativeAudio —— seedance 模型支持原生环境音频（非语音）
 func (g *DoubaoGenerator) SupportsNativeAudio() bool { return g.supportsAudio }
 
+func (g *DoubaoGenerator) isSeedance() bool {
+	if g.supportsAudio || g.supportsRatio {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(g.genName))
+	model := strings.ToLower(strings.TrimSpace(g.Model))
+	return strings.Contains(name, "seedance") || strings.Contains(model, "seedance")
+}
+
 // ParamOptions —— 豆包视频支持的模型参数
 func (g *DoubaoGenerator) ParamOptions() []ModelParamOption {
 	opts := []ModelParamOption{
@@ -317,16 +326,19 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		}
 
 	default:
-		// img2video（默认）: source image + text + reference_image items.
-		// 对 Seedance/豆包串行链路，后续 clip 常会把上一段尾帧作为 source。
-		// 如果这里不继续附带角色 identity refs，请求就会退化成“只靠上一段生成结果续写”，
-		// 真人角色会在多段续写里逐渐串脸/漂移。
+		// img2video（默认）: source image + text (+ optional reference_image items).
+		// 仅对 Seedance 做额外兼容：当同时附带 reference_image 时，主 source image 也必须显式带 role，
+		// 否则 provider 会拒绝 mixed-role image contents（task 203 的 400）。
 		content = make([]doubaoContentItem, 0, 2+len(req.CharacterImageURLs))
 		if req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
+			item := doubaoContentItem{
 				Type:     "image_url",
 				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
+			}
+			if g.isSeedance() && len(req.CharacterImageURLs) > 0 {
+				item.Role = "first_frame"
+			}
+			content = append(content, item)
 		}
 		content = append(content, doubaoContentItem{
 			Type: "text",

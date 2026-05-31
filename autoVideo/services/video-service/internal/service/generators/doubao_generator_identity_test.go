@@ -92,7 +92,7 @@ func TestDoubaoImg2VideoCarriesReferenceImagesForIdentity(t *testing.T) {
 	if len(body.Content) != 4 {
 		t.Fatalf("content len = %d, want 4", len(body.Content))
 	}
-	if body.Content[0].ImageURL == nil || body.Content[0].ImageURL.URL != "https://example.com/source.png" {
+	if body.Content[0].Role != "first_frame" || body.Content[0].ImageURL == nil || body.Content[0].ImageURL.URL != "https://example.com/source.png" {
 		t.Fatalf("source item = %#v", body.Content[0])
 	}
 	if body.Content[1].Type != "text" {
@@ -103,5 +103,36 @@ func TestDoubaoImg2VideoCarriesReferenceImagesForIdentity(t *testing.T) {
 		if item.Role != "reference_image" || item.ImageURL == nil || item.ImageURL.URL != want {
 			t.Fatalf("reference_image[%d] = %#v, want %s", i, item, want)
 		}
+	}
+}
+
+func TestDoubaoPlainImg2VideoKeepsRolelessSourceForNonSeedance(t *testing.T) {
+	var body doubaoSubmitReq
+	g := NewDoubaoGenerator("test-key", "https://example.com", "V4.0", "doubao")
+	g.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("unmarshal submit body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`{"id":"task-3","status":"queued"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	_, err := g.submit(context.Background(), VideoGenerateReq{
+		Prompt:             "保持同一人物形象稳定",
+		GenerateMode:       "img2video",
+		SourceImageURL:     "https://example.com/source.png",
+		CharacterImageURLs: []string{"https://example.com/ref-a.png"},
+		DurationSec:        5,
+	})
+	if err != nil {
+		t.Fatalf("submit returned error: %v", err)
+	}
+	if body.Content[0].Role != "" {
+		t.Fatalf("non-seedance source role = %q, want empty", body.Content[0].Role)
 	}
 }
