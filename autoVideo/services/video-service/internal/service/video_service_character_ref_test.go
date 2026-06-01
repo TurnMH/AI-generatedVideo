@@ -93,6 +93,36 @@ func TestIdentityAnchorReferencesPreferApprovedFirstFrameWhenPresent(t *testing.
 	}
 }
 
+func TestPreferredIdentitySourceImageURLUsesApprovedFirstFrameFirst(t *testing.T) {
+	rc := model.RenderConfig{
+		"character_anchor_image_url":     "https://example.com/project-anchor.png",
+		"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
+	}
+	if got := preferredIdentitySourceImageURL(rc); got != "https://example.com/approved-first-frame.png" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestShouldUseSeedanceIdentityAnchorSourceFallbackAfterSecondLiveActionClip(t *testing.T) {
+	task := &model.VideoTask{
+		SerialScene: true,
+		StylePreset: "live-action-short",
+		RenderConfig: model.RenderConfig{
+			"require_same_character":         true,
+			"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
+		},
+	}
+	if !shouldUseSeedanceIdentityAnchorSourceFallback("doubao-seedance", task, 2, "group-a", "") {
+		t.Fatalf("expected Seedance live-action clip 3+ to fall back to identity anchor source")
+	}
+	if shouldUseSeedanceIdentityAnchorSourceFallback("doubao-seedance", task, 1, "group-a", "") {
+		t.Fatalf("did not expect clip 2 to use identity anchor source fallback")
+	}
+	if shouldUseSeedanceIdentityAnchorSourceFallback("doubao", task, 2, "group-a", "") {
+		t.Fatalf("did not expect plain doubao route to change here")
+	}
+}
+
 func TestShouldChainSerialSourceWeakensLiveActionSameCharacterAfterSecondClip(t *testing.T) {
 	task := &model.VideoTask{
 		SerialScene: true,

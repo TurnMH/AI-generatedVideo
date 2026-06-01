@@ -463,6 +463,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			GenerateMode:    renderConfigString(task.RenderConfig, "generate_mode"),
 			GenerateAudio:   renderConfigBool(task.RenderConfig, "generate_audio"),
 		}
+		if shouldUseSeedanceIdentityAnchorSourceFallback(resolvedModelName, task, c.SceneSeq, c.SceneGroupKey, genReq.SourceImageURL) {
+			genReq.SourceImageURL = preferredIdentitySourceImageURL(task.RenderConfig)
+		}
 		if endURL := renderConfigString(task.RenderConfig, "end_image_url"); endURL != "" {
 			genReq.TailImageURL = endURL
 		}
@@ -1410,6 +1413,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		// Video generation mode and audio
 		GenerateMode:  renderConfigString(task.RenderConfig, "generate_mode"),
 		GenerateAudio: renderConfigBool(task.RenderConfig, "generate_audio"),
+	}
+	if shouldUseSeedanceIdentityAnchorSourceFallback(resolvedModelName, task, clip.SceneSeq, clip.SceneGroupKey, genReq.SourceImageURL) {
+		genReq.SourceImageURL = preferredIdentitySourceImageURL(task.RenderConfig)
 	}
 	// Override TailImageURL from RenderConfig if provided
 	if endURL := renderConfigString(task.RenderConfig, "end_image_url"); endURL != "" {
@@ -2894,6 +2900,30 @@ func isLiveActionSameCharacterSerialLock(task *model.VideoTask) bool {
 		return true
 	}
 	return false
+}
+
+func preferredIdentitySourceImageURL(renderConfig model.RenderConfig) string {
+	refs := identityAnchorReferences(renderConfig)
+	if len(refs) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(refs[0])
+}
+
+func shouldUseSeedanceIdentityAnchorSourceFallback(modelName string, task *model.VideoTask, sceneSeq int, sceneGroupKey, sourceURL string) bool {
+	if strings.TrimSpace(sourceURL) != "" {
+		return false
+	}
+	if explainVideoGeneratorRoute(modelName).RoutedGenerator != "doubao-seedance" {
+		return false
+	}
+	if !isLiveActionSameCharacterSerialLock(task) {
+		return false
+	}
+	if shouldChainSerialSource(task, sceneSeq, sceneGroupKey) {
+		return false
+	}
+	return preferredIdentitySourceImageURL(task.RenderConfig) != ""
 }
 
 func shouldChainSerialSource(task *model.VideoTask, sceneSeq int, sceneGroupKey string) bool {
