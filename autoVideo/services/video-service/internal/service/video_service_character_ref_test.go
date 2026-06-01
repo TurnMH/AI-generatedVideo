@@ -20,7 +20,7 @@ func (testVideoGenerator) Generate(context.Context, generators.VideoGenerateReq)
 	return nil, nil
 }
 func (testVideoGenerator) IsAvailable(context.Context) bool { return true }
-func (testVideoGenerator) SupportsNativeAudio() bool       { return false }
+func (testVideoGenerator) SupportsNativeAudio() bool        { return false }
 func (testVideoGenerator) ParamOptions() []generators.ModelParamOption {
 	return nil
 }
@@ -90,6 +90,51 @@ func TestIdentityAnchorReferencesPreferApprovedFirstFrameWhenPresent(t *testing.
 	}
 	if got[2] != "https://example.com/start-image.png" {
 		t.Fatalf("got[2]=%q", got[2])
+	}
+}
+
+func TestShouldChainSerialSourceWeakensLiveActionSameCharacterAfterSecondClip(t *testing.T) {
+	task := &model.VideoTask{
+		SerialScene: true,
+		StylePreset: "live-action-short",
+		RenderConfig: model.RenderConfig{
+			"require_same_character": true,
+		},
+	}
+	if !shouldChainSerialSource(task, 1, "group-a") {
+		t.Fatalf("expected clip 2 in live-action same-character chain to keep serial source")
+	}
+	if shouldChainSerialSource(task, 2, "group-a") {
+		t.Fatalf("expected clip 3+ in live-action same-character chain to stop inheriting previous tail frame")
+	}
+}
+
+func TestShouldChainSerialSourceKeepsNonLiveActionBehavior(t *testing.T) {
+	task := &model.VideoTask{
+		SerialScene: true,
+		StylePreset: "anime-2d",
+		RenderConfig: model.RenderConfig{
+			"require_same_character": true,
+		},
+	}
+	if !shouldChainSerialSource(task, 2, "group-a") {
+		t.Fatalf("expected non-live-action chain policy to remain unchanged")
+	}
+}
+
+func TestShouldAddSerialContinuityPromptStopsAfterSecondLiveActionSameCharacterClip(t *testing.T) {
+	task := &model.VideoTask{
+		SerialScene: true,
+		StylePreset: "live-action-short",
+		RenderConfig: model.RenderConfig{
+			"require_same_character": true,
+		},
+	}
+	if !shouldAddSerialContinuityPrompt(task, 1, 1, "group-a", []string{"", "主讲人继续自然口播产品卖点"}, nil) {
+		t.Fatalf("expected clip 2 continuity prompt to remain enabled when chain is active")
+	}
+	if shouldAddSerialContinuityPrompt(task, 2, 2, "group-a", []string{"", "", "主讲人继续自然口播产品卖点"}, nil) {
+		t.Fatalf("expected clip 3+ continuity prompt to stop when live-action same-character chain is disabled")
 	}
 }
 

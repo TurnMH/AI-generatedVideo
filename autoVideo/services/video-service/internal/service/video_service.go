@@ -2882,8 +2882,25 @@ func clipHasUsableContinuityText(task *model.VideoTask, clipOrder int, perClipDi
 	return false
 }
 
+func isLiveActionSameCharacterSerialLock(task *model.VideoTask) bool {
+	if task == nil || !task.SerialScene {
+		return false
+	}
+	if !renderConfigBool(task.RenderConfig, "require_same_character") {
+		return false
+	}
+	style := strings.ToLower(strings.TrimSpace(task.StylePreset))
+	if strings.HasPrefix(style, "live-action") {
+		return true
+	}
+	return false
+}
+
 func shouldChainSerialSource(task *model.VideoTask, sceneSeq int, sceneGroupKey string) bool {
 	if task == nil || !task.SerialScene || sceneSeq <= 0 || strings.TrimSpace(sceneGroupKey) == "" {
+		return false
+	}
+	if isLiveActionSameCharacterSerialLock(task) && sceneSeq >= 2 {
 		return false
 	}
 	return true
