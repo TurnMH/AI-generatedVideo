@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -55,8 +56,26 @@ func (g *HubagiGenerator) IsAvailable(ctx context.Context) bool {
 // SupportsNativeAudio —— Hubagi does not embed audio in generated clips.
 func (g *HubagiGenerator) SupportsNativeAudio() bool { return false }
 
-// ParamOptions —— Hubagi 支持的模型参数（时长）
+// ParamOptions —— Hubagi 支持的模型参数。
+// Veo 3.1 走 HubAGI 时开放时长、画面比例、分辨率；TC-GV 仍只暴露时长。
 func (g *HubagiGenerator) ParamOptions() []ModelParamOption {
+	lowerModel := strings.ToLower(strings.TrimSpace(g.Model))
+	if strings.Contains(lowerModel, "voe") || strings.Contains(lowerModel, "veo") {
+		return []ModelParamOption{
+			{
+				Key: "duration", Label: "时长", Default: "8",
+				Values: []ParamValue{{Value: "4", Label: "4秒"}, {Value: "6", Label: "6秒"}, {Value: "8", Label: "8秒"}},
+			},
+			{
+				Key: "aspect_ratio", Label: "画面比例", Default: "16:9",
+				Values: []ParamValue{{Value: "16:9", Label: "横屏 16:9"}, {Value: "9:16", Label: "竖屏 9:16"}},
+			},
+			{
+				Key: "resolution", Label: "分辨率", Default: "720p",
+				Values: []ParamValue{{Value: "720p", Label: "720p"}, {Value: "1080p", Label: "1080p"}, {Value: "4k", Label: "4K"}},
+			},
+		}
+	}
 	return []ModelParamOption{
 		{
 			Key: "duration", Label: "时长", Default: "5",
@@ -66,14 +85,16 @@ func (g *HubagiGenerator) ParamOptions() []ModelParamOption {
 }
 
 type hubagiSubmitReq struct {
-	Model    string `json:"model"`
-	ImageURL string `json:"image_url,omitempty"`
-	Prompt   string `json:"prompt"`
-	Duration int    `json:"duration,omitempty"`
+	Model       string `json:"model"`
+	ImageURL    string `json:"image_url,omitempty"`
+	Prompt      string `json:"prompt"`
+	Duration    int    `json:"duration,omitempty"`
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+	Resolution  string `json:"resolution,omitempty"`
 }
 
 type hubagiSubmitResp struct {
-	ID     json.Number `json:"id"`     // API returns numeric snowflake ID, not a string
+	ID     json.Number `json:"id"` // API returns numeric snowflake ID, not a string
 	TaskID json.Number `json:"task_id"`
 	Status string      `json:"status"` // pending, processing, completed, failed
 	State  string      `json:"state"`
@@ -83,9 +104,9 @@ type hubagiSubmitResp struct {
 type hubagiPollResp struct {
 	ID        json.Number `json:"id"`
 	TaskID    json.Number `json:"task_id"`
-	Status    string `json:"status"`
-	State     string `json:"state"`
-	ResultURL string `json:"result_url"`
+	Status    string      `json:"status"`
+	State     string      `json:"state"`
+	ResultURL string      `json:"result_url"`
 	Creations []struct {
 		URL string `json:"url"`
 	} `json:"creations"`
@@ -120,10 +141,12 @@ func (g *HubagiGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	}
 
 	body := hubagiSubmitReq{
-		Model:    g.Model,
-		ImageURL: req.SourceImageURL,
-		Prompt:   req.Prompt,
-		Duration: dur,
+		Model:       g.Model,
+		ImageURL:    req.SourceImageURL,
+		Prompt:      req.Prompt,
+		Duration:    dur,
+		AspectRatio: strings.TrimSpace(req.AspectRatio),
+		Resolution:  normalizeHubagiResolution(req.Resolution),
 	}
 	b, _ := json.Marshal(body)
 
@@ -165,6 +188,20 @@ func (g *HubagiGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		return "", fmt.Errorf("hubagi: no task id in response: %s", string(respBody))
 	}
 	return id, nil
+}
+
+func normalizeHubagiResolution(resolution string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(resolution))
+	switch trimmed {
+	case "4k", "2160p":
+		return "4k"
+	case "1080", "1080p", "fhd":
+		return "1080p"
+	case "720", "720p", "hd":
+		return "720p"
+	default:
+		return strings.TrimSpace(resolution)
+	}
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（10分钟）

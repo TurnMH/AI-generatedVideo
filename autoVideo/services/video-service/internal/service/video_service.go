@@ -4888,6 +4888,7 @@ func clipDuration(d float64) float64 {
 //   - kling:         5 or 10
 //   - wan:           5 (fixed)
 //   - vidu/vidu-mix: 4 or 8
+//   - veo:           4, 6, or 8
 //   - doubao:        5, 8, or 10
 //   - suanneng:      5, 8, or 10
 //   - others:        passthrough (clamped to [3, 20])
@@ -4908,6 +4909,8 @@ func snapDurationToModel(dur float64, family string) float64 {
 		return 5
 	case "vidu":
 		return snapToNearest(dur, []float64{4, 8})
+	case "veo":
+		return snapToNearest(dur, []float64{4, 6, 8})
 	case "doubao":
 		return snapToNearest(dur, []float64{5, 8, 10})
 	case "suanneng":
