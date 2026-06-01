@@ -692,6 +692,10 @@ ${paceBlock}`
     () => formatVideoModelActualLabel(selectedModelMeta, effectiveSelectedVideoModel),
     [selectedModelMeta, effectiveSelectedVideoModel],
   )
+  const selectedGenerationProviderModel = useMemo(
+    () => String(selectedModelMeta?.provider_model || '').trim(),
+    [selectedModelMeta],
+  )
   const selectedModelParams = useMemo(() => selectedModelMeta?.params || [], [selectedModelMeta])
 
   const videoModelsForStep3 = useMemo(() => {
@@ -2310,6 +2314,11 @@ ${paceBlock}`
                           })}
                         </select>
                         <div className="text-[11px] text-emerald-100/75">这里会显示步骤 3 的别名和当前运行态声明的实际 provider model；真正提交给 video-service 的 `model_name` 仍然是内部 key，回流任务里的 `effective_model` 会展示最终生效模型名。如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
+                        <div className="rounded-lg border border-emerald-400/20 bg-black/20 px-3 py-2 text-[11px] text-emerald-50">
+                          当前别名：{selectedGenerationModelLabel || '未选择'}
+                          <br />
+                          当前实际 provider model：{selectedGenerationProviderModel || '未声明'}
+                        </div>
                       </div>
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
