@@ -131,7 +131,7 @@ func (g *TencentVCLMGenerator) Generate(ctx context.Context, req VideoGenerateRe
 		return nil, fmt.Errorf("vclm submit: %w", err)
 	}
 
-	clip, err := g.pollJob(ctx, jobID)
+	clip, err := g.pollJob(ctx, jobID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("vclm poll %s: %w", jobID, err)
 	}
@@ -169,7 +169,7 @@ func (g *TencentVCLMGenerator) submitJob(ctx context.Context, imageURL, prompt, 
 	return result.Response.JobId, nil
 }
 
-func (g *TencentVCLMGenerator) pollJob(ctx context.Context, jobID string) (*VideoClip, error) {
+func (g *TencentVCLMGenerator) pollJob(ctx context.Context, jobID string, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(20 * time.Minute)
@@ -181,7 +181,7 @@ func (g *TencentVCLMGenerator) pollJob(ctx context.Context, jobID string) (*Vide
 		case <-timeout:
 			return nil, fmt.Errorf("vclm: job %s timed out after 20min", jobID)
 		case <-ticker.C:
-			clip, done, err := g.queryJob(ctx, jobID)
+			clip, done, err := g.queryJob(ctx, jobID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -192,7 +192,7 @@ func (g *TencentVCLMGenerator) pollJob(ctx context.Context, jobID string) (*Vide
 	}
 }
 
-func (g *TencentVCLMGenerator) queryJob(ctx context.Context, jobID string) (*VideoClip, bool, error) {
+func (g *TencentVCLMGenerator) queryJob(ctx context.Context, jobID string, requestedDuration float64) (*VideoClip, bool, error) {
 	body := vclmQueryReq{JobId: jobID}
 	b, _ := json.Marshal(body)
 
@@ -216,7 +216,7 @@ func (g *TencentVCLMGenerator) queryJob(ctx context.Context, jobID string) (*Vid
 		}
 		return &VideoClip{
 			ClipURL:     result.Response.ResultVideoUrl,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   g.Name(),
 		}, true, nil
 	case "FAILED":

@@ -176,7 +176,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const chatBottomRef = useRef<HTMLDivElement>(null)
   const shouldStickChatToBottomRef = useRef(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [createForm, setCreateForm] = useState({ type: 'character' as AssetType, name: '', description: '' })
+  const [createForm, setCreateForm] = useState({ type: 'character' as AssetType, name: '', description: '', stylePreset: 'anime' })
   const [createLoading, setCreateLoading] = useState(false)
   const [batchGeneratingTarget, setBatchGeneratingTarget] = useState<'all' | number | null>(null)
   const [pausingGeneration, setPausingGeneration] = useState(false)
@@ -802,12 +802,13 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
         type: createForm.type,
         name: createForm.name.trim(),
         description: createForm.description.trim(),
+        ...(createForm.type === 'character' ? { style_preset: createForm.stylePreset } : {}),
         is_manual: true,
       })
       toast({ title: '资源创建成功', variant: 'success' })
       mutateAssets()
       setShowCreateDialog(false)
-      setCreateForm({ type: 'character', name: '', description: '' })
+      setCreateForm({ type: 'character', name: '', description: '', stylePreset: 'anime' })
     } catch {
       toast({ title: '创建失败', variant: 'destructive' })
     }
@@ -1192,6 +1193,11 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                     {asset.is_manual && (
                       <Badge variant="outline" className="text-[10px]">
                         手动
+                      </Badge>
+                    )}
+                    {asset.type === 'character' && typeof asset.metadata?.style_preset === 'string' && asset.metadata.style_preset.trim() && (
+                      <Badge variant="outline" className="text-[10px]">
+                        风格 {asset.metadata.style_preset === 'realistic' ? '真实环境' : asset.metadata.style_preset === 'anime' ? '动漫' : asset.metadata.style_preset}
                       </Badge>
                     )}
                   </div>
@@ -1623,6 +1629,9 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                             <p className="text-xs font-medium text-surface-700">人物资源图生成</p>
                             <p className="mt-1 text-xs text-surface-500">
                               自动生成四视图人物资源图（头像特写 + 正面全身 + 90°侧面全身 + 背面全身合成一张），供分镜及后续生图模型识别角色。
+                            </p>
+                            <p className="mt-1 text-xs text-surface-500">
+                              当前人物风格：{typeof selectedAsset.metadata?.style_preset === 'string' && selectedAsset.metadata.style_preset.trim() ? (selectedAsset.metadata.style_preset === 'realistic' ? '真实环境 / 写实风格' : selectedAsset.metadata.style_preset === 'anime' ? '动漫风格' : selectedAsset.metadata.style_preset) : '未显式设置（后端默认动漫风格）'}。
                             </p>
                           </div>
                           <Badge variant="outline" className="w-fit">
@@ -2118,6 +2127,27 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCreateForm(f => ({ ...f, description: e.target.value }))}
               />
             </div>
+            {createForm.type === 'character' && (
+              <div className="space-y-3 rounded-xl border border-surface-200 bg-surface-50 p-3">
+                <div className="space-y-2">
+                  <Label>人物风格类型</Label>
+                  <Select value={createForm.stylePreset} onValueChange={(v: string) => setCreateForm(f => ({ ...f, stylePreset: v }))}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="anime">动漫风格</SelectItem>
+                      <SelectItem value="realistic">真实环境 / 写实风格</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs leading-5 text-surface-600">
+                  <p>• 动漫风格：适合二次元、插画感、夸张造型的人物设定。</p>
+                  <p>• 真实环境 / 写实风格：适合真人广告感、真实摄影感、现实场景人物。</p>
+                  <p>• 当前选择会真实写入 <span className="font-mono">style_preset</span>，供后续人物图生成链使用。</p>
+                </div>
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setShowCreateDialog(false)}>取消</Button>
               <Button onClick={handleCreateAsset} disabled={createLoading}>

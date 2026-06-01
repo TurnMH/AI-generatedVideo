@@ -280,7 +280,7 @@ func main() {
 
 	// ── Services ────────────────────────────────────────────
 	repo := repository.NewVideoRepo(db)
-	videoSvc := service.NewVideoService(repo, ffmpegSvc, gens, cfg.Storage.BaseURL, cfg.Character.BaseURL, logger, cfg.Concurrency.MaxClips, cfg.Concurrency.LocalMaxClips)
+	videoSvc := service.NewVideoService(repo, ffmpegSvc, gens, cfg.Storage.BaseURL, cfg.Character.BaseURL, cfg.JWT.Secret, logger, cfg.Concurrency.MaxClips, cfg.Concurrency.LocalMaxClips)
 	videoSvc.SetKafkaWriter(cfg.Kafka.Brokers, cfg.Kafka.ConsumerTopic)
 
 	// 视频串行生成：末帧提取服务

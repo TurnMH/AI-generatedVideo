@@ -37,8 +37,8 @@ function getFallbackVideoModelLabel(key: string) {
     doubao: '豆包-视频生成-标准版',
     'doubao-seedance': '豆包-Seedance-2.0',
     suanneng: '算能-视频生成-标准版',
-    'hubagi-voe3.1': 'Hubagi-Veo-3.1',
-    'hubagi-TC-GV': 'Hubagi-TC-GV-标准版',
+    'hubagi-voe3.1': 'Google-Veo-3.1',
+    'hubagi-TC-GV': 'Google-TC-GV-标准版',
     sora2: 'OpenAI-Sora-2',
     'comfyui-video': 'ComfyUI-Video-本地版',
     runninghub: 'RunningHub-Video-标准版',
@@ -387,7 +387,7 @@ export default function AdVideoWorkbenchPage() {
                 <option value="default">系统默认</option>
                 {textModels.map((model) => (
                   <option key={model.id} value={String(model.id)}>
-                    {model.name} · {model.model_key}
+                    {model.name}
                   </option>
                 ))}
               </select>
@@ -402,7 +402,7 @@ export default function AdVideoWorkbenchPage() {
                 <option value="default">系统默认</option>
                 {imageModels.map((model) => (
                   <option key={model.id} value={String(model.id)}>
-                    {model.name} · {model.model_key}
+                    {model.name}
                   </option>
                 ))}
               </select>

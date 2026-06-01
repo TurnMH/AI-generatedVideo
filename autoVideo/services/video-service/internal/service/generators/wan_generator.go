@@ -147,7 +147,7 @@ func (g *WanGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*Vid
 	if err != nil {
 		return nil, fmt.Errorf("wan submit: %w", err)
 	}
-	clip, err := g.poll(ctx, taskID)
+	clip, err := g.poll(ctx, taskID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("wan poll: %w", err)
 	}
@@ -233,7 +233,7 @@ func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string
 }
 
 // poll —— 轮询 DashScope 任务状态直到完成、失败或超时（15分钟）
-func (g *WanGenerator) poll(ctx context.Context, taskID string) (*VideoClip, error) {
+func (g *WanGenerator) poll(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -245,7 +245,7 @@ func (g *WanGenerator) poll(ctx context.Context, taskID string) (*VideoClip, err
 		case <-timeout:
 			return nil, fmt.Errorf("wan: task %s timed out after 15min", taskID)
 		case <-ticker.C:
-			clip, done, err := g.queryTask(ctx, taskID)
+			clip, done, err := g.queryTask(ctx, taskID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -257,7 +257,7 @@ func (g *WanGenerator) poll(ctx context.Context, taskID string) (*VideoClip, err
 }
 
 // queryTask —— 查询 DashScope 任务状态，返回结果和是否完成
-func (g *WanGenerator) queryTask(ctx context.Context, taskID string) (*VideoClip, bool, error) {
+func (g *WanGenerator) queryTask(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, bool, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		g.BaseURL+"/api/v1/tasks/"+taskID, nil)
 	if err != nil {
@@ -282,7 +282,7 @@ func (g *WanGenerator) queryTask(ctx context.Context, taskID string) (*VideoClip
 	case "SUCCEEDED":
 		return &VideoClip{
 			ClipURL:     result.Output.VideoURL,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   resolvedModelUsed(g.Model, "wan"),
 		}, true, nil
 	case "FAILED":

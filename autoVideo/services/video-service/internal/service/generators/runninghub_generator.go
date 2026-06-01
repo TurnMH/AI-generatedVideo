@@ -90,7 +90,7 @@ func (g *RunningHubGenerator) Generate(ctx context.Context, req VideoGenerateReq
 	if err != nil {
 		return nil, fmt.Errorf("runninghub submit: %w", err)
 	}
-	return g.poll(ctx, taskID)
+	return g.poll(ctx, taskID, req.DurationSec)
 }
 
 func (g *RunningHubGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
@@ -129,7 +129,7 @@ func (g *RunningHubGenerator) submit(ctx context.Context, req VideoGenerateReq) 
 	return result.Data.TaskID, nil
 }
 
-func (g *RunningHubGenerator) poll(ctx context.Context, taskID string) (*VideoClip, error) {
+func (g *RunningHubGenerator) poll(ctx context.Context, taskID string, requestedDuration float64) (*VideoClip, error) {
 	deadline := time.Now().Add(15 * time.Minute)
 	for {
 		if time.Now().After(deadline) {
@@ -154,7 +154,7 @@ func (g *RunningHubGenerator) poll(ctx context.Context, taskID string) (*VideoCl
 			if url == "" {
 				return nil, fmt.Errorf("runninghub: empty output URL")
 			}
-			return &VideoClip{ClipURL: url, DurationSec: 5, ModelUsed: g.Name()}, nil
+			return &VideoClip{ClipURL: url, DurationSec: resolvedDurationSec(0, requestedDuration), ModelUsed: g.Name()}, nil
 		case "FAILED":
 			return nil, fmt.Errorf("runninghub: task %s failed", taskID)
 		}

@@ -52,11 +52,17 @@ func applyRuntimeConfig(cfg *config.Config) error {
 			}
 		}
 		scopes := splitScope(kling[0].ModelScope)
-		if len(scopes) > 0 { cfg.Models.KlingModel = scopes[0] }
-		if len(scopes) > 1 { cfg.Models.KlingOmniModel = scopes[1] }
+		if len(scopes) > 0 {
+			cfg.Models.KlingModel = scopes[0]
+		}
+		if len(scopes) > 1 {
+			cfg.Models.KlingOmniModel = scopes[1]
+		}
 	}
 	applySingle(byProvider["runtime.video.aiping"], &cfg.Models.AipingBase, &cfg.Models.AipingKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.KlingModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.AipingModel = scopes[0]
+		}
 	})
 	if err := validatePairProvider(byProvider, "runtime.video.vclm"); err != nil {
 		log.Printf("[runtime-keys] warning provider=%s detail=%s", "runtime.video.vclm", err.Error())
@@ -67,30 +73,58 @@ func applyRuntimeConfig(cfg *config.Config) error {
 	}
 	applyPair(byProvider["runtime.video.wan"], &cfg.Models.WanKey, &cfg.Models.WanSecret, &cfg.Models.WanBase)
 	applySingle(byProvider["runtime.video.runninghub"], &cfg.Models.RunningHubBase, &cfg.Models.RunningHubKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.RunningHubWorkflow = scopes[0] }
-		if len(scopes) > 1 { cfg.Models.RunningHubNodeID = scopes[1] }
+		if len(scopes) > 0 {
+			cfg.Models.RunningHubWorkflow = scopes[0]
+		}
+		if len(scopes) > 1 {
+			cfg.Models.RunningHubNodeID = scopes[1]
+		}
 	})
 	applySingle(byProvider["runtime.video.replicate"], nil, &cfg.Models.ReplicateKey, nil)
 	applySingle(byProvider["runtime.video.sora2"], &cfg.Models.Sora2Base, &cfg.Models.Sora2Key, nil)
 	applySingle(byProvider["runtime.video.hubagi"], &cfg.Models.HubagiBase, &cfg.Models.HubagiKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.HubagiModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.HubagiModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.veo"], &cfg.Models.VeoBase, &cfg.Models.VeoKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.VeoModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.VeoModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.doubao"], &cfg.Models.DoubaoBase, &cfg.Models.DoubaoKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.DoubaoModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.DoubaoModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.doubao.seedance"], &cfg.Models.DoubaoSeedanceBase, &cfg.Models.DoubaoSeedanceKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.DoubaoSeedanceModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.DoubaoSeedanceModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.vidu"], &cfg.Models.ViduBase, &cfg.Models.ViduKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.ViduModel = scopes[0] }
-		if len(scopes) > 1 { cfg.Models.ViduMixModel = scopes[1] }
+		if len(scopes) > 0 {
+			cfg.Models.ViduModel = scopes[0]
+		}
+		if len(scopes) > 1 {
+			cfg.Models.ViduMixModel = scopes[1]
+		}
 	})
 	applySingle(byProvider["runtime.video.vidu.offpeak"], &cfg.Models.ViduBase, &cfg.Models.ViduOffpeakKey, nil)
 	applySingle(byProvider["runtime.video.suanneng"], &cfg.Models.SuannengBase, &cfg.Models.SuannengKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.SuannengModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.SuannengModel = scopes[0]
+		}
+	})
+	applySingle(byProvider["runtime.video.minmax"], &cfg.Models.MinMaxBase, &cfg.Models.MinMaxKey, func(scopes []string) {
+		if len(scopes) > 0 {
+			cfg.Models.MinMaxModel = scopes[0]
+		}
+	})
+	applySingle(byProvider["runtime.video.hailuo"], &cfg.Models.MinMaxBase, &cfg.Models.MinMaxKey, func(scopes []string) {
+		if len(scopes) > 0 {
+			cfg.Models.MinMaxModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.gaga"], &cfg.Models.GagaBase, &cfg.Models.GagaKey, nil)
 	if err := validatePairProvider(byProvider, "runtime.video.baidu.bce"); err != nil {
@@ -99,13 +133,19 @@ func applyRuntimeConfig(cfg *config.Config) error {
 	applyPair(byProvider["runtime.video.baidu.bce"], &cfg.Models.BaiduBCEKey, &cfg.Models.BaiduBCESecret, nil)
 	if baidu := byProvider["runtime.video.baidu.bce"]; len(baidu) > 0 {
 		scopes := splitScope(baidu[0].ModelScope)
-		if len(scopes) > 0 { cfg.Models.BaiduBCEModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.BaiduBCEModel = scopes[0]
+		}
 	}
 	applySingle(byProvider["runtime.video.llm"], &cfg.Models.LLMBase, &cfg.Models.LLMKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.LLMModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.LLMModel = scopes[0]
+		}
 	})
 	applySingle(byProvider["runtime.video.music"], &cfg.Models.MusicBase, &cfg.Models.MusicKey, func(scopes []string) {
-		if len(scopes) > 0 { cfg.Models.MusicModel = scopes[0] }
+		if len(scopes) > 0 {
+			cfg.Models.MusicModel = scopes[0]
+		}
 	})
 	if len(byProvider["runtime.video.vclm"]) > 0 {
 		log.Printf("[runtime-keys] info provider=%s detail=%s", "runtime.video.vclm", "kling-family route currently defaults to tencent-vclm")

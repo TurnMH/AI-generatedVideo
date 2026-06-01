@@ -132,7 +132,7 @@ func (g *ViduGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*Vi
 	if err != nil {
 		return nil, fmt.Errorf("vidu submit: %w", err)
 	}
-	clip, err := g.poll(ctx, creationID)
+	clip, err := g.poll(ctx, creationID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("vidu poll %s: %w", creationID, err)
 	}
@@ -217,7 +217,7 @@ func (g *ViduGenerator) submit(ctx context.Context, req VideoGenerateReq) (strin
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）
-func (g *ViduGenerator) poll(ctx context.Context, creationID string) (*VideoClip, error) {
+func (g *ViduGenerator) poll(ctx context.Context, creationID string, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
 
@@ -229,7 +229,7 @@ func (g *ViduGenerator) poll(ctx context.Context, creationID string) (*VideoClip
 		case <-timeout:
 			return nil, fmt.Errorf("vidu: creation %s timed out after 15min", creationID)
 		case <-ticker.C:
-			clip, done, err := g.queryTask(ctx, creationID)
+			clip, done, err := g.queryTask(ctx, creationID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -241,7 +241,7 @@ func (g *ViduGenerator) poll(ctx context.Context, creationID string) (*VideoClip
 }
 
 // queryTask —— 查询单次任务状态
-func (g *ViduGenerator) queryTask(ctx context.Context, creationID string) (*VideoClip, bool, error) {
+func (g *ViduGenerator) queryTask(ctx context.Context, creationID string, requestedDuration float64) (*VideoClip, bool, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		g.BaseURL+"/tasks/"+creationID+"/creations", nil)
 	if err != nil {
@@ -272,7 +272,7 @@ func (g *ViduGenerator) queryTask(ctx context.Context, creationID string) (*Vide
 		}
 		return &VideoClip{
 			ClipURL:     videoURL,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   resolvedModelUsed(g.Model, g.genName),
 		}, true, nil
 	case "failed":

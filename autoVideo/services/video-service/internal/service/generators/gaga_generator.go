@@ -95,9 +95,13 @@ type gagaCondition struct {
 
 // gagaGenerationResp — Step 2 response and polling response (ID is also Long)
 type gagaGenerationResp struct {
-	ID       int64  `json:"id"`
-	Status   string `json:"status"`   // pending / completed / failed
-	VideoURL string `json:"url"`
+	ID        int64  `json:"id"`
+	Status    string `json:"status"` // pending / processing / running / completed / success / succeeded / failed
+	State     string `json:"state"`
+	ResultURL string `json:"result_url"`
+	VideoURL  string `json:"url"`
+	Error     string `json:"error"`
+	Message   string `json:"message"`
 	Creations []struct {
 		URL string `json:"url"`
 	} `json:"creations"`
@@ -125,7 +129,7 @@ func (g *GagaGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*Vi
 	}
 
 	// Step 3: poll for completion
-	clip, err := g.poll(ctx, genID)
+	clip, err := g.poll(ctx, genID, req.DurationSec)
 	if err != nil {
 		return nil, fmt.Errorf("gaga poll %d: %w", genID, err)
 	}
@@ -265,7 +269,7 @@ func (g *GagaGenerator) submit(ctx context.Context, req VideoGenerateReq, assetI
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）
-func (g *GagaGenerator) poll(ctx context.Context, genID int64) (*VideoClip, error) {
+func (g *GagaGenerator) poll(ctx context.Context, genID int64, requestedDuration float64) (*VideoClip, error) {
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
 
@@ -277,7 +281,7 @@ func (g *GagaGenerator) poll(ctx context.Context, genID int64) (*VideoClip, erro
 		case <-timeout:
 			return nil, fmt.Errorf("gaga: generation %d timed out after 15min", genID)
 		case <-ticker.C:
-			clip, done, err := g.queryTask(ctx, genID)
+			clip, done, err := g.queryTask(ctx, genID, requestedDuration)
 			if err != nil {
 				return nil, err
 			}
@@ -289,7 +293,7 @@ func (g *GagaGenerator) poll(ctx context.Context, genID int64) (*VideoClip, erro
 }
 
 // queryTask —— 查询单次任务状态
-func (g *GagaGenerator) queryTask(ctx context.Context, genID int64) (*VideoClip, bool, error) {
+func (g *GagaGenerator) queryTask(ctx context.Context, genID int64, requestedDuration float64) (*VideoClip, bool, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("%s/v1/generations/%d", g.BaseURL, genID), nil)
 	if err != nil {
@@ -303,16 +307,20 @@ func (g *GagaGenerator) queryTask(ctx context.Context, genID int64) (*VideoClip,
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, false, fmt.Errorf("gaga poll HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
 
 	var result gagaGenerationResp
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, false, nil
+		return nil, false, fmt.Errorf("gaga: parse poll response: %w body=%s", err, string(respBody))
 	}
 
-	switch result.Status {
-	case "completed", "success":
-		// Try creations array first, then top-level url
-		videoURL := result.VideoURL
+	status := strings.ToLower(strings.TrimSpace(firstNonEmpty(result.Status, result.State)))
+	switch status {
+	case "completed", "complete", "success", "succeeded":
+		// Try explicit result_url first, then top-level url, then creations array.
+		videoURL := firstNonEmpty(result.ResultURL, result.VideoURL)
 		if videoURL == "" && len(result.Creations) > 0 {
 			videoURL = result.Creations[0].URL
 		}
@@ -321,11 +329,15 @@ func (g *GagaGenerator) queryTask(ctx context.Context, genID int64) (*VideoClip,
 		}
 		return &VideoClip{
 			ClipURL:     videoURL,
-			DurationSec: 5,
+			DurationSec: resolvedDurationSec(0, requestedDuration),
 			ModelUsed:   g.Name(),
 		}, true, nil
-	case "failed":
-		return nil, false, fmt.Errorf("gaga: task %d failed", genID)
+	case "failed", "error":
+		reason := strings.TrimSpace(firstNonEmpty(result.Error, result.Message))
+		if reason == "" {
+			reason = string(respBody)
+		}
+		return nil, false, fmt.Errorf("gaga: task %d failed: %s", genID, reason)
 	default: // pending, processing, running
 		return nil, false, nil
 	}

@@ -45,13 +45,13 @@ func klingJWTToken(apiKey string) string {
 
 // KlingGenerator wraps the Kuaishou Kling image-to-video API.
 type KlingGenerator struct {
-	APIKey      string
-	rotator     *keyrotator.Rotator
-	BaseURL     string // https://api.klingai.com
-	ModelName   string // e.g. "kling-v1-6" or "kling-v3"
-	OmniModel   string // e.g. "kling-v3-omni" for fusion video
+	APIKey       string
+	rotator      *keyrotator.Rotator
+	BaseURL      string // https://api.klingai.com
+	ModelName    string // e.g. "kling-v1-6" or "kling-v3"
+	OmniModel    string // e.g. "kling-v3-omni" for fusion video
 	nameOverride string // optional registry name override (e.g. "aiping")
-	client      *http.Client
+	client       *http.Client
 }
 
 // NewKlingGenerator —— 创建可灵视频生成器实例
@@ -90,6 +90,24 @@ func (g *KlingGenerator) nextToken() string {
 		key = g.rotator.Next()
 	}
 	return klingJWTToken(key)
+}
+
+func (g *KlingGenerator) isAiPing() bool {
+	return g.Name() == "aiping" || strings.Contains(strings.ToLower(g.BaseURL), "aiping.cn")
+}
+
+func toAiPingKlingModel(model string) string {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "kling-v3", "kling-3.0", "xinghe-3.0":
+		return "Kling-V3"
+	case "kling-v3-omni", "kling-3.0-omni", "xinghe-3.0-omni":
+		return "Kling-V3-Omni"
+	default:
+		if model == "" {
+			return "Kling-V3"
+		}
+		return model
+	}
 }
 
 // Name —— 返回生成器名称 "kling" (or nameOverride if set)
@@ -165,15 +183,26 @@ type klingElement struct {
 	Description string `json:"description,omitempty"`
 }
 
+type klingImageRef struct {
+	ImageURL string `json:"image_url,omitempty"`
+	Type     string `json:"type,omitempty"`
+}
+
 type klingCreateReq struct {
-	ModelName    string         `json:"model_name"`
-	ImageURL     string         `json:"image_url"`
-	TailImageURL string         `json:"tail_image_url,omitempty"`
-	Prompt       string         `json:"prompt"`
-	Duration     int            `json:"duration"`
-	Mode         string         `json:"mode"`
-	AspectRatio  string         `json:"aspect_ratio,omitempty"` // "16:9" "9:16" "1:1"
-	Elements     []klingElement `json:"elements,omitempty"`
+	ModelName    string          `json:"model_name,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	ImageURL     string          `json:"image_url,omitempty"`
+	Image        string          `json:"image,omitempty"`
+	TailImageURL string          `json:"tail_image_url,omitempty"`
+	ImageTail    string          `json:"image_tail,omitempty"`
+	ImageList    []klingImageRef `json:"image_list,omitempty"`
+	Prompt       string          `json:"prompt"`
+	Duration     int             `json:"duration,omitempty"`
+	Seconds      string          `json:"seconds,omitempty"`
+	Mode         string          `json:"mode,omitempty"`
+	Sound        string          `json:"sound,omitempty"`
+	AspectRatio  string          `json:"aspect_ratio,omitempty"` // "16:9" "9:16" "1:1"
+	Elements     []klingElement  `json:"elements,omitempty"`
 }
 
 type klingCreateResp struct {
@@ -181,7 +210,11 @@ type klingCreateResp struct {
 	Message string `json:"message"`
 	Data    struct {
 		TaskID string `json:"task_id"`
+		ID     string `json:"id"`
 	} `json:"data"`
+	TaskID string `json:"task_id"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
 type klingPollResp struct {
@@ -196,7 +229,19 @@ type klingPollResp struct {
 				Duration float64 `json:"duration"`
 			} `json:"videos"`
 		} `json:"task_result"`
+		VideoURL string `json:"video_url"`
 	} `json:"data"`
+	ID            string `json:"id"`
+	Status        string `json:"status"` // AiPing: queued / processing / completed / failed
+	TaskStatus    string `json:"task_status"`
+	TaskStatusMsg string `json:"task_status_msg"`
+	VideoURL      string `json:"video_url"`
+	TaskResult    struct {
+		Videos []struct {
+			URL      string  `json:"url"`
+			Duration float64 `json:"duration"`
+		} `json:"videos"`
+	} `json:"task_result"`
 }
 
 // Generate —— 提交图生视频任务并轮询等待完成，返回 *VideoClip
@@ -235,6 +280,25 @@ func (g *KlingGenerator) submit(ctx context.Context, req VideoGenerateReq) (task
 		Mode:         firstNonEmpty(req.VideoMode, "std"),
 		AspectRatio:  req.AspectRatio, // omitted when empty → API uses its default (16:9)
 	}
+	if g.isAiPing() {
+		// AiPing 官方文档使用统一 POST /videos 与 GET /videos/{task_id}，并使用 Bearer 鉴权。
+		// 对于 Kling-V3，图生/首尾帧优先使用 image / image_tail；seconds 为文档主字段。
+		body.ModelName = ""
+		body.Model = toAiPingKlingModel(g.ModelName)
+		body.ImageURL = ""
+		body.Image = req.SourceImageURL
+		body.TailImageURL = ""
+		body.ImageTail = req.TailImageURL
+		if req.SourceImageURL != "" {
+			body.ImageList = append(body.ImageList, klingImageRef{ImageURL: req.SourceImageURL, Type: "first_frame"})
+		}
+		if req.TailImageURL != "" {
+			body.ImageList = append(body.ImageList, klingImageRef{ImageURL: req.TailImageURL, Type: "last_frame"})
+		}
+		body.Duration = 0
+		body.Seconds = fmt.Sprintf("%d", dur)
+		body.Sound = "off"
+	}
 	// Attach character reference images for subject consistency when available.
 	for i, charURL := range req.CharacterImageURLs {
 		if i >= 3 { // Kling supports up to 3 elements
@@ -244,14 +308,22 @@ func (g *KlingGenerator) submit(ctx context.Context, req VideoGenerateReq) (task
 	}
 
 	b, _ := json.Marshal(body)
+	endpoint := "/v1/videos/image2video"
+	if g.isAiPing() {
+		endpoint = "/videos"
+	}
 	httpReq, newErr := http.NewRequestWithContext(ctx, http.MethodPost,
-		g.BaseURL+"/v1/videos/image2video", bytes.NewReader(b))
+		strings.TrimRight(g.BaseURL, "/")+endpoint, bytes.NewReader(b))
 	if newErr != nil {
 		return "", "", newErr
 	}
 	token = g.nextToken()
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		httpReq.Header.Set("Authorization", token)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, newErr := g.client.Do(httpReq)
 	if newErr != nil {
@@ -266,7 +338,11 @@ func (g *KlingGenerator) submit(ctx context.Context, req VideoGenerateReq) (task
 	if result.Code != 0 {
 		return "", "", fmt.Errorf("kling error %d: %s", result.Code, result.Message)
 	}
-	return result.Data.TaskID, token, nil
+	taskID = firstNonEmpty(result.Data.TaskID, result.Data.ID, result.TaskID, result.ID)
+	if taskID == "" {
+		return "", "", fmt.Errorf("kling: no task id in response")
+	}
+	return taskID, token, nil
 }
 
 // poll —— 轮询可灵任务状态直到完成或失败（15分钟超时）
@@ -296,12 +372,19 @@ func (g *KlingGenerator) poll(ctx context.Context, taskID string, token string) 
 // queryTask —— 查询可灵任务状态，返回结果和是否完成
 // token must be the same token used in submit() to avoid cross-account lookup failures.
 func (g *KlingGenerator) queryTask(ctx context.Context, taskID string, token string) (*VideoClip, bool, error) {
-	url := fmt.Sprintf("%s/v1/videos/tasks/%s", g.BaseURL, taskID)
+	url := fmt.Sprintf("%s/v1/videos/tasks/%s", strings.TrimRight(g.BaseURL, "/"), taskID)
+	if g.isAiPing() {
+		url = fmt.Sprintf("%s/videos/%s", strings.TrimRight(g.BaseURL, "/"), taskID)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+token)
+	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		httpReq.Header.Set("Authorization", token)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := g.client.Do(httpReq)
 	if err != nil {
@@ -318,9 +401,23 @@ func (g *KlingGenerator) queryTask(ctx context.Context, taskID string, token str
 		return nil, false, fmt.Errorf("kling poll error %d: %s", result.Code, result.Message)
 	}
 
-	switch result.Data.TaskStatus {
+	taskStatus := firstNonEmpty(result.Data.TaskStatus, result.TaskStatus, result.Status)
+	if taskStatus == "completed" {
+		taskStatus = "succeed"
+	}
+	switch taskStatus {
 	case "succeed":
 		videos := result.Data.TaskResult.Videos
+		if len(videos) == 0 {
+			videos = result.TaskResult.Videos
+		}
+		if len(videos) == 0 && firstNonEmpty(result.Data.VideoURL, result.VideoURL) != "" {
+			return &VideoClip{
+				ClipURL:     firstNonEmpty(result.Data.VideoURL, result.VideoURL),
+				DurationSec: 0,
+				ModelUsed:   resolvedModelUsed(g.ModelName, g.Name()),
+			}, true, nil
+		}
 		if len(videos) == 0 {
 			return nil, false, errors.New("kling: no video in result")
 		}
@@ -329,8 +426,8 @@ func (g *KlingGenerator) queryTask(ctx context.Context, taskID string, token str
 			DurationSec: videos[0].Duration,
 			ModelUsed:   resolvedModelUsed(g.ModelName, g.Name()),
 		}, true, nil
-	case "failed":
-		reason := strings.TrimSpace(result.Data.TaskStatusMsg)
+	case "failed", "fail":
+		reason := strings.TrimSpace(firstNonEmpty(result.Data.TaskStatusMsg, result.TaskStatusMsg))
 		if reason == "" {
 			reason = strings.TrimSpace(result.Message)
 		}
