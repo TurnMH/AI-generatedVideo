@@ -57,7 +57,7 @@ func (g *HubagiGenerator) IsAvailable(ctx context.Context) bool {
 func (g *HubagiGenerator) SupportsNativeAudio() bool { return false }
 
 // ParamOptions —— Hubagi 支持的模型参数。
-// Veo 3.1 走 HubAGI 时开放时长、画面比例、分辨率；TC-GV 仍只暴露时长。
+// Veo 3.1 走 HubAGI 时开放时长、画面比例、分辨率，以及 seed / personGeneration / 参考图 / 尾帧约束入口；TC-GV 仍只暴露时长。
 func (g *HubagiGenerator) ParamOptions() []ModelParamOption {
 	lowerModel := strings.ToLower(strings.TrimSpace(g.Model))
 	if strings.Contains(lowerModel, "voe") || strings.Contains(lowerModel, "veo") {
@@ -74,6 +74,19 @@ func (g *HubagiGenerator) ParamOptions() []ModelParamOption {
 				Key: "resolution", Label: "分辨率", Default: "720p",
 				Values: []ParamValue{{Value: "720p", Label: "720p"}, {Value: "1080p", Label: "1080p"}, {Value: "4k", Label: "4K"}},
 			},
+			{
+				Key: "person_generation", Label: "人物生成策略", Default: "allow_adult",
+				Values: []ParamValue{{Value: "allow_adult", Label: "allow_adult（图生视频 / 参考图模式）"}},
+			},
+			{
+				Key: "seed", Label: "随机种子", Default: "",
+			},
+			{
+				Key: "reference_images", Label: "原生参考图约束", Default: "supported",
+			},
+			{
+				Key: "last_frame", Label: "原生尾帧约束", Default: "supported",
+			},
 		}
 	}
 	return []ModelParamOption{
@@ -84,13 +97,26 @@ func (g *HubagiGenerator) ParamOptions() []ModelParamOption {
 	}
 }
 
+type hubagiReferenceImage struct {
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+type hubagiLastFrame struct {
+	ImageURL string `json:"image_url,omitempty"`
+}
+
 type hubagiSubmitReq struct {
-	Model       string `json:"model"`
-	ImageURL    string `json:"image_url,omitempty"`
-	Prompt      string `json:"prompt"`
-	Duration    int    `json:"duration,omitempty"`
-	AspectRatio string `json:"aspect_ratio,omitempty"`
-	Resolution  string `json:"resolution,omitempty"`
+	Model            string                 `json:"model"`
+	ImageURL         string                 `json:"image_url,omitempty"`
+	Prompt           string                 `json:"prompt"`
+	Duration         int                    `json:"duration,omitempty"`
+	AspectRatio      string                 `json:"aspect_ratio,omitempty"`
+	Resolution       string                 `json:"resolution,omitempty"`
+	Seed             int                    `json:"seed,omitempty"`
+	PersonGeneration string                 `json:"person_generation,omitempty"`
+	ReferenceImages  []hubagiReferenceImage `json:"reference_images,omitempty"`
+	LastFrame        *hubagiLastFrame       `json:"last_frame,omitempty"`
+	NumberOfVideos   int                    `json:"number_of_videos,omitempty"`
 }
 
 type hubagiSubmitResp struct {
@@ -135,18 +161,28 @@ func (g *HubagiGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*
 
 // submit —— 向 Hubagi API 提交视频生成请求，返回任务 ID
 func (g *HubagiGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
+	req = normalizeVeoNativeConstraints(req)
 	dur := int(req.DurationSec)
 	if dur <= 0 {
 		dur = 5
 	}
 
 	body := hubagiSubmitReq{
-		Model:       g.Model,
-		ImageURL:    req.SourceImageURL,
-		Prompt:      req.Prompt,
-		Duration:    dur,
-		AspectRatio: strings.TrimSpace(req.AspectRatio),
-		Resolution:  normalizeHubagiResolution(req.Resolution),
+		Model:            g.Model,
+		ImageURL:         req.SourceImageURL,
+		Prompt:           req.Prompt,
+		Duration:         dur,
+		AspectRatio:      strings.TrimSpace(req.AspectRatio),
+		Resolution:       normalizeHubagiResolution(req.Resolution),
+		Seed:             req.Seed,
+		PersonGeneration: strings.TrimSpace(req.PersonGeneration),
+		NumberOfVideos:   req.NumberOfVideos,
+	}
+	if refs := normalizeHubagiReferenceImages(req.ReferenceImages); len(refs) > 0 {
+		body.ReferenceImages = refs
+	}
+	if lastFrame := strings.TrimSpace(req.LastFrameImageURL); lastFrame != "" {
+		body.LastFrame = &hubagiLastFrame{ImageURL: lastFrame}
 	}
 	b, _ := json.Marshal(body)
 
@@ -202,6 +238,62 @@ func normalizeHubagiResolution(resolution string) string {
 	default:
 		return strings.TrimSpace(resolution)
 	}
+}
+
+func normalizeHubagiReferenceImages(urls []string) []hubagiReferenceImage {
+	if len(urls) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	refs := make([]hubagiReferenceImage, 0, minInt(len(urls), 3))
+	for _, raw := range urls {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		refs = append(refs, hubagiReferenceImage{ImageURL: trimmed})
+		if len(refs) >= 3 {
+			break
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
+}
+
+func normalizeVeoNativeConstraints(req VideoGenerateReq) VideoGenerateReq {
+	lowerPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
+	if len(req.ReferenceImages) > 0 || strings.TrimSpace(req.SourceImageURL) != "" || strings.TrimSpace(req.LastFrameImageURL) != "" {
+		if strings.TrimSpace(req.PersonGeneration) == "" {
+			req.PersonGeneration = "allow_adult"
+		}
+	}
+	resolution := normalizeHubagiResolution(req.Resolution)
+	if len(req.ReferenceImages) > 0 || resolution == "1080p" || resolution == "4k" {
+		req.DurationSec = 8
+	}
+	if req.NumberOfVideos <= 0 {
+		req.NumberOfVideos = 1
+	}
+	if req.Seed < 0 {
+		req.Seed = 0
+	}
+	if req.PersonGeneration == "allow_adult" && (strings.Contains(lowerPrompt, "child") || strings.Contains(lowerPrompt, "kid") || strings.Contains(lowerPrompt, "儿童") || strings.Contains(lowerPrompt, "小孩")) {
+		req.PersonGeneration = ""
+	}
+	return req
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（10分钟）

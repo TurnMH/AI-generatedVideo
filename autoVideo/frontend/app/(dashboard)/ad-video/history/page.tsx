@@ -6,7 +6,8 @@ import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { projectAPI, videoAPI, type Project } from '@/lib/api'
+import { projectAPI, videoAPI } from '@/lib/api'
+import type { Project } from '@/types'
 
 type ProjectListResponse = {
   data?: { items?: Project[] } | Project[]

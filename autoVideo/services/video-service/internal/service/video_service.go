@@ -436,12 +436,19 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			SourceImageURL:     c.SourceImageURL,
 			TailImageURL:       tailURL,
 			CharacterImageURLs: clipCharURLs,
-			ClipIndex:          c.ClipOrder,
-			TotalClips:         len(clips),
-			Prompt:             prompt,
-			NegativePrompt:     describeVideoNegativePrompt(resolvedStylePreset),
-			StylePreset:        resolvedStylePreset,
-			MotionMode:         resolvedMotionMode,
+			ReferenceImages:    renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
+			LastFrameImageURL: func() string {
+				if c.ClipOrder == len(clips)-1 {
+					return renderConfigString(task.RenderConfig, "veo_last_frame_image_url")
+				}
+				return ""
+			}(),
+			ClipIndex:      c.ClipOrder,
+			TotalClips:     len(clips),
+			Prompt:         prompt,
+			NegativePrompt: describeVideoNegativePrompt(resolvedStylePreset),
+			StylePreset:    resolvedStylePreset,
+			MotionMode:     resolvedMotionMode,
 			DurationSec: snapDurationToModel(
 				perClipDurationSec(perClipDurations, c.ClipOrder, task.DurationSec),
 				videoModelFamily(resolvedModelName),
@@ -455,13 +462,16 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				}
 				return task.SubtitleText
 			}(),
-			Resolution:      renderConfigString(task.RenderConfig, "resolution"),
-			AspectRatio:     renderConfigString(task.RenderConfig, "aspect_ratio"),
-			MotionAmplitude: renderConfigString(task.RenderConfig, "motion_amplitude"),
-			VideoMode:       renderConfigString(task.RenderConfig, "video_mode"),
-			Count:           renderConfigInt(task.RenderConfig, "count"),
-			GenerateMode:    renderConfigString(task.RenderConfig, "generate_mode"),
-			GenerateAudio:   renderConfigBool(task.RenderConfig, "generate_audio"),
+			Resolution:       renderConfigString(task.RenderConfig, "resolution"),
+			AspectRatio:      renderConfigString(task.RenderConfig, "aspect_ratio"),
+			MotionAmplitude:  renderConfigString(task.RenderConfig, "motion_amplitude"),
+			VideoMode:        renderConfigString(task.RenderConfig, "video_mode"),
+			Count:            renderConfigInt(task.RenderConfig, "count"),
+			GenerateMode:     renderConfigString(task.RenderConfig, "generate_mode"),
+			GenerateAudio:    renderConfigBool(task.RenderConfig, "generate_audio"),
+			Seed:             renderConfigInt(task.RenderConfig, "veo_seed"),
+			PersonGeneration: renderConfigString(task.RenderConfig, "veo_person_generation"),
+			NumberOfVideos:   renderConfigInt(task.RenderConfig, "veo_number_of_videos"),
 		}
 		if shouldUseSeedanceIdentityAnchorSourceFallback(resolvedModelName, task, c.SceneSeq, c.SceneGroupKey, genReq.SourceImageURL) {
 			genReq.SourceImageURL = preferredIdentitySourceImageURL(task.RenderConfig)
@@ -1397,22 +1407,32 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		SourceImageURL:     clip.SourceImageURL,
 		TailImageURL:       tailImageURL(imageURLs, clip.ClipOrder),
 		CharacterImageURLs: retryClipCharURLs,
-		ClipIndex:          clip.ClipOrder,
-		TotalClips:         totalClips,
-		Prompt:             retryPrompt,
-		NegativePrompt:     describeVideoNegativePrompt(task.StylePreset),
-		StylePreset:        task.StylePreset,
-		MotionMode:         task.MotionMode,
-		DurationSec:        retryDuration,
-		VoiceText:          retryVoiceText,
-		Resolution:         renderConfigString(task.RenderConfig, "resolution"),
-		AspectRatio:        renderConfigString(task.RenderConfig, "aspect_ratio"),
-		MotionAmplitude:    renderConfigString(task.RenderConfig, "motion_amplitude"),
-		VideoMode:          renderConfigString(task.RenderConfig, "video_mode"),
-		Count:              renderConfigInt(task.RenderConfig, "count"),
+		ReferenceImages:    renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
+		LastFrameImageURL: func() string {
+			if clip.ClipOrder == totalClips-1 {
+				return renderConfigString(task.RenderConfig, "veo_last_frame_image_url")
+			}
+			return ""
+		}(),
+		ClipIndex:       clip.ClipOrder,
+		TotalClips:      totalClips,
+		Prompt:          retryPrompt,
+		NegativePrompt:  describeVideoNegativePrompt(task.StylePreset),
+		StylePreset:     task.StylePreset,
+		MotionMode:      task.MotionMode,
+		DurationSec:     retryDuration,
+		VoiceText:       retryVoiceText,
+		Resolution:      renderConfigString(task.RenderConfig, "resolution"),
+		AspectRatio:     renderConfigString(task.RenderConfig, "aspect_ratio"),
+		MotionAmplitude: renderConfigString(task.RenderConfig, "motion_amplitude"),
+		VideoMode:       renderConfigString(task.RenderConfig, "video_mode"),
+		Count:           renderConfigInt(task.RenderConfig, "count"),
 		// Video generation mode and audio
-		GenerateMode:  renderConfigString(task.RenderConfig, "generate_mode"),
-		GenerateAudio: renderConfigBool(task.RenderConfig, "generate_audio"),
+		GenerateMode:     renderConfigString(task.RenderConfig, "generate_mode"),
+		GenerateAudio:    renderConfigBool(task.RenderConfig, "generate_audio"),
+		Seed:             renderConfigInt(task.RenderConfig, "veo_seed"),
+		PersonGeneration: renderConfigString(task.RenderConfig, "veo_person_generation"),
+		NumberOfVideos:   renderConfigInt(task.RenderConfig, "veo_number_of_videos"),
 	}
 	if shouldUseSeedanceIdentityAnchorSourceFallback(resolvedModelName, task, clip.SceneSeq, clip.SceneGroupKey, genReq.SourceImageURL) {
 		genReq.SourceImageURL = preferredIdentitySourceImageURL(task.RenderConfig)
@@ -4460,6 +4480,40 @@ func renderConfigString(renderConfig model.RenderConfig, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func renderConfigStringValues(renderConfig model.RenderConfig, key string) []string {
+	if len(renderConfig) == 0 {
+		return nil
+	}
+	value, ok := renderConfig[key]
+	if !ok {
+		return nil
+	}
+	switch raw := value.(type) {
+	case []string:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // renderConfigInt reads an integer value (or numeric float) from RenderConfig.

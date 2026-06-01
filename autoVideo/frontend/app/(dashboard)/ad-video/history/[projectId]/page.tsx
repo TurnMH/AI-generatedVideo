@@ -7,11 +7,12 @@ import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
-import { assetAPI, modelAPI, projectAPI, storyboardAPI, storageAPI, videoAPI, type Episode, type Project } from '@/lib/api'
-import type { AdCopyOptimizationState, Asset, Storyboard } from '@/types'
+import { assetAPI, modelAPI, projectAPI, storyboardAPI, storageAPI, videoAPI } from '@/lib/api'
+import type { AdCopyOptimizationState, Asset, Episode, Project, Storyboard } from '@/types'
 
 type VideoTaskClip = {
   id: number
@@ -147,6 +148,23 @@ function formatModelParamValues(param?: VideoModelParam) {
   return param.values.map((item) => item.label || item.value).join(' / ')
 }
 
+function modelHasParam(model: VideoModelMeta | null, key: string) {
+  return Boolean(model?.params?.some((item) => item.key === key))
+}
+
+function uniqueNonEmptyUrls(values: Array<string | undefined | null>, limit?: number) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of values) {
+    const trimmed = String(raw || '').trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+    if (limit && result.length >= limit) break
+  }
+  return result
+}
+
 const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，也不是直接写成逐镜头分镜稿，而是先把整篇广告文案优化成更适合后续“按台词 / 口播为主自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
 
 必须遵守：
@@ -245,7 +263,7 @@ function softenSceneCharacters(characters: string[]) {
   return cleaned
 }
 
-function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payload: ReturnType<typeof buildEpisodeVideoPayload>) {
+function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payload: ReturnType<typeof buildEpisodeVideoPayload>): Record<string, unknown> {
   return {
     ...renderConfig,
     safety_softening: 'moderation-lite',
@@ -432,6 +450,10 @@ export default function AdVideoHistoryDetailPage() {
   const [selectedStep3AspectRatio, setSelectedStep3AspectRatio] = useState('')
   const [selectedStep3Resolution, setSelectedStep3Resolution] = useState('')
   const [selectedStep3Duration, setSelectedStep3Duration] = useState('')
+  const [selectedStep3VeoPersonGeneration, setSelectedStep3VeoPersonGeneration] = useState('allow_adult')
+  const [selectedStep3VeoSeed, setSelectedStep3VeoSeed] = useState('')
+  const [selectedStep3VeoUseReferenceImages, setSelectedStep3VeoUseReferenceImages] = useState(false)
+  const [selectedStep3VeoUseLastFrame, setSelectedStep3VeoUseLastFrame] = useState(false)
   const [selectedSpeechPace, setSelectedSpeechPace] = useState<SpeechPaceOption>('normal')
   const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
   const [selectedStep3GenerateAudio, setSelectedStep3GenerateAudio] = useState(false)
@@ -627,11 +649,12 @@ export default function AdVideoHistoryDetailPage() {
     [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
   )
   const isAdCopyProgressAdvancing = useMemo(() => {
-    if (!project?.progress) return false
-    return project.progress.stage === 'script_processing'
-      || project.progress.stage === 'episode_splitting'
-      || project.progress.stage === 'scene_splitting'
-      || project.progress.stage === 'script_prepping'
+    const stage = String(project?.progress?.stage || '')
+    if (!stage) return false
+    return stage === 'script_processing'
+      || stage === 'episode_splitting'
+      || stage === 'scene_splitting'
+      || stage === 'script_prepping'
   }, [project?.progress])
   const storyboardSplitBuiltinPrompt = useMemo(
     () => String(adCopyState?.storyboard_split_prompt_builtin || DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT).trim(),
@@ -697,6 +720,18 @@ ${paceBlock}`
     [selectedModelMeta],
   )
   const selectedModelParams = useMemo(() => selectedModelMeta?.params || [], [selectedModelMeta])
+  const selectedModelParamKeys = useMemo(() => new Set(selectedModelParams.map((param) => param.key)), [selectedModelParams])
+  const selectedModelIsVeo = useMemo(
+    () => /(?:^|[-_])(veo|voe)/i.test(`${effectiveSelectedVideoModel} ${selectedGenerationProviderModel}`),
+    [effectiveSelectedVideoModel, selectedGenerationProviderModel],
+  )
+  const selectedModelSupportsVeoNativeControls = selectedModelIsVeo && (
+    modelHasParam(selectedModelMeta, 'person_generation')
+    || modelHasParam(selectedModelMeta, 'reference_images')
+    || modelHasParam(selectedModelMeta, 'last_frame')
+    || modelHasParam(selectedModelMeta, 'seed')
+  )
+  const step3VeoPersonGenerationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'person_generation'), [selectedModelMeta])
 
   const videoModelsForStep3 = useMemo(() => {
     const map = new Map<string, VideoModelMeta>()
@@ -856,6 +891,24 @@ ${paceBlock}`
       : firstStoryboard?.image_url
         ? 'storyboard_image'
         : 'none'
+  const step3VeoReferenceImages = useMemo(
+    () => uniqueNonEmptyUrls([
+      ...characterAssets.map((asset) => String(asset.image_url || '').trim()),
+      characterAnchorImageUrl,
+      String(project?.storyboard_config?.approved_first_frame_image_url || '').trim(),
+    ], 3),
+    [characterAssets, characterAnchorImageUrl, project?.storyboard_config?.approved_first_frame_image_url],
+  )
+  const step3VeoLastFrameImageUrl = useMemo(() => {
+    const reversed = displayStoryboards.slice().reverse()
+    for (const storyboard of reversed) {
+      const imageUrl = String(storyboard.image_url || '').trim()
+      if (imageUrl) return imageUrl
+    }
+    return ''
+  }, [displayStoryboards])
+  const step3UsesVeoReferenceImages = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length > 0
+  const step3UsesVeoLastFrame = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseLastFrame && Boolean(step3VeoLastFrameImageUrl)
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
@@ -1042,6 +1095,37 @@ ${paceBlock}`
       return nextDuration
     })
   }, [step3DurationOptions, persistedDuration])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) return
+    if ((step3UsesVeoReferenceImages || step3UsesVeoLastFrame || selectedStep3Resolution === '1080p' || selectedStep3Resolution === '4k') && selectedStep3Duration && selectedStep3Duration !== '8') {
+      setSelectedStep3Duration('8')
+    }
+  }, [selectedModelSupportsVeoNativeControls, step3UsesVeoReferenceImages, step3UsesVeoLastFrame, selectedStep3Resolution, selectedStep3Duration])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) return
+    setSelectedStep3VeoPersonGeneration((prev) => prev || step3VeoPersonGenerationOptions[0]?.value || 'allow_adult')
+  }, [selectedModelSupportsVeoNativeControls, step3VeoPersonGenerationOptions])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) {
+      setSelectedStep3VeoUseReferenceImages(false)
+      setSelectedStep3VeoUseLastFrame(false)
+    }
+  }, [selectedModelSupportsVeoNativeControls])
+
+  useEffect(() => {
+    if (selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length === 0) {
+      setSelectedStep3VeoUseReferenceImages(false)
+    }
+  }, [selectedStep3VeoUseReferenceImages, step3VeoReferenceImages])
+
+  useEffect(() => {
+    if (selectedStep3VeoUseLastFrame && !step3VeoLastFrameImageUrl) {
+      setSelectedStep3VeoUseLastFrame(false)
+    }
+  }, [selectedStep3VeoUseLastFrame, step3VeoLastFrameImageUrl])
 
   useEffect(() => {
     const persisted = String(project?.storyboard_config?.speech_pace || '').trim() as SpeechPaceOption | ''
@@ -1442,6 +1526,7 @@ ${paceBlock}`
     const stylePreset = project?.storyboard_config?.style_preset || autoSplit?.style_preset || undefined
     const motionMode = project?.storyboard_config?.motion_mode || undefined
     const clipDuration = Number(selectedStep3Duration || project?.storyboard_config?.duration || 0) || undefined
+    const veoSeedValue = Number(selectedStep3VeoSeed)
 
     setGenerationAction('video-start')
     try {
@@ -1450,6 +1535,19 @@ ${paceBlock}`
         aspect_ratio: selectedStep3AspectRatio,
         resolution: selectedStep3Resolution,
         generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
+      }
+      if (selectedModelSupportsVeoNativeControls) {
+        renderConfigBase.veo_person_generation = selectedStep3VeoPersonGeneration || undefined
+        renderConfigBase.veo_number_of_videos = 1
+        if (Number.isFinite(veoSeedValue) && veoSeedValue >= 0) {
+          renderConfigBase.veo_seed = veoSeedValue
+        }
+        if (step3UsesVeoReferenceImages) {
+          renderConfigBase.veo_reference_images = step3VeoReferenceImages
+        }
+        if (step3UsesVeoLastFrame) {
+          renderConfigBase.veo_last_frame_image_url = step3VeoLastFrameImageUrl
+        }
       }
       const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
       renderConfig.character_consistency_enabled = true
@@ -2325,6 +2423,9 @@ ${paceBlock}`
                         <div>当前范围：{scopeLabel}</div>
                         <div>目标模型：{selectedGenerationModelActualLabel || '未选择'}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
+                        {selectedModelSupportsVeoNativeControls && (
+                          <div>Veo 原生约束：人物策略 {selectedStep3VeoPersonGeneration || '-'} / 参考图 {step3UsesVeoReferenceImages ? `${step3VeoReferenceImages.length} 张` : '关闭'} / 尾帧 {step3UsesVeoLastFrame ? '开启' : '关闭'} / seed {selectedStep3VeoSeed || '-'}</div>
+                        )}
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                         <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
                         <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id}` : ''}` : '缺失'}</div>
@@ -2397,11 +2498,98 @@ ${paceBlock}`
                       </div>
                     </div>
 
+                    {selectedModelSupportsVeoNativeControls && (
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium text-cyan-100">Veo 3.1 原生高级约束</div>
+                          <div className="mt-1 text-xs text-cyan-100/80">这里不是通用 reference2video / startEnd2video，而是直接透传 Veo 自己的 reference images、last frame、person generation、seed 约束。当前串行任务里，尾帧约束只会用于最后一个 clip。</div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">人物生成策略</Label>
+                            <select
+                              value={selectedStep3VeoPersonGeneration}
+                              onChange={(e) => setSelectedStep3VeoPersonGeneration(e.target.value)}
+                              disabled={step3Running}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {(step3VeoPersonGenerationOptions.length > 0 ? step3VeoPersonGenerationOptions : [{ value: 'allow_adult', label: 'allow_adult' }]).map((item) => (
+                                <option key={`step3-veo-person-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Seed</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={selectedStep3VeoSeed}
+                              onChange={(e) => setSelectedStep3VeoSeed(e.target.value)}
+                              disabled={step3Running}
+                              placeholder="留空则让 provider 自选"
+                              className="border-cyan-200/30 bg-white text-surface-900"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Reference images</Label>
+                            <select
+                              value={step3UsesVeoReferenceImages ? 'enabled' : 'disabled'}
+                              onChange={(e) => setSelectedStep3VeoUseReferenceImages(e.target.value === 'enabled')}
+                              disabled={step3Running || step3VeoReferenceImages.length === 0}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <option value="disabled">关闭</option>
+                              <option value="enabled">开启（最多 3 张）</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Last frame</Label>
+                            <select
+                              value={step3UsesVeoLastFrame ? 'enabled' : 'disabled'}
+                              onChange={(e) => setSelectedStep3VeoUseLastFrame(e.target.value === 'enabled')}
+                              disabled={step3Running || !step3VeoLastFrameImageUrl}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <option value="disabled">关闭</option>
+                              <option value="enabled">开启（最终镜头尾帧）</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 text-[11px] text-cyan-50/90">
+                          <div className="rounded border border-cyan-400/15 bg-black/10 p-3">
+                            <div className="font-medium text-cyan-100">参考图来源</div>
+                            {step3VeoReferenceImages.length > 0 ? (
+                              <div className="mt-2 space-y-1 break-all">
+                                {step3VeoReferenceImages.map((url, index) => (
+                                  <div key={`step3-veo-ref-${index}`}>#{index + 1} {url}</div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-cyan-100/70">当前没有可复用的人物锚点图，因此 reference images 开关会保持关闭。</div>
+                            )}
+                          </div>
+
+                          <div className="rounded border border-cyan-400/15 bg-black/10 p-3 break-all">
+                            <div className="font-medium text-cyan-100">尾帧约束来源</div>
+                            <div className="mt-2">{step3VeoLastFrameImageUrl || '当前范围内没有可用的最后一张分镜图'}</div>
+                            <div className="mt-2 text-cyan-100/70">Google 文档要求：1080p / 4K 或 reference images 场景必须使用 8 秒，这里会自动把时长钉到 8 秒。</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2 text-xs text-emerald-50">
                       <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{selectedGenerationModelActualLabel || '未选择'}</div>
                       {selectedModelMeta ? (
                         <>
                           <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>
+                          {selectedModelParamKeys.size > 0 && <div>param keys：{Array.from(selectedModelParamKeys).join(' / ')}</div>}
                           {selectedModelParams.length > 0 ? (
                             <div className="space-y-2">
                               {selectedModelParams.map((param) => (

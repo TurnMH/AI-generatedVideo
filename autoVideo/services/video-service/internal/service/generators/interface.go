@@ -12,6 +12,8 @@ type VideoGenerateReq struct {
 	SourceImageURL     string
 	TailImageURL       string   // end-frame for startEnd2video mode (Kling/Doubao/Vidu)
 	CharacterImageURLs []string // reference images for subject/character consistency (reference2video)
+	ReferenceImages    []string // model-native reference images (e.g. Veo referenceImages)
+	LastFrameImageURL  string   // model-native last-frame constraint (e.g. Veo lastFrame)
 	ClipIndex          int      // 0-based position in the sequence
 	TotalClips         int      // total number of clips in the sequence
 	Prompt             string
@@ -29,11 +31,14 @@ type VideoGenerateReq struct {
 	GenerateAudio bool
 
 	// Model-specific optional params (read from task.RenderConfig):
-	Resolution      string // e.g. "1080p" "720p" "360p"           — honoured by Vidu, Sora2, Doubao
-	AspectRatio     string // e.g. "16:9" "9:16" "1:1"             — honoured by Vidu, Kling, Wan, Sora2, Doubao
-	MotionAmplitude string // e.g. "auto" "small" "medium" "large" — honoured by Vidu
-	VideoMode       string // e.g. "std" "pro"                     — honoured by Kling
-	Count           int    // number of clips to generate per call  — honoured by Sora2 (n)
+	Resolution       string // e.g. "1080p" "720p" "360p"           — honoured by Vidu, Sora2, Doubao
+	AspectRatio      string // e.g. "16:9" "9:16" "1:1"             — honoured by Vidu, Kling, Wan, Sora2, Doubao
+	MotionAmplitude  string // e.g. "auto" "small" "medium" "large" — honoured by Vidu
+	VideoMode        string // e.g. "std" "pro"                     — honoured by Kling
+	Count            int    // number of clips to generate per call  — honoured by Sora2 (n)
+	Seed             int    // deterministic hint where the provider supports it (e.g. Veo seed)
+	PersonGeneration string // provider-native people policy (e.g. Veo personGeneration)
+	NumberOfVideos   int    // provider-native numberOfVideos hint
 }
 
 // VideoClip is the result of a successful generation.

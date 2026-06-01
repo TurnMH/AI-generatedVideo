@@ -335,7 +335,7 @@ export const VIDEO_MODEL_OPTIONS_VT: VideoModelCapability[] = [
     resolution: 'supported',
     multiVariant: 'unsupported',
     clipDuration: '单段 4 / 6 / 8 秒',
-    note: '当前项目已补齐 Veo 3.1 的时长、画面比例与分辨率参数，支持 16:9 / 9:16 及 720p / 1080p / 4K；当前仍按单图单视频结果接入，不开放多候选。',
+    note: '当前项目已补齐 Veo 3.1 的时长、画面比例与分辨率参数，并新增原生 reference images / last frame / personGeneration / seed 约束入口；当前仍按单图单视频结果接入，不开放多候选。',
     tags: ['真人短剧', '人物表演', '情绪感强', '16:9/9:16', '720p-4K'],
     speed: 'medium',
     quality: 'high',

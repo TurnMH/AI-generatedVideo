@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/toast'
-import { modelAPI, projectAPI, videoAPI, type Model, type Project } from '@/lib/api'
+import { modelAPI, projectAPI, videoAPI } from '@/lib/api'
+import type { Model, Project } from '@/types'
 
 type ModelParamValue = { value: string; label: string }
 type ModelParamOption = { key: string; label: string; default: string; values?: ModelParamValue[] }
@@ -283,7 +284,7 @@ export default function AdVideoWorkbenchPage() {
         const num = Number(value)
         return Number.isFinite(num) && num > 0 ? num : undefined
       }
-      const res = await projectAPI.create({
+      const createPayload = {
         title: workflowForm.title.trim(),
         description: workflowForm.description.trim(),
         project_type: 'video',
@@ -299,6 +300,7 @@ export default function AdVideoWorkbenchPage() {
           aspect_ratio: workflowForm.aspectRatio,
           resolution: workflowForm.resolution,
           duration: Number(workflowForm.duration),
+          camera_movement: 'static',
           video_mode: 'api_generation',
           style_preset: workflowForm.stylePreset,
           motion_mode: 'gentle',
@@ -306,7 +308,8 @@ export default function AdVideoWorkbenchPage() {
           auto_split_after_optimization: true,
           ...(selectedVideoModel?.model_key ? { video_model: selectedVideoModel.model_key } : {}),
         },
-      })
+      } as Partial<Project> & { mode: string }
+      const res = await projectAPI.create(createPayload)
       const project = unwrap<Project>((res as { data?: ProjectPayload }).data)
       if (!project?.id) {
         throw new Error('创建广告项目失败：未拿到 project id')

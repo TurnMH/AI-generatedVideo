@@ -140,7 +140,7 @@ const VIDEO_MODEL_CAPABILITY_EXTRAS: Record<string, VideoCapabilityExtras> = {
     resolution: 'supported',
     multiVariant: 'unsupported',
     clipDuration: '单段 4 / 6 / 8 秒',
-    note: '当前项目已补齐 Veo 3.1 的时长、画面比例与分辨率参数，支持 16:9 / 9:16 及 720p / 1080p / 4K；仍按单图单视频接入。',
+    note: '当前项目已补齐 Veo 3.1 的时长、画面比例与分辨率参数，并新增原生 reference images / last frame / personGeneration / seed 约束入口；仍不是通用 reference2video 锁脸。',
     bestFor: ['live-action-short'],
     supportsStartEnd: false,
     supportsReference: false,

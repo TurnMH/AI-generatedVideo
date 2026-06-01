@@ -21,6 +21,7 @@ type TaskShape = {
   result_url?: string
   error_msg?: string
   subtitle_text?: string
+  scene_description?: string
   created_at?: string
   updated_at?: string
   render_config?: Record<string, unknown>
@@ -57,21 +58,21 @@ export default function ManualVideoHistoryDetailPage() {
   const task = payload?.data?.task
   const taskDebug = payload?.data?.task_debug_summary
   const clipsDebug = payload?.data?.clips_debug || []
-  const submissionPreview = payload?.data?.submission_preview as
-    | {
+  const submissionPreview = (payload?.data as {
+    submission_preview?: {
+      generate_audio?: boolean
+      strategy?: string
+      note?: string
+      items?: Array<{
+        clip_order?: number
+        visual_prompt?: string
+        voice_text?: string
+        actual_submission_text?: string
         generate_audio?: boolean
-        strategy?: string
-        note?: string
-        items?: Array<{
-          clip_order?: number
-          visual_prompt?: string
-          voice_text?: string
-          actual_submission_text?: string
-          generate_audio?: boolean
-          native_audio_model_hint?: string
-        }>
-      }
-    | undefined
+        native_audio_model_hint?: string
+      }>
+    }
+  } | undefined)?.submission_preview
   const dialoguesText = Array.isArray(task?.render_config?.dialogues)
     ? (task?.render_config?.dialogues as unknown[]).map((item) => String(item || '')).filter(Boolean).join('\n\n')
     : ''
