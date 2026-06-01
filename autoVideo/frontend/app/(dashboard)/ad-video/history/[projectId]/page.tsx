@@ -40,6 +40,10 @@ type VideoTask = {
   episode_id?: number | null
   status?: string
   model_name?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
   result_url?: string
   error_msg?: string
   created_at?: string
@@ -129,6 +133,13 @@ function getFallbackVideoModelLabel(key: string) {
 function formatVideoModelLabel(status?: Pick<VideoModelMeta, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
   const key = status?.key || keyFallback || ''
   return status?.label?.trim() || getFallbackVideoModelLabel(key)
+}
+
+function formatVideoModelActualLabel(status?: Pick<VideoModelMeta, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const base = formatVideoModelLabel(status, keyFallback)
+  const providerModel = String(status?.provider_model || '').trim()
+  if (!providerModel) return base
+  return `${base}（实际: ${providerModel}）`
 }
 
 function formatModelParamValues(param?: VideoModelParam) {
@@ -675,6 +686,10 @@ ${paceBlock}`
   )
   const selectedGenerationModelLabel = useMemo(
     () => formatVideoModelLabel(selectedModelMeta, effectiveSelectedVideoModel),
+    [selectedModelMeta, effectiveSelectedVideoModel],
+  )
+  const selectedGenerationModelActualLabel = useMemo(
+    () => formatVideoModelActualLabel(selectedModelMeta, effectiveSelectedVideoModel),
     [selectedModelMeta, effectiveSelectedVideoModel],
   )
   const selectedModelParams = useMemo(() => selectedModelMeta?.params || [], [selectedModelMeta])
@@ -1643,7 +1658,8 @@ ${paceBlock}`
                       <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有视频任务记录。</div>
                     ) : tasks.slice().sort((a, b) => Number(b.id) - Number(a.id)).map((task) => (
                       <div key={task.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
-                        <div>task #{task.id} · {task.status || '-'} · model {task.model_name || '-'} · {task.created_at || '-'}</div>
+                        <div>task #{task.id} · {task.status || '-'} · actual {task.effective_model || task.model_name || '-'} · {task.created_at || '-'}</div>
+                        <div className="mt-1 text-xs text-slate-400">requested_alias: {task.requested_model || task.model_name || '-'} · runtime_provider: {task.runtime_provider || '-'}</div>
                         {task.error_msg && <div className="mt-2 text-rose-300">错误：{task.error_msg}</div>}
                         {humanizeVideoTaskError(task) && <div className="mt-1 text-amber-200/90">提示：{humanizeVideoTaskError(task)}</div>}
                         {taskResultUrl(task) && <div className="mt-2 break-all"><a className="text-cyan-300 underline" href={taskResultUrl(task)} target="_blank" rel="noreferrer">打开结果视频</a></div>}
@@ -2290,15 +2306,15 @@ ${paceBlock}`
                             const suffix = item.available
                               ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，参数需手动补齐）` : ''
                               : '（当前运行态不可用）'
-                            return <option key={item.key} value={item.key} disabled={!item.available}>{formatVideoModelLabel(item, item.key)}{suffix}</option>
+                            return <option key={item.key} value={item.key} disabled={!item.available}>{formatVideoModelActualLabel(item, item.key)}{suffix}</option>
                           })}
                         </select>
-                        <div className="text-[11px] text-emerald-100/75">这里展示的是步骤 3 的模型名称；实际提交给 video-service 的仍然是内部 `model_name` / key。如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
+                        <div className="text-[11px] text-emerald-100/75">这里会显示步骤 3 的别名和当前运行态声明的实际 provider model；真正提交给 video-service 的 `model_name` 仍然是内部 key，回流任务里的 `effective_model` 会展示最终生效模型名。如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
                       </div>
 
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
                         <div>当前范围：{scopeLabel}</div>
-                        <div>目标模型：{selectedGenerationModelLabel || '未选择'}</div>
+                        <div>目标模型：{selectedGenerationModelActualLabel || '未选择'}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                         <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
@@ -2373,7 +2389,7 @@ ${paceBlock}`
                     </div>
 
                     <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2 text-xs text-emerald-50">
-                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{selectedGenerationModelLabel || '未选择'}</div>
+                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{selectedGenerationModelActualLabel || '未选择'}</div>
                       {selectedModelMeta ? (
                         <>
                           <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>
@@ -2541,7 +2557,7 @@ ${paceBlock}`
                                     <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-6">
                                       <div>scene_group_key：{clip.scene_group_key || '-'}</div>
                                       <div>effective_model：{clip.effective_model || clip.model_used || '-'}</div>
-                                      <div>requested_model：{clip.requested_model || '-'}</div>
+                                      <div>requested_alias：{clip.requested_model || '-'}</div>
                                       <div>runtime_provider：{clip.runtime_provider || '-'}</div>
                                       <div>duration_sec：{clip.duration_sec ?? '-'}</div>
                                       <div>error：{clip.error_msg || '-'}</div>

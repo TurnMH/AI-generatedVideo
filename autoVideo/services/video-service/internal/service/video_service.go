@@ -1853,7 +1853,7 @@ func (s *VideoService) ModelStatus(ctx context.Context) []ModelStatusItem {
 func newModelStatusItem(key string, gen generators.VideoGenerator, ctx context.Context) ModelStatusItem {
 	explain := explainVideoGeneratorRoute(key)
 	provider := explain.RuntimeProvider
-	providerModel := explain.ProviderModel
+	providerModel := firstNonEmpty(explain.ProviderModel, providerModelForGenerator(gen))
 	label := videoModelDisplayLabel(key, providerModel)
 	if provider == "" {
 		provider = runtimeProviderForGenerator(gen.Name())
@@ -1946,7 +1946,7 @@ func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (
 			}
 			explain.RoutedGenerator = bound.Name()
 			if explain.ProviderModel == "" {
-				explain.ProviderModel = providerModel
+				explain.ProviderModel = firstNonEmpty(providerModel, providerModelForGenerator(bound), providerModelForGenerator(gen))
 			}
 			return bound, explain, nil
 		}
@@ -1956,11 +1956,33 @@ func (s *VideoService) resolveGenerator(ctx context.Context, modelName string) (
 		if gen.IsAvailable(ctx) {
 			explain.RoutedGenerator = gen.Name()
 			explain.RuntimeProvider = runtimeProviderForGenerator(gen.Name())
+			explain.ProviderModel = providerModelForGenerator(gen)
 			explain.RouteReason = "fallback-first-available-generator"
 			return gen, explain, nil
 		}
 	}
 	return nil, explain, fmt.Errorf("no available generator")
+}
+
+func providerModelForGenerator(gen generators.VideoGenerator) string {
+	switch typed := gen.(type) {
+	case *generators.DoubaoGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.WanGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.ViduGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.SuannengGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.HubagiGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.MinMaxGenerator:
+		return strings.TrimSpace(typed.Model)
+	case *generators.KlingGenerator:
+		return strings.TrimSpace(typed.ModelName)
+	default:
+		return ""
+	}
 }
 
 func (s *VideoService) SetFrameExtractorURL(url string) {
