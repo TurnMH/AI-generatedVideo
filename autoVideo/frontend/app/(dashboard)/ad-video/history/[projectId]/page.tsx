@@ -264,7 +264,7 @@ const CHARACTER_IDENTITY_CONSTRAINTS = [
 
 function humanizeVideoTaskError(task?: VideoTask | null) {
   const msg = String(task?.error_msg || '')
-  if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451/i.test(msg)) {
+  if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451|内容审核拒绝|隐私信息风控/i.test(msg)) {
     return '这次更像是首图触发了上游内容审核，不一定是步骤 3 参数或串行链本身的问题。'
   }
   if (/serial chain broken/i.test(msg)) {

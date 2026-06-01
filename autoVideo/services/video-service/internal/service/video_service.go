@@ -761,7 +761,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	} // end else (concurrent mode)
 
 	if failCount == len(clips) {
-		s.markFailed(ctx, taskID, "all clips failed")
+		s.markFailed(ctx, taskID, summarizeAllClipsFailure(clips))
 		return fmt.Errorf("task %d: all clips failed", taskID)
 	}
 
@@ -1684,6 +1684,49 @@ func applyRouteExplainToClip(clip *model.VideoClip, requestedModel string, route
 }
 
 // markFailed —— 将任务标记为失败状态并记录错误信息
+func summarizeAllClipsFailure(clips []*model.VideoClip) string {
+	for _, clip := range clips {
+		if clip == nil {
+			continue
+		}
+		if reason := serialFailureReasonFromJSON(clip.ChainFailureAnalysis); reason != "" {
+			return "all clips failed: " + reason
+		}
+	}
+	for _, clip := range clips {
+		if clip == nil {
+			continue
+		}
+		if msg := normalizeClipFailureMessage(clip.ErrorMsg); msg != "" {
+			return "all clips failed: " + msg
+		}
+	}
+	return "all clips failed"
+}
+
+func serialFailureReasonFromJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var analysis SerialFailureAnalysis
+	if err := json.Unmarshal([]byte(raw), &analysis); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(analysis.Reason)
+}
+
+func normalizeClipFailureMessage(msg string) string {
+	trimmed := strings.TrimSpace(msg)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "InputImageSensitiveContentDetected") || strings.Contains(trimmed, "PrivacyInformation") || strings.Contains(strings.ToLower(trimmed), "real-person/sensitive image") {
+		return "provider 内容审核拒绝，命中真实人物/隐私信息风控"
+	}
+	return trimmed
+}
+
 func (s *VideoService) markFailed(ctx context.Context, taskID int64, msg string) {
 	// Use a fresh background context: the caller's ctx may already be cancelled
 	// (e.g. 30-minute task timeout expired), and we must always persist the failure.
