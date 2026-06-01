@@ -103,6 +103,55 @@ func TestPreferredIdentitySourceImageURLUsesApprovedFirstFrameFirst(t *testing.T
 	}
 }
 
+func TestIdentityCharacterReferencesPreferActiveProviderAssetRef(t *testing.T) {
+	rc := model.RenderConfig{
+		"character_anchor_asset_id":      11,
+		"character_anchor_image_url":     "https://example.com/project-anchor.png",
+		"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
+	}
+	anchors := map[int64]videoAssetPromptAnchor{
+		11: {
+			ID:                  11,
+			Type:                "character",
+			ImageURL:            "https://example.com/project-anchor.png",
+			Provider:            "volcengine",
+			ProviderAssetID:     "asset-123",
+			ProviderAssetStatus: "Active",
+		},
+	}
+	got := identityCharacterReferences(rc, anchors)
+	if len(got) != 3 {
+		t.Fatalf("len(got)=%d, want 3", len(got))
+	}
+	if got[0] != "asset://asset-123" {
+		t.Fatalf("got[0]=%q, want asset ref first", got[0])
+	}
+	if got[1] != "https://example.com/approved-first-frame.png" {
+		t.Fatalf("got[1]=%q", got[1])
+	}
+}
+
+func TestPerClipCharacterAssetReferenceImagesPreferActiveProviderAssetRef(t *testing.T) {
+	sceneAssetIDs := [][]int64{{11}}
+	anchors := map[int64]videoAssetPromptAnchor{
+		11: {
+			ID:                  11,
+			Type:                "character",
+			ImageURL:            "https://example.com/char-main.png",
+			Provider:            "doubao-seedance",
+			ProviderAssetID:     "asset-456",
+			ProviderAssetStatus: "Active",
+		},
+	}
+	got := perClipCharacterAssetReferenceImages(sceneAssetIDs, anchors, 0)
+	if len(got) != 1 {
+		t.Fatalf("len(got)=%d, want 1", len(got))
+	}
+	if got[0] != "asset://asset-456" {
+		t.Fatalf("got[0]=%q", got[0])
+	}
+}
+
 func TestShouldUseSeedanceIdentityAnchorSourceFallbackAfterSecondLiveActionClip(t *testing.T) {
 	task := &model.VideoTask{
 		SerialScene: true,

@@ -328,7 +328,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, len(imageURLs))
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", len(imageURLs))
 	sceneGroupKeys := []string(task.SceneGroupKeys)
-	assetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, collectUniqueInt64(perClipAssetIDs))
+	assetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, assetAnchorLookupIDs(task.RenderConfig, perClipAssetIDs))
 	// opt-p7: merge Kafka-provided motion descriptions (storyboard camera text) into
 	// per-clip prompts, overriding RenderConfig entries when present.
 	for i, md := range motionDescs {
@@ -412,7 +412,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// ─── 辅助函数：为单个 clip 构建 VideoGenerateReq 并执行生成 ─────────────────
 	// maxAttempts: 串行模式传 3，并行模式传 6
 	buildAndGenClip := func(c *model.VideoClip, overrideTailURL string, maxAttempts int) error {
-		projectIdentityRefs := identityAnchorReferences(task.RenderConfig)
+		projectIdentityRefs := identityCharacterReferences(task.RenderConfig, assetAnchors)
 		clipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		clipCharURLs := mergeReferenceURLs(projectIdentityRefs, clipCharacterAssetRefs, perSceneCharacterImages(characterImageURLs, characterImagesByName, clipScenePersons(perClipSceneChars, c.ClipOrder)))
 		clipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
@@ -1304,7 +1304,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	sceneGroupKeys := []string(task.SceneGroupKeys)
 	charDescriptions := s.fetchCharacterDescriptions(ctx, task.ProjectID)
 	retryAllCharURLs, retryCharByName := s.fetchCharacterImageMap(ctx, task.ProjectID)
-	retryAssetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, collectUniqueInt64(perClipAssetIDs))
+	retryAssetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, assetAnchorLookupIDs(task.RenderConfig, perClipAssetIDs))
 	retryClipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	retryClipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	if s.motionPromptSvc != nil {
@@ -1438,7 +1438,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		requestedGenerateMode,
 		genReq,
 		preferredStartEndIdentity,
-		identityAnchorReferences(task.RenderConfig),
+		identityCharacterReferences(task.RenderConfig, retryAssetAnchors),
 		retryClipCharURLs,
 		retryClipAssetRefs,
 		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
@@ -3388,6 +3388,20 @@ func collectUniqueInt64(matrix [][]int64) []int64 {
 	return out
 }
 
+func assetAnchorLookupIDs(renderConfig model.RenderConfig, matrix [][]int64) []int64 {
+	ids := collectUniqueInt64(matrix)
+	anchorAssetID := renderConfigInt64(renderConfig, "character_anchor_asset_id")
+	if anchorAssetID <= 0 {
+		return ids
+	}
+	for _, id := range ids {
+		if id == anchorAssetID {
+			return ids
+		}
+	}
+	return append(ids, anchorAssetID)
+}
+
 // perClipDurationSec returns the per-clip duration for index i.
 // Falls back to the task-level globalDurationSec (then to default 5s) when per-clip is zero.
 func perClipDurationSec(perClip []float64, i int, globalDurationSec float64) float64 {
@@ -3466,12 +3480,15 @@ func appendAssetAnchorHint(prompt, assetHint string) string {
 }
 
 type videoAssetPromptAnchor struct {
-	ID          int64
-	Name        string
-	Type        string
-	ImageURL    string
-	PromptUsed  string
-	Description string
+	ID                  int64
+	Name                string
+	Type                string
+	ImageURL            string
+	PromptUsed          string
+	Description         string
+	Provider            string
+	ProviderAssetID     string
+	ProviderAssetStatus string
 }
 
 func (s *VideoService) buildServiceToken() string {
@@ -3540,12 +3557,13 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 	}
 	var wrapped struct {
 		Data []struct {
-			ID          int64  `json:"id"`
-			Name        string `json:"name"`
-			Type        string `json:"type"`
-			ImageURL    string `json:"image_url"`
-			PromptUsed  string `json:"prompt_used"`
-			Description string `json:"description"`
+			ID          int64           `json:"id"`
+			Name        string          `json:"name"`
+			Type        string          `json:"type"`
+			ImageURL    string          `json:"image_url"`
+			PromptUsed  string          `json:"prompt_used"`
+			Description string          `json:"description"`
+			Metadata    json.RawMessage `json:"metadata"`
 		} `json:"data"`
 	}
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&wrapped); decodeErr != nil {
@@ -3556,16 +3574,123 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 		if _, want := needed[a.ID]; !want {
 			continue
 		}
+		provider, providerAssetID, providerAssetStatus := parseVideoProviderAssetMetadata(a.Metadata)
 		out[a.ID] = videoAssetPromptAnchor{
-			ID:          a.ID,
-			Name:        a.Name,
-			Type:        a.Type,
-			ImageURL:    a.ImageURL,
-			PromptUsed:  a.PromptUsed,
-			Description: a.Description,
+			ID:                  a.ID,
+			Name:                a.Name,
+			Type:                a.Type,
+			ImageURL:            a.ImageURL,
+			PromptUsed:          a.PromptUsed,
+			Description:         a.Description,
+			Provider:            provider,
+			ProviderAssetID:     providerAssetID,
+			ProviderAssetStatus: providerAssetStatus,
 		}
 	}
 	return out
+}
+
+func metadataStringValue(raw interface{}) string {
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case json.Number:
+		return strings.TrimSpace(value.String())
+	case float64:
+		if value == float64(int64(value)) {
+			return fmt.Sprintf("%d", int64(value))
+		}
+		return strings.TrimSpace(fmt.Sprintf("%v", value))
+	case int:
+		return fmt.Sprintf("%d", value)
+	case int64:
+		return fmt.Sprintf("%d", value)
+	case int32:
+		return fmt.Sprintf("%d", value)
+	case uint64:
+		return fmt.Sprintf("%d", value)
+	case uint32:
+		return fmt.Sprintf("%d", value)
+	default:
+		return ""
+	}
+}
+
+func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, status string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", ""
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+		return "", "", ""
+	}
+	for _, key := range []string{"volcengine_private_asset", "volc_asset", "provider_asset", "video_identity_asset"} {
+		nested, ok := metadata[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		provider = firstNonEmpty(provider, metadataStringValue(nested["provider"]), metadataStringValue(nested["provider_name"]))
+		assetID = firstNonEmpty(assetID, metadataStringValue(nested["asset_id"]), metadataStringValue(nested["provider_asset_id"]))
+		status = firstNonEmpty(status, metadataStringValue(nested["status"]), metadataStringValue(nested["asset_status"]), metadataStringValue(nested["provider_asset_status"]))
+	}
+	provider = firstNonEmpty(provider,
+		metadataStringValue(metadata["provider"]),
+		metadataStringValue(metadata["provider_name"]),
+		metadataStringValue(metadata["provider_asset_provider"]),
+	)
+	assetID = firstNonEmpty(assetID,
+		metadataStringValue(metadata["provider_asset_id"]),
+		metadataStringValue(metadata["asset_id"]),
+		metadataStringValue(metadata["volcengine_asset_id"]),
+		metadataStringValue(metadata["doubao_asset_id"]),
+		metadataStringValue(metadata["seedance_asset_id"]),
+	)
+	status = firstNonEmpty(status,
+		metadataStringValue(metadata["provider_asset_status"]),
+		metadataStringValue(metadata["asset_status"]),
+		metadataStringValue(metadata["volcengine_asset_status"]),
+		metadataStringValue(metadata["doubao_asset_status"]),
+		metadataStringValue(metadata["seedance_asset_status"]),
+	)
+	return strings.TrimSpace(provider), strings.TrimSpace(assetID), strings.TrimSpace(status)
+}
+
+func supportsAssetReferenceScheme(provider string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return true
+	}
+	for _, token := range []string{"volc", "doubao", "seedance", "ark"} {
+		if strings.Contains(provider, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceURLForVideoAnchor(anchor videoAssetPromptAnchor) string {
+	assetID := strings.TrimSpace(anchor.ProviderAssetID)
+	status := strings.TrimSpace(anchor.ProviderAssetStatus)
+	if assetID != "" && strings.EqualFold(status, "active") && supportsAssetReferenceScheme(anchor.Provider) {
+		return "asset://" + assetID
+	}
+	return strings.TrimSpace(anchor.ImageURL)
+}
+
+func identityCharacterReferences(renderConfig model.RenderConfig, anchorMap map[int64]videoAssetPromptAnchor) []string {
+	refs := identityAnchorReferences(renderConfig)
+	anchorAssetID := renderConfigInt64(renderConfig, "character_anchor_asset_id")
+	if anchorAssetID <= 0 || len(anchorMap) == 0 {
+		return mergeReferenceURLs(refs)
+	}
+	anchor, ok := anchorMap[anchorAssetID]
+	if !ok {
+		return mergeReferenceURLs(refs)
+	}
+	if assetRef := referenceURLForVideoAnchor(anchor); assetRef != "" {
+		return mergeReferenceURLs([]string{assetRef}, refs)
+	}
+	return mergeReferenceURLs(refs)
 }
 
 func perClipCharacterAssetReferenceImages(sceneAssetIDs [][]int64, anchorMap map[int64]videoAssetPromptAnchor, clipIndex int) []string {
@@ -3583,7 +3708,7 @@ func perClipCharacterAssetReferenceImages(sceneAssetIDs [][]int64, anchorMap map
 		if !strings.EqualFold(strings.TrimSpace(anchor.Type), "character") {
 			continue
 		}
-		url := strings.TrimSpace(anchor.ImageURL)
+		url := referenceURLForVideoAnchor(anchor)
 		if url == "" {
 			continue
 		}
@@ -4351,6 +4476,25 @@ func renderConfigInt(renderConfig model.RenderConfig, key string) int {
 		return int(v)
 	case string:
 		n := 0
+		fmt.Sscanf(v, "%d", &n)
+		return n
+	}
+	return 0
+}
+
+func renderConfigInt64(renderConfig model.RenderConfig, key string) int64 {
+	if len(renderConfig) == 0 {
+		return 0
+	}
+	switch v := renderConfig[key].(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case string:
+		var n int64
 		fmt.Sscanf(v, "%d", &n)
 		return n
 	}
