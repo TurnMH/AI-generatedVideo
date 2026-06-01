@@ -3549,7 +3549,7 @@ func identityAnchorReferences(renderConfig model.RenderConfig) []string {
 		return nil
 	}
 	var refs []string
-	for _, key := range []string{"character_anchor_image_url", "approved_first_frame_image_url", "start_image_url"} {
+	for _, key := range []string{"approved_first_frame_image_url", "character_anchor_image_url", "start_image_url"} {
 		if url := renderConfigString(renderConfig, key); url != "" {
 			refs = append(refs, url)
 		}

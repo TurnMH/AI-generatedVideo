@@ -72,7 +72,7 @@ func TestNormalizeVideoGenerateReqDoesNotMixSceneAssetRefsIntoCharacterRefs(t *t
 	}
 }
 
-func TestIdentityAnchorReferencesPreferProjectLevelAnchor(t *testing.T) {
+func TestIdentityAnchorReferencesPreferApprovedFirstFrameWhenPresent(t *testing.T) {
 	rc := model.RenderConfig{
 		"character_anchor_image_url":     "https://example.com/project-anchor.png",
 		"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
@@ -82,10 +82,10 @@ func TestIdentityAnchorReferencesPreferProjectLevelAnchor(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len(got)=%d, want 3", len(got))
 	}
-	if got[0] != "https://example.com/project-anchor.png" {
-		t.Fatalf("got[0]=%q, want project anchor first", got[0])
+	if got[0] != "https://example.com/approved-first-frame.png" {
+		t.Fatalf("got[0]=%q, want approved first frame first", got[0])
 	}
-	if got[1] != "https://example.com/approved-first-frame.png" {
+	if got[1] != "https://example.com/project-anchor.png" {
 		t.Fatalf("got[1]=%q", got[1])
 	}
 	if got[2] != "https://example.com/start-image.png" {
