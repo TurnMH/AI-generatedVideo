@@ -107,6 +107,31 @@ func TestBuildImagePromptFallsBackToSceneDescWhenPromptUsedIsFullGenerated(t *te
 	}
 }
 
+func TestBuildImagePromptIncludesConstraintLocks(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildImagePromptWithAppearances(StoryboardGenerateRequest{
+		SceneDescription: "The spokesperson stands on screen left beside the demo table, slightly leaning forward, raises her right hand to point at the bottle, then turns her shoulders toward camera while keeping the same blazer and pearl earrings.",
+		Characters:       []string{"spokesperson"},
+		Location:         "demo studio",
+		CameraMovement:   "push-in",
+		AspectRatio:      "16:9",
+		PromptUsed:       "The spokesperson stands on screen left beside the demo table, slightly leaning forward, raises her right hand to point at the bottle, then turns her shoulders toward camera while keeping the same blazer and pearl earrings.",
+	}, "live-action-short", "", "", map[string]string{"spokesperson": "female presenter, tailored cream blazer, pearl earrings, tidy shoulder-length hair"}, nil, "", "", []string{"spokesperson"}, nil)
+
+	for _, want := range []string{
+		"PRE-GEN CONSTRAINT PRIORITY",
+		"POSE AND GESTURE LOCK",
+		"ACTION STAGING",
+		"SPATIAL BLOCKING LOCK",
+		"WARDROBE AND GROOMING LOCK",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt %q does not contain %q", prompt, want)
+		}
+	}
+}
+
 func TestBuildStoryboardNegativePromptForLiveActionAvoidsAnime(t *testing.T) {
 	t.Parallel()
 

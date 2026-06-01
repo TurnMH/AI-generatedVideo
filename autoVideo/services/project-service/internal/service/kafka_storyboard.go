@@ -597,6 +597,22 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 			parts = append(parts, "CHARACTER LOCK — every listed subject must match these canonical descriptions exactly across all storyboard frames. This character lock has higher priority than visual continuity notes, scene carry-over, or generic style cues. DO NOT alter face shape, facial proportions, eye/nose/mouth/jaw structure, age impression, skin tone, hairstyle, hair color, makeup, garment layers, fabric colors, accessories, or body build between frames unless the scene description explicitly changes outfit: "+strings.Join(descParts, " | ")+".")
 		}
 	}
+	constraintHints := deriveStoryboardConstraintHints(req, originalCharacters, charAppearances, charAssetPrompts)
+	if constraintHints.PoseConstraint != "" || constraintHints.ActionConstraint != "" || constraintHints.SpatialConstraint != "" || constraintHints.WardrobeConstraint != "" {
+		parts = append(parts, "PRE-GEN CONSTRAINT PRIORITY — resolve constraints in this order: canonical face and wardrobe lock first, then pose/action continuity, then spatial blocking and screen direction, then lighting/style polish.")
+		if constraintHints.PoseConstraint != "" {
+			parts = append(parts, "POSE AND GESTURE LOCK — keep the body posture, hand shape, head angle, eyeline, and weight distribution readable and consistent with these cues: "+constraintHints.PoseConstraint+".")
+		}
+		if constraintHints.ActionConstraint != "" {
+			parts = append(parts, "ACTION STAGING — make the current frame look like one clean beat inside a continuous motion chain, not an unrelated pose jump: "+constraintHints.ActionConstraint+".")
+		}
+		if constraintHints.SpatialConstraint != "" {
+			parts = append(parts, "SPATIAL BLOCKING LOCK — preserve screen direction, left/right placement, distance to anchor objects, and foreground/midground/background relations using these cues: "+constraintHints.SpatialConstraint+".")
+		}
+		if constraintHints.WardrobeConstraint != "" {
+			parts = append(parts, "WARDROBE AND GROOMING LOCK — unless the scene explicitly calls for a costume change, preserve outfit silhouette, garment layers, accessories, hair styling, and makeup: "+constraintHints.WardrobeConstraint+".")
+		}
+	}
 	if trimmedLocation := strings.TrimSpace(req.Location); trimmedLocation != "" {
 		// If we have a stored visual description for this location, use it for consistency.
 		locDesc := ""

@@ -404,9 +404,11 @@ function buildEpisodeVideoPayload(
   const sceneCharacters = serialStoryboards.map((item) => softenSceneCharacters(item.characters || []))
   const sceneAssetIds = serialStoryboards.map((item) => item.asset_ids || [])
 
+  const seedImages = serialStoryboards.map((item) => resolveSeedImage(item))
+
   return {
     episode_id: episodeId,
-    image_urls: serialStoryboards.map((item, index) => index === 0 ? resolveSeedImage(item) : ''),
+    image_urls: seedImages,
     scene_descriptions: sceneDescriptions,
     dialogues: dialogues.some(Boolean) ? dialogues : undefined,
     durations: durations.some(Boolean) ? durations : undefined,

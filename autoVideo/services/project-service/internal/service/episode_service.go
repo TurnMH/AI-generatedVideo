@@ -2978,12 +2978,23 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				}
 				promptUsed = applyPromptTemplate(storyboardPromptTemplate, desc, strings.Join(chars, ", "), action, scene.Mood)
 			} else {
+				constraintHints := deriveStoryboardConstraintHints(StoryboardGenerateRequest{
+					SceneDescription: desc,
+					Characters:       chars,
+					Location:         scene.Location,
+					CameraMovement:   shotTypeToCameraMovement(scene.ShotType),
+					Mood:             scene.Mood,
+				}, chars, nil, nil)
 				promptUsed = composeStoryboardPrompt(StoryboardPromptParts{
-					Subject:          desc,
-					CharacterAnchors: charAnchors,
-					PropAnchors:      propAnchors,
-					SceneAnchors:     sceneAnchors,
-					CameraGrammar:    shotTypeToCameraMovement(scene.ShotType),
+					Subject:            desc,
+					CharacterAnchors:   charAnchors,
+					PropAnchors:        propAnchors,
+					SceneAnchors:       sceneAnchors,
+					CameraGrammar:      shotTypeToCameraMovement(scene.ShotType),
+					PoseConstraint:     constraintHints.PoseConstraint,
+					ActionConstraint:   constraintHints.ActionConstraint,
+					SpatialConstraint:  constraintHints.SpatialConstraint,
+					WardrobeConstraint: constraintHints.WardrobeConstraint,
 				})
 			}
 
@@ -3259,7 +3270,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 %s`, episodeNum, modelDurationHint, visualHint, speechHint, refDuration, episodeNum, content)
 	}
 
-	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少四项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置。"
+	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少六项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物当前的姿态和手部行为、人物穿着和造型是否延续、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置；若服装/发型/妆容没有变化，也要让 scene_description 默认体现“延续上一镜造型”的可见事实，而不是留白。"
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -3789,9 +3800,9 @@ Your task: produce polished, optimized image generation prompts for a sequence o
 ━━━━━━━━━━━━━━━━━━━━━━━━
 PROMPT STRUCTURE — every scene prompt must follow this 6-layer order (comma-separated):
 ━━━━━━━━━━━━━━━━━━━━━━━━
-① Subject anchor: character(s) + exact frame position (left/center/right of frame) + posture/stance
+① Subject anchor: character(s) + exact frame position (left/center/right of frame) + posture/stance + wardrobe silhouette
 ② Face & expression: specific muscle-level descriptor (e.g., "jaw slightly dropped, eyebrows raised, pupils dilated" — NOT "surprised face")
-③ Action beat: what the character is physically doing right now (verb + visible result)
+③ Action beat: what the character is physically doing right now (verb + visible result + readable hand/body behavior)
 ④ Camera & depth: shot type + lens (e.g., "medium close-up, 85mm portrait lens, shallow DOF, subject sharp, background softly blurred")
 ⑤ Environment layers: foreground element + midground set detail + background atmosphere (all 3 planes present)
 ⑥ Light & style: key light direction + color temperature + fill/rim ratio + grade keywords
@@ -3806,7 +3817,8 @@ Rules:
 5. When a scene has "location_description" data, use that EXACT environment description as the scene background — NEVER invent different architectural details, color temperature, or set dressing.
 6. When a scene has "items" or "prop_visual" data, place those specific props/objects at a specific depth plane (foreground/midground) with their exact described appearance.
 7. When a scene has "spatial_anchor", "subject_positions", or "transition_note" data, treat them as high-priority blocking instructions: they override generic composition habits.
-8. VISUAL CONTINUITY RULES (critical for video generation):
+8. If the source description is under-specified, you must still infer and state a usable body pose, hand behavior, screen direction, and wardrobe continuity instead of leaving them generic.
+9. VISUAL CONTINUITY RULES (critical for video generation):
    - Adjacent scenes sharing the same "location" MUST describe identical background architecture, furniture placement, and ambient lighting color temperature.
    - Characters appearing across multiple scenes MUST wear exactly the same clothing and hairstyle unless explicitly changed.
    - If the VISUAL BRIDGE prompt is provided, your FIRST scene must visually extend from it: same color grading, same character frame position, matching depth planes.
