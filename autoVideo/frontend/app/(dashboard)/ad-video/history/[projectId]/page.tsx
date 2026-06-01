@@ -351,23 +351,14 @@ function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
 function buildEpisodeVideoPayload(
   storyboards: Storyboard[],
   episodeId: number | undefined,
-  assetImageById?: Map<number, string>,
 ) {
   const sorted = storyboards
     .slice()
     .sort((a, b) => a.sequence_number - b.sequence_number)
 
-  const resolveSeedImage = (storyboard: Storyboard) => {
-    for (const assetId of storyboard.asset_ids || []) {
-      const assetImage = String(assetImageById?.get(assetId) || '').trim()
-      if (assetImage) return assetImage
-    }
-    const storyboardImage = String(storyboard.image_url || '').trim()
-    if (storyboardImage) return storyboardImage
-    return ''
-  }
+  const resolveFrameImage = (storyboard: Storyboard) => String(storyboard.image_url || '').trim()
 
-  const firstImageIndex = sorted.findIndex((item) => resolveSeedImage(item))
+  const firstImageIndex = sorted.findIndex((item) => resolveFrameImage(item))
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
   const pickStoryboardPrompt = (storyboard: Storyboard) => {
     const sceneDescription = String(storyboard.scene_description || '').trim()
@@ -404,11 +395,11 @@ function buildEpisodeVideoPayload(
   const sceneCharacters = serialStoryboards.map((item) => softenSceneCharacters(item.characters || []))
   const sceneAssetIds = serialStoryboards.map((item) => item.asset_ids || [])
 
-  const seedImages = serialStoryboards.map((item) => resolveSeedImage(item))
+  const frameImages = serialStoryboards.map((item) => resolveFrameImage(item))
 
   return {
     episode_id: episodeId,
-    image_urls: seedImages,
+    image_urls: frameImages,
     scene_descriptions: sceneDescriptions,
     dialogues: dialogues.some(Boolean) ? dialogues : undefined,
     durations: durations.some(Boolean) ? durations : undefined,
@@ -865,20 +856,22 @@ ${paceBlock}`
     return storyboardAssetDetailMap.get(firstStoryboard.id) || []
   }, [firstStoryboard, storyboardAssetDetailMap])
 
+  const storyboardsWithCharacters = useMemo(
+    () => displayStoryboards.filter((storyboard) => Array.isArray(storyboard.characters) && storyboard.characters.length > 0),
+    [displayStoryboards],
+  )
+  const characterBoundStoryboardCount = useMemo(
+    () => storyboardsWithCharacters.filter((storyboard) => (
+      (storyboardAssetDetailMap.get(storyboard.id) || []).some((asset) => asset.type === 'character' && String(asset.image_url || '').trim())
+    )).length,
+    [storyboardsWithCharacters, storyboardAssetDetailMap],
+  )
+
   const characterAssets = useMemo(() => {
     const fromScope = scopeAssets.filter((item) => item.type === 'character')
     if (fromScope.length > 0) return fromScope
     return assets.filter((item) => item.type === 'character')
   }, [scopeAssets, assets])
-
-  const assetImageById = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const asset of assets) {
-      const imageUrl = String(asset.image_url || '').trim()
-      if (imageUrl) map.set(asset.id, imageUrl)
-    }
-    return map
-  }, [assets])
 
   const characterAnchorAsset = useMemo(() => {
     const firstWithImage = characterAssets.find((asset) => String(asset.image_url || '').trim())
@@ -925,18 +918,16 @@ ${paceBlock}`
   const storyboardScopeReady = displayStoryboards.length > 0
   const assetScopeReady = scopeAssets.length > 0
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
-  const serialVideoSeedReady = storyboardScopeReady && displayStoryboards.some((item) => {
-    if (String(item.image_url || '').trim()) return true
-    return (storyboardAssetDetailMap.get(item.id) || []).some((asset) => String(asset.image_url || '').trim())
-  })
+  const allStoryboardFramesReady = storyboardScopeReady && completedStoryboardImages > 0 && completedStoryboardImages === displayStoryboards.length
+  const allCharacterStoryboardsBound = storyboardsWithCharacters.length === 0 || characterBoundStoryboardCount === storyboardsWithCharacters.length
 
   const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
-  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && (firstStoryboardImageReady || serialVideoSeedReady)
+  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && allCharacterStoryboardsBound && allStoryboardFramesReady && firstFrameIdentityApproved
   const latestTaskIsPaused = String(latestTask?.status || '').toLowerCase() === 'paused'
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
-  const step3Enabled = latestTaskIsPaused || (step1Done && serialVideoSeedReady && step3ConfigReady && firstFrameIdentityApproved)
+  const step3Enabled = latestTaskIsPaused || (step2Done && step3ConfigReady)
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
@@ -972,36 +963,34 @@ ${paceBlock}`
   const step2Hint = !step2Enabled
     ? '先完成步骤 1，先让这一轮视频配置真正产出新的广告分镜文案。'
     : step2Running
-      ? '当前正在执行步骤 2：准备素材槽位或生成首张分镜图，请等这一轮回流。'
+      ? '当前正在执行步骤 2：准备素材槽位、补齐人物绑定、批量生成首尾帧分镜图，请等这一轮回流。'
       : !assetScopeReady
         ? '当前范围还没有可上传的人物 / 素材槽位，先点“准备人物槽位”。'
         : !allScopeAssetsUploaded
-          ? '先把当前范围需要的参考图补齐；没上传完之前，不建议生成首张分镜图。'
-          : !firstStoryboardImageReady
-            ? '参考图已经齐了，下一步只需要生成第 1 张分镜图；其余分镜只展示文本，不再继续批量生成图片。'
-            : !firstFrameIdentityApproved
-              ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
-              : '当前范围的第 1 张分镜图已经就绪，且已确认角色正确，步骤 2 可以视为完成。'
+          ? '先把当前范围需要的参考图补齐；没上传完之前，不建议批量生成首尾帧分镜图。'
+          : !allCharacterStoryboardsBound
+            ? `当前还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜没绑定已上传角色图，建议先补齐，再生成对应首尾帧。`
+            : !allStoryboardFramesReady
+              ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。`
+              : !firstFrameIdentityApproved
+                ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
+                : '当前范围的人物绑定和首尾帧分镜图都已备齐，步骤 2 可以视为完成。'
 
   const step3Hint = latestTaskIsPaused
     ? '检测到上一步有已暂停但未完成的视频任务；这里会优先继续旧任务，而不是重新新建一条视频任务。'
-    : !firstStoryboardImageReady
-      ? '当前范围还没有可用的首张分镜图。先在步骤 2 至少生成或上传第 1 张分镜图。'
-      : !firstFrameIdentityApproved
-        ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
-        : !step3Enabled
-          ? '当前范围还没有可用的首张分镜图或可复用参考图。先在步骤 2 至少生成第 1 张分镜图，或上传一张能作为首图种子的参考图，后续视频会用上一段视频尾帧作为下一段首帧串行衔接。'
+    : !allStoryboardFramesReady
+      ? `当前范围还没有把首尾帧分镜图备齐，已完成 ${completedStoryboardImages} / ${displayStoryboards.length}。请先回步骤 2 批量生成。`
+      : !allCharacterStoryboardsBound
+        ? '当前仍有含人物的分镜没有绑定可用角色图。建议先在步骤 2 补齐绑定，再提交视频生成。'
+        : !firstFrameIdentityApproved
+          ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
           : !step3ConfigReady
             ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
             : step3Running
               ? '当前已经有视频任务在执行，先等这一轮结果。'
-              : completedStoryboardImages === 0
-                ? '当前范围还没有可用的首张分镜图，所以现在不能提交视频。'
-                : !step2Done
-                  ? '当前范围已有首张分镜图，可以直接提交串行视频；后续 clip 将复用前一段视频检测到的尾帧作为下一段首帧，不再要求每条分镜图都先生成。'
-                  : step3Done
-                    ? '当前已经有成片结果；如果不满意，可以基于这一版分镜图继续重生。'
-                    : '当前范围已经有首张分镜图，可以开始提交串行视频任务。'
+              : step3Done
+                ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的首尾帧分镜图继续重生。'
+                : '当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。'
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1297,17 +1286,14 @@ ${paceBlock}`
       toast({ title: '当前范围还没有人物 / 素材槽位，请先点击“准备人物槽位”', variant: 'destructive' })
       return
     }
-    const firstStoryboard = scopeStoryboards
-      .slice()
-      .sort((a, b) => a.sequence_number - b.sequence_number)[0]
-    if (!firstStoryboard) {
+    if (scopeStoryboards.length === 0) {
       toast({ title: '当前范围还没有分镜文本，请先完成步骤 1', variant: 'destructive' })
       return
     }
     await runScopedAction(
-      `storyboard-image-first-${firstStoryboard.id}`,
-      () => storyboardAPI.generate(projectId, firstStoryboard.id, selectedStoryboardImageModel || undefined),
-      `已按当前范围的第 1 条分镜继续生成首张分镜图`,
+      'storyboard-image-all',
+      () => storyboardAPI.generateAll(projectId, undefined, selectedStoryboardImageModel || undefined),
+      `已开始按当前范围批量生成分镜图，供步骤 3 作为首尾帧使用`,
     )
   }
 
@@ -1489,6 +1475,18 @@ ${paceBlock}`
       return
     }
 
+    if (!allStoryboardFramesReady) {
+      toast({ title: `请先在步骤 2 把首尾帧分镜图补齐，当前仅完成 ${completedStoryboardImages} / ${displayStoryboards.length}`, variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!allCharacterStoryboardsBound) {
+      toast({ title: '请先在步骤 2 补齐含人物分镜的角色绑定，再进入步骤 3', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
     if (!firstStoryboardImageReady) {
       toast({ title: '请先准备首镜图，再进入步骤 3', variant: 'destructive' })
       releaseActionLock('video-start')
@@ -1516,11 +1514,8 @@ ${paceBlock}`
       releaseActionLock('video-start')
       return
     }
-    if (!storyboardPool.some((item) => {
-      if (String(item.image_url || '').trim()) return true
-      return (item.asset_ids || []).some((assetId) => String(assetImageById.get(assetId) || '').trim())
-    })) {
-      toast({ title: '当前范围还没有可用的首张分镜图或参考图，请先在步骤 2 至少补一张分镜图，或上传可复用的参考图', variant: 'destructive' })
+    if (!storyboardPool.every((item) => String(item.image_url || '').trim())) {
+      toast({ title: '当前范围还有分镜图未生成完成，请先回步骤 2 补齐全部首尾帧分镜图', variant: 'destructive' })
       releaseActionLock('video-start')
       return
     }
@@ -1532,7 +1527,7 @@ ${paceBlock}`
 
     setGenerationAction('video-start')
     try {
-      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, assetImageById)
+      const payload = buildEpisodeVideoPayload(storyboardPool, undefined)
       const renderConfigBase: Record<string, unknown> = {
         aspect_ratio: selectedStep3AspectRatio,
         resolution: selectedStep3Resolution,
@@ -1738,7 +1733,7 @@ ${paceBlock}`
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <div className="text-xs font-medium text-cyan-200">场景描述</div>
                             <div className={`rounded-full border px-2 py-0.5 text-[10px] ${index === 0 ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'}`}>
-                              {index === 0 ? '保留第 1 张分镜图' : '仅展示文本'}
+                              {index === 0 ? '首镜基准图' : '参与首尾帧预生成'}
                             </div>
                           </div>
                           <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
@@ -1803,8 +1798,8 @@ ${paceBlock}`
                     <div className="text-xs font-medium">步骤 2</div>
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step2Status)}</div>
                   </div>
-                  <div className="mt-1 text-base font-semibold text-white">上传人物图 / 刷新分镜图</div>
-                  <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为当前范围逐个上传真实参考图，最后刷新分镜图。</div>
+                  <div className="mt-1 text-base font-semibold text-white">上传人物图并预生成首尾帧分镜图</div>
+                  <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为含人物分镜补齐角色绑定，最后批量生成整条广告的视频首尾帧分镜图。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step2' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
                 <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step3') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step3Status)} ${activePipelineStep === 'step3' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
@@ -2019,11 +2014,11 @@ ${paceBlock}`
                 {activePipelineStep === 'step2' && (
                   <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
                     <div>
-                      <div className="text-sm font-medium text-violet-100">步骤 2：参考图槽位准备与本地替换</div>
-                      <div className="mt-1 text-xs text-violet-100/80">这里只保留一套内容：参考图槽位。你可以直接在这里本地上传、重新上传替换，后续视频生成会优先使用这些槽位里已上传的图片；分镜信息只作为当前槽位对应关系的说明。</div>
+                      <div className="text-sm font-medium text-violet-100">步骤 2：人物绑定与首尾帧分镜图预生成</div>
+                      <div className="mt-1 text-xs text-violet-100/80">这一步不再只准备首镜。现在要先把角色素材绑定到对应分镜，再提前生成整条广告要用到的分镜图，供后续视频生成直接作为首尾帧参考。</div>
                       {step2Running && (
                         <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
-                          当前进行中：正在准备素材槽位 / 上传参考图 / 生成第 1 张分镜图，请勿重复点击
+                          当前进行中：正在准备素材槽位 / 上传参考图 / 补齐人物绑定 / 批量生成首尾帧分镜图，请勿重复点击
                         </div>
                       )}
                     </div>
@@ -2034,12 +2029,12 @@ ${paceBlock}`
                         <div className="mt-1 text-sm text-white">{scopeLabel}</div>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
-                        <div className="text-[11px] text-violet-200/70">首分镜关联素材</div>
-                        <div className="mt-1 text-sm text-white">{firstStoryboardAssets.length} 个</div>
+                        <div className="text-[11px] text-violet-200/70">含人物分镜绑定</div>
+                        <div className="mt-1 text-sm text-white">{characterBoundStoryboardCount} / {storyboardsWithCharacters.length}</div>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
-                        <div className="text-[11px] text-violet-200/70">首分镜图片</div>
-                        <div className="mt-1 text-sm text-white">{firstStoryboardImageReady ? '已准备' : '待准备'}</div>
+                        <div className="text-[11px] text-violet-200/70">首尾帧分镜图</div>
+                        <div className="mt-1 text-sm text-white">{completedStoryboardImages} / {displayStoryboards.length}</div>
                       </div>
                       <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
                         <div className="text-[11px] text-violet-200/70">首镜角色确认</div>
@@ -2065,7 +2060,7 @@ ${paceBlock}`
                         disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
                         onClick={() => void triggerStoryboardImageGeneration()}
                       >
-                        {generationAction?.startsWith('storyboard-image-') ? '正在生成第 1 张分镜图…' : '3）生成第 1 张分镜图'}
+                        {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : '2）批量生成首尾帧分镜图'}
                       </Button>
                       <Button
                         size="sm"
@@ -2081,12 +2076,7 @@ ${paceBlock}`
                       {step2Hint}
                       {step2Done && (
                         <div className="mt-2 text-emerald-200/90">
-                          当前范围的首分镜图片已经准备完成，可以直接点上方“去步骤 3 生成视频”。
-                        </div>
-                      )}
-                      {!step2Done && step3Enabled && (
-                        <div className="mt-2 text-emerald-200/90">
-                          当前范围已经有首张可复用的参考图，或至少已有首张分镜图兜底了，虽然步骤 2 还没完全补齐，但已经可以先去步骤 3 提交串行视频；后续片段会用上一段尾帧接下一段首帧。
+                          当前范围的人物绑定、首尾帧分镜图和首镜确认都已完成，可以直接点上方“去步骤 3 生成视频”。
                         </div>
                       )}
                     </div>
@@ -2094,14 +2084,14 @@ ${paceBlock}`
                     <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-sm font-medium text-white">Step2 主内容</div>
-                        <div className="text-[11px] text-violet-100/80">第 1 个分镜负责图片，其余分镜可在这里直接绑定人物参考图</div>
+                        <div className="text-[11px] text-violet-100/80">先补齐人物绑定，再把整条广告要用到的分镜图提前生成为视频首尾帧</div>
                       </div>
 
                       <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-sm font-medium text-white">人物参考图与分镜绑定</div>
-                            <div className="mt-1 text-[11px] text-slate-400">先在这里上传 / 替换角色图，再把角色素材显式绑定到对应分镜。后续视频生成会优先使用这些已绑定的人物参考图。</div>
+                            <div className="mt-1 text-[11px] text-slate-400">先在这里上传 / 替换角色图，再把角色素材显式绑定到对应分镜。步骤 3 会优先消费这些绑定关系，并使用已生成好的分镜图做首尾帧约束。</div>
                           </div>
                           <div className="text-[11px] text-violet-100/80">当前角色素材：{characterAssets.length} 个</div>
                         </div>
@@ -2225,7 +2215,7 @@ ${paceBlock}`
                               </div>
                             ) : (
                               <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-slate-500">
-                                当前还没有第 1 张分镜图，你可以直接本地上传，或点上方按钮自动生成。
+                                当前还没有第 1 张分镜图。你可以直接本地上传首镜基准图，或先用上方按钮批量生成整条广告的首尾帧分镜图。
                               </div>
                             )}
 
@@ -2286,7 +2276,7 @@ ${paceBlock}`
                                     <option key={`storyboard-image-model-${item.key}`} value={item.key}>{item.key}</option>
                                   ))}
                                 </select>
-                                <div className="text-[11px] text-violet-100/75">这里控制的是第 1 个分镜图片生成时实际传给后端的图像模型；你也可以不选，继续用系统默认。</div>
+                                <div className="text-[11px] text-violet-100/75">这里控制的是步骤 2 批量生成分镜图时优先使用的图像模型；你也可以不选，继续用系统默认。</div>
                               </div>
 
                               <div className="flex flex-wrap items-end gap-2 md:justify-end">
@@ -2308,7 +2298,7 @@ ${paceBlock}`
                                   disabled={pipelineBusy || !step2Enabled || !firstStoryboard}
                                   onClick={() => void triggerStoryboardImageGeneration()}
                                 >
-                                  {generationAction?.startsWith('storyboard-image-') ? '正在生成第 1 张分镜图…' : '用图像模型生成第 1 张分镜图'}
+                                  {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : '补生成当前批次分镜图'}
                                 </Button>
                               </div>
                             </div>
@@ -2384,8 +2374,8 @@ ${paceBlock}`
                 {activePipelineStep === 'step3' && (
                   <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
                     <div>
-                      <div className="text-sm font-medium text-emerald-100">步骤 3：基于当前范围分镜图提交视频</div>
-                      <div className="mt-1 text-xs text-emerald-100/80">这里只要求当前范围至少有首张分镜图；提交后会串行生成，后续 clip 使用上一段视频检测到的尾帧作为下一段首帧。</div>
+                      <div className="text-sm font-medium text-emerald-100">步骤 3：基于已准备好的分镜首尾帧提交视频</div>
+                      <div className="mt-1 text-xs text-emerald-100/80">这里要求当前范围的分镜图先准备完整。提交时会优先带上这批分镜图作为各段视频的起止参考，不再只靠首镜兜底后再补图。</div>
                       {step3Running && (
                         <div className="mt-2 inline-flex rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-100">
                           当前进行中：正在提交视频任务，请勿重复点击
@@ -2429,6 +2419,7 @@ ${paceBlock}`
                           <div>Veo 原生约束：人物策略 {selectedStep3VeoPersonGeneration || '-'} / 参考图 {step3UsesVeoReferenceImages ? `${step3VeoReferenceImages.length} 张` : '关闭'} / 尾帧 {step3UsesVeoLastFrame ? '开启' : '关闭'} / seed {selectedStep3VeoSeed || '-'}</div>
                         )}
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                        <div>含人物分镜绑定：{characterBoundStoryboardCount} / {storyboardsWithCharacters.length}</div>
                         <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
                         <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id}` : ''}` : '缺失'}</div>
                       </div>
@@ -2612,7 +2603,7 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !serialVideoSeedReady || !firstFrameIdentityApproved))}
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !allStoryboardFramesReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
                       onClick={() => void startScopedVideoGeneration()}
                     >
                       {generationAction === 'video-start'
@@ -2629,7 +2620,7 @@ ${paceBlock}`
                     </div>
 
                     <div className="text-[11px] text-emerald-100/75">
-                      真正提交给视频服务的是当前范围内从首张可用 `image_url` 开始的完整分镜序列；只有第一段带首图，后续片段依赖上一段视频尾帧串行衔接，同时会带上这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
+                      真正提交给视频服务的是当前范围内这批已经准备好的分镜图序列；系统会把它们带进视频请求里，优先作为每段视频的起止参考，同时附带这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
                     </div>
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
