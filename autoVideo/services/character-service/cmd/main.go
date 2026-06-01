@@ -130,6 +130,20 @@ func main() {
 		geminiBase, geminiKey,
 		cfg.ModelService.BaseURL,
 	)
+	assetSvc.SetVolcAssetClient(service.NewVolcAssetClient(service.VolcAssetClientConfig{
+		Enabled:         cfg.VolcAsset.Enabled,
+		AccessKey:       cfg.VolcAsset.AccessKey,
+		SecretKey:       cfg.VolcAsset.SecretKey,
+		Region:          cfg.VolcAsset.Region,
+		Service:         cfg.VolcAsset.Service,
+		Host:            cfg.VolcAsset.Host,
+		Version:         cfg.VolcAsset.Version,
+		ProjectName:     cfg.VolcAsset.ProjectName,
+		GroupType:       cfg.VolcAsset.GroupType,
+		GroupNamePrefix: cfg.VolcAsset.GroupNamePrefix,
+		PollInterval:    time.Duration(cfg.VolcAsset.PollIntervalMs) * time.Millisecond,
+		PollTimeout:     time.Duration(cfg.VolcAsset.PollTimeoutSeconds) * time.Second,
+	}, log))
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	var kafkaProducer *service.KafkaProducer
@@ -342,51 +356,51 @@ func main() {
 
 			projects.PATCH("/consistency-config", assetHandler.UpdateConsistencyConfig)
 
-		// production skills (影视部门技能)
-		pskills := projects.Group("/production-skills")
-		pskills.GET("", productionSkillHandler.List)
-		pskills.POST("", productionSkillHandler.Create)
-		pskills.POST("/seed-defaults", productionSkillHandler.SeedDefaults)
-		pskills.POST("/reseed-defaults", productionSkillHandler.ReseedDefaults)
-		pskills.GET("/:id", productionSkillHandler.Get)
-		pskills.PUT("/:id", productionSkillHandler.Update)
-		pskills.DELETE("/:id", productionSkillHandler.Delete)
+			// production skills (影视部门技能)
+			pskills := projects.Group("/production-skills")
+			pskills.GET("", productionSkillHandler.List)
+			pskills.POST("", productionSkillHandler.Create)
+			pskills.POST("/seed-defaults", productionSkillHandler.SeedDefaults)
+			pskills.POST("/reseed-defaults", productionSkillHandler.ReseedDefaults)
+			pskills.GET("/:id", productionSkillHandler.Get)
+			pskills.PUT("/:id", productionSkillHandler.Update)
+			pskills.DELETE("/:id", productionSkillHandler.Delete)
 
-		// DELETE /api/v1/projects/:pid/runtime-data — full project cleanup (all assets, characters, skills)
-		projects.DELETE("/runtime-data", func(c *gin.Context) {
-			pidStr := c.Param("pid")
-			pid, err := strconv.ParseInt(pidStr, 10, 64)
-			if err != nil || pid <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id"})
-				return
-			}
-			// 1. Force-delete all assets (including locked)
-			if err := assetRepo.ForceDeleteByProjectID(uint64(pid)); err != nil {
-				log.Error("force delete assets failed", zap.Int64("project_id", pid), zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			// 2. Delete all characters
-			if err := charRepo.DeleteByProjectID(pid); err != nil {
-				log.Error("delete characters failed", zap.Int64("project_id", pid), zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			// 3. Delete all skills
-			if err := skillRepo.DeleteAllByProject(pid); err != nil {
-				log.Error("delete skills failed", zap.Int64("project_id", pid), zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			// 4. Delete all production skills
-			if err := productionSkillRepo.DeleteAllByProject(pid); err != nil {
-				log.Error("delete production skills failed", zap.Int64("project_id", pid), zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			log.Info("project runtime data deleted", zap.Int64("project_id", pid))
-			c.JSON(http.StatusOK, gin.H{"deleted": true})
-		})
+			// DELETE /api/v1/projects/:pid/runtime-data — full project cleanup (all assets, characters, skills)
+			projects.DELETE("/runtime-data", func(c *gin.Context) {
+				pidStr := c.Param("pid")
+				pid, err := strconv.ParseInt(pidStr, 10, 64)
+				if err != nil || pid <= 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id"})
+					return
+				}
+				// 1. Force-delete all assets (including locked)
+				if err := assetRepo.ForceDeleteByProjectID(uint64(pid)); err != nil {
+					log.Error("force delete assets failed", zap.Int64("project_id", pid), zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				// 2. Delete all characters
+				if err := charRepo.DeleteByProjectID(pid); err != nil {
+					log.Error("delete characters failed", zap.Int64("project_id", pid), zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				// 3. Delete all skills
+				if err := skillRepo.DeleteAllByProject(pid); err != nil {
+					log.Error("delete skills failed", zap.Int64("project_id", pid), zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				// 4. Delete all production skills
+				if err := productionSkillRepo.DeleteAllByProject(pid); err != nil {
+					log.Error("delete production skills failed", zap.Int64("project_id", pid), zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				log.Info("project runtime data deleted", zap.Int64("project_id", pid))
+				c.JSON(http.StatusOK, gin.H{"deleted": true})
+			})
 		}
 	}
 
@@ -445,6 +459,7 @@ func main() {
 	}
 	log.Info("character-service stopped")
 }
+
 // splitComma splits a comma-separated string, trims spaces, and drops empty entries.
 func splitComma(s string) []string {
 	var out []string

@@ -63,6 +63,20 @@ type Config struct {
 	ModelService struct {
 		BaseURL string `mapstructure:"base_url"`
 	} `mapstructure:"model_service"`
+	VolcAsset struct {
+		Enabled            bool   `mapstructure:"enabled"`
+		AccessKey          string `mapstructure:"access_key"`
+		SecretKey          string `mapstructure:"secret_key"`
+		Region             string `mapstructure:"region"`
+		Host               string `mapstructure:"host"`
+		Service            string `mapstructure:"service"`
+		Version            string `mapstructure:"version"`
+		ProjectName        string `mapstructure:"project_name"`
+		GroupType          string `mapstructure:"group_type"`
+		GroupNamePrefix    string `mapstructure:"group_name_prefix"`
+		PollIntervalMs     int    `mapstructure:"poll_interval_ms"`
+		PollTimeoutSeconds int    `mapstructure:"poll_timeout_seconds"`
+	} `mapstructure:"volc_asset"`
 	Concurrency struct {
 		MaxGenerations int `mapstructure:"max_generations"`
 	} `mapstructure:"concurrency"`
@@ -82,6 +96,20 @@ func Load() (*Config, error) {
 	viper.SetEnvPrefix("CHARACTER")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	bindEnvKeys(
+		"volc_asset.enabled",
+		"volc_asset.access_key",
+		"volc_asset.secret_key",
+		"volc_asset.region",
+		"volc_asset.host",
+		"volc_asset.service",
+		"volc_asset.version",
+		"volc_asset.project_name",
+		"volc_asset.group_type",
+		"volc_asset.group_name_prefix",
+		"volc_asset.poll_interval_ms",
+		"volc_asset.poll_timeout_seconds",
+	)
 
 	// defaults
 	viper.SetDefault("http.port", 8004)
@@ -103,6 +131,16 @@ func Load() (*Config, error) {
 	viper.SetDefault("project_service.base_url", "http://localhost:8002")
 	viper.SetDefault("auth_service.base_url", "http://localhost:8001")
 	viper.SetDefault("model_service.base_url", "http://localhost:8008")
+	viper.SetDefault("volc_asset.enabled", false)
+	viper.SetDefault("volc_asset.region", "cn-beijing")
+	viper.SetDefault("volc_asset.host", "ark.cn-beijing.volcengineapi.com")
+	viper.SetDefault("volc_asset.service", "ark")
+	viper.SetDefault("volc_asset.version", "2024-01-01")
+	viper.SetDefault("volc_asset.project_name", "default")
+	viper.SetDefault("volc_asset.group_type", "AIGC")
+	viper.SetDefault("volc_asset.group_name_prefix", "autovideo-character")
+	viper.SetDefault("volc_asset.poll_interval_ms", 3000)
+	viper.SetDefault("volc_asset.poll_timeout_seconds", 90)
 	viper.SetDefault("gateway.addr", "http://localhost:8000")
 	viper.SetDefault("gateway.self_addr", "")
 
@@ -135,6 +173,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func bindEnvKeys(keys ...string) {
+	for _, key := range keys {
+		_ = viper.BindEnv(key)
+	}
 }
 
 func mergeOverrideConfig() error {

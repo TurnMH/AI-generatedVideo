@@ -670,7 +670,7 @@ func (h *AssetHandler) UploadAsset(c *gin.Context) {
 	}
 	defer file.Close()
 
-	asset, err := h.svc.Upload(id, header.Filename, file)
+	asset, err := h.svc.Upload(c.Request.Context(), id, header.Filename, file)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			response.Error(c, http.StatusNotFound, "asset not found")

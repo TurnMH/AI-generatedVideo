@@ -47,6 +47,7 @@ type AssetService struct {
 	llmModel       string
 	llmVisionModel string
 	llmTimeout     time.Duration
+	volcAsset      *VolcAssetClient
 	// extra providers for multi-vendor routing in ChatFree
 	llmClaude           llmProvider // Anthropic Claude proxy (claude* models)
 	llmQwen             llmProvider // Alibaba DashScope (qwen* models)
@@ -819,7 +820,7 @@ func (s *AssetService) ResetAsset(id uint64) (*model.Asset, error) {
 }
 
 // Upload —— 手动上传资产图片并标记为已完成
-func (s *AssetService) Upload(id uint64, filename string, content interface{ Read([]byte) (int, error) }) (*model.Asset, error) {
+func (s *AssetService) Upload(ctx context.Context, id uint64, filename string, content interface{ Read([]byte) (int, error) }) (*model.Asset, error) {
 	asset, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -839,6 +840,10 @@ func (s *AssetService) Upload(id uint64, filename string, content interface{ Rea
 	delete(metadata, "seed")
 	delete(metadata, "generation_request")
 	metadata["selected_generated_image_url"] = cdnURL
+	metadata, err = s.syncCharacterAssetProviderMetadata(ctx, asset, cdnURL, metadata)
+	if err != nil {
+		return nil, err
+	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal metadata: %w", err)
