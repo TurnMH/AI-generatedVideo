@@ -3062,9 +3062,6 @@ func shouldChainSerialSource(task *model.VideoTask, sceneSeq int, sceneGroupKey 
 	if task == nil || !task.SerialScene || sceneSeq <= 0 || strings.TrimSpace(sceneGroupKey) == "" {
 		return false
 	}
-	if isLiveActionSameCharacterSerialLock(task) && sceneSeq >= 2 {
-		return false
-	}
 	return true
 }
 

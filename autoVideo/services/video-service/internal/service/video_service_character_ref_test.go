@@ -337,7 +337,7 @@ func TestPerClipCharacterAssetReferenceImagesPreferActiveProviderAssetRef(t *tes
 	}
 }
 
-func TestShouldUseSeedanceIdentityAnchorSourceFallbackAfterSecondLiveActionClip(t *testing.T) {
+func TestShouldUseSeedanceIdentityAnchorSourceFallbackOnlyWhenSerialChainIsInactive(t *testing.T) {
 	task := &model.VideoTask{
 		SerialScene: true,
 		StylePreset: "live-action-short",
@@ -346,8 +346,8 @@ func TestShouldUseSeedanceIdentityAnchorSourceFallbackAfterSecondLiveActionClip(
 			"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
 		},
 	}
-	if !shouldUseSeedanceIdentityAnchorSourceFallback("doubao-seedance", task, 2, "group-a", "") {
-		t.Fatalf("expected Seedance live-action clip 3+ to fall back to identity anchor source")
+	if shouldUseSeedanceIdentityAnchorSourceFallback("doubao-seedance", task, 2, "group-a", "") {
+		t.Fatalf("did not expect Seedance serial clip 3+ to fall back to identity anchor source while serial chaining stays active")
 	}
 	if shouldUseSeedanceIdentityAnchorSourceFallback("doubao-seedance", task, 1, "group-a", "") {
 		t.Fatalf("did not expect clip 2 to use identity anchor source fallback")
@@ -357,7 +357,7 @@ func TestShouldUseSeedanceIdentityAnchorSourceFallbackAfterSecondLiveActionClip(
 	}
 }
 
-func TestShouldChainSerialSourceWeakensLiveActionSameCharacterAfterSecondClip(t *testing.T) {
+func TestShouldChainSerialSourceKeepsLiveActionSameCharacterChainAcrossLaterClips(t *testing.T) {
 	task := &model.VideoTask{
 		SerialScene: true,
 		StylePreset: "live-action-short",
@@ -368,8 +368,8 @@ func TestShouldChainSerialSourceWeakensLiveActionSameCharacterAfterSecondClip(t 
 	if !shouldChainSerialSource(task, 1, "group-a") {
 		t.Fatalf("expected clip 2 in live-action same-character chain to keep serial source")
 	}
-	if shouldChainSerialSource(task, 2, "group-a") {
-		t.Fatalf("expected clip 3+ in live-action same-character chain to stop inheriting previous tail frame")
+	if !shouldChainSerialSource(task, 2, "group-a") {
+		t.Fatalf("expected clip 3+ in live-action same-character chain to continue inheriting previous tail frame")
 	}
 }
 
@@ -386,7 +386,7 @@ func TestShouldChainSerialSourceKeepsNonLiveActionBehavior(t *testing.T) {
 	}
 }
 
-func TestShouldAddSerialContinuityPromptStopsAfterSecondLiveActionSameCharacterClip(t *testing.T) {
+func TestShouldAddSerialContinuityPromptKeepsLiveActionSameCharacterChainActive(t *testing.T) {
 	task := &model.VideoTask{
 		SerialScene: true,
 		StylePreset: "live-action-short",
@@ -397,8 +397,8 @@ func TestShouldAddSerialContinuityPromptStopsAfterSecondLiveActionSameCharacterC
 	if !shouldAddSerialContinuityPrompt(task, 1, 1, "group-a", []string{"", "主讲人继续自然口播产品卖点"}, nil) {
 		t.Fatalf("expected clip 2 continuity prompt to remain enabled when chain is active")
 	}
-	if shouldAddSerialContinuityPrompt(task, 2, 2, "group-a", []string{"", "", "主讲人继续自然口播产品卖点"}, nil) {
-		t.Fatalf("expected clip 3+ continuity prompt to stop when live-action same-character chain is disabled")
+	if !shouldAddSerialContinuityPrompt(task, 2, 2, "group-a", []string{"", "", "主讲人继续自然口播产品卖点"}, nil) {
+		t.Fatalf("expected clip 3+ continuity prompt to stay enabled when live-action same-character chain remains active")
 	}
 }
 
