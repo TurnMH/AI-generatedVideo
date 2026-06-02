@@ -35,6 +35,15 @@ func TestMergeVolcAssetMetadata(t *testing.T) {
 	if got := strings.TrimSpace(stringValue(merged["provider_asset_status"])); got != "Active" {
 		t.Fatalf("provider_asset_status = %q, want Active", got)
 	}
+	if got := strings.TrimSpace(stringValue(merged["asset_id"])); got != "asset-456" {
+		t.Fatalf("asset_id = %q, want asset-456", got)
+	}
+	if got := strings.TrimSpace(stringValue(merged["asset_status"])); got != "Active" {
+		t.Fatalf("asset_status = %q, want Active", got)
+	}
+	if got := strings.TrimSpace(stringValue(merged["seedance_asset_uri"])); got != "asset://asset-456" {
+		t.Fatalf("seedance_asset_uri = %q, want asset://asset-456", got)
+	}
 	nested, ok := merged["volc_asset"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("volc_asset missing or invalid: %#v", merged["volc_asset"])

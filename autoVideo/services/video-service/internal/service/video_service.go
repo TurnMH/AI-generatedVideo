@@ -3509,6 +3509,7 @@ type videoAssetPromptAnchor struct {
 	Provider            string
 	ProviderAssetID     string
 	ProviderAssetStatus string
+	ProviderAssetURI    string
 }
 
 func (s *VideoService) buildServiceToken() string {
@@ -3594,7 +3595,7 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 		if _, want := needed[a.ID]; !want {
 			continue
 		}
-		provider, providerAssetID, providerAssetStatus := parseVideoProviderAssetMetadata(a.Metadata)
+		provider, providerAssetID, providerAssetStatus, providerAssetURI := parseVideoProviderAssetMetadata(a.Metadata)
 		out[a.ID] = videoAssetPromptAnchor{
 			ID:                  a.ID,
 			Name:                a.Name,
@@ -3605,6 +3606,7 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 			Provider:            provider,
 			ProviderAssetID:     providerAssetID,
 			ProviderAssetStatus: providerAssetStatus,
+			ProviderAssetURI:    providerAssetURI,
 		}
 	}
 	return out
@@ -3636,13 +3638,13 @@ func metadataStringValue(raw interface{}) string {
 	}
 }
 
-func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, status string) {
+func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, status, uri string) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	var metadata map[string]interface{}
 	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	for _, key := range []string{"volcengine_private_asset", "volc_asset", "provider_asset", "video_identity_asset"} {
 		nested, ok := metadata[key].(map[string]interface{})
@@ -3652,6 +3654,7 @@ func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, st
 		provider = firstNonEmpty(provider, metadataStringValue(nested["provider"]), metadataStringValue(nested["provider_name"]))
 		assetID = firstNonEmpty(assetID, metadataStringValue(nested["asset_id"]), metadataStringValue(nested["provider_asset_id"]))
 		status = firstNonEmpty(status, metadataStringValue(nested["status"]), metadataStringValue(nested["asset_status"]), metadataStringValue(nested["provider_asset_status"]))
+		uri = firstNonEmpty(uri, metadataStringValue(nested["uri"]), metadataStringValue(nested["provider_asset_uri"]))
 	}
 	provider = firstNonEmpty(provider,
 		metadataStringValue(metadata["provider"]),
@@ -3672,7 +3675,28 @@ func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, st
 		metadataStringValue(metadata["doubao_asset_status"]),
 		metadataStringValue(metadata["seedance_asset_status"]),
 	)
-	return strings.TrimSpace(provider), strings.TrimSpace(assetID), strings.TrimSpace(status)
+	uri = firstNonEmpty(uri,
+		metadataStringValue(metadata["provider_asset_uri"]),
+		metadataStringValue(metadata["asset_uri"]),
+		metadataStringValue(metadata["volcengine_asset_uri"]),
+		metadataStringValue(metadata["doubao_asset_uri"]),
+		metadataStringValue(metadata["seedance_asset_uri"]),
+	)
+	if assetID == "" {
+		assetID = providerAssetIDFromURI(uri)
+	}
+	if uri == "" && assetID != "" {
+		uri = "asset://" + assetID
+	}
+	return strings.TrimSpace(provider), strings.TrimSpace(assetID), strings.TrimSpace(status), strings.TrimSpace(uri)
+}
+
+func providerAssetIDFromURI(uri string) string {
+	uri = strings.TrimSpace(uri)
+	if !strings.HasPrefix(strings.ToLower(uri), "asset://") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(uri, "asset://"))
 }
 
 func supportsAssetReferenceScheme(provider string) bool {
@@ -3689,10 +3713,14 @@ func supportsAssetReferenceScheme(provider string) bool {
 }
 
 func referenceURLForVideoAnchor(anchor videoAssetPromptAnchor) string {
-	assetID := strings.TrimSpace(anchor.ProviderAssetID)
 	status := strings.TrimSpace(anchor.ProviderAssetStatus)
-	if assetID != "" && strings.EqualFold(status, "active") && supportsAssetReferenceScheme(anchor.Provider) {
-		return "asset://" + assetID
+	if strings.EqualFold(status, "active") && supportsAssetReferenceScheme(anchor.Provider) {
+		if uri := strings.TrimSpace(anchor.ProviderAssetURI); strings.HasPrefix(strings.ToLower(uri), "asset://") {
+			return uri
+		}
+		if assetID := strings.TrimSpace(anchor.ProviderAssetID); assetID != "" {
+			return "asset://" + assetID
+		}
 	}
 	return strings.TrimSpace(anchor.ImageURL)
 }

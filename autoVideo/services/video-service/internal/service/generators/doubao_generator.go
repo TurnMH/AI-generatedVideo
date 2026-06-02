@@ -267,6 +267,7 @@ func (g *DoubaoGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*
 // submit —— 提交视频生成任务，返回任务 ID
 func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
 	textPrompt := g.buildPromptText(req)
+	referenceImages := uniqueNonEmptyURLs(req.CharacterImageURLs)
 	// Build content array based on generate mode.
 	var content []doubaoContentItem
 
@@ -297,17 +298,15 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
-		for _, imgURL := range req.CharacterImageURLs {
-			if imgURL != "" {
-				content = append(content, doubaoContentItem{
-					Type:     "image_url",
-					Role:     "reference_image",
-					ImageURL: &doubaoImageURLItem{URL: imgURL},
-				})
-			}
+		for _, imgURL := range referenceImages {
+			content = append(content, doubaoContentItem{
+				Type:     "image_url",
+				Role:     "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
+			})
 		}
 		// Fallback to source image if no character images provided
-		if len(req.CharacterImageURLs) == 0 && req.SourceImageURL != "" {
+		if len(referenceImages) == 0 && req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
 				Role:     "reference_image",
@@ -316,10 +315,10 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		}
 
 	default:
-		// img2video（默认）: 只传 source + text。
-		// 对 Seedance 不能再把 source 标成 first_frame 再混 reference_image，
-		// 否则会触发 task 204 的 first/last frame 与 reference media 互斥错误。
-		content = make([]doubaoContentItem, 0, 2)
+		// img2video（默认）: source + text。
+		// 当上游已解析到角色锚点（包括 asset://AssetId）时，继续把角色参考图作为 reference_image 下发。
+		// 这里避免把 source 误标成 first_frame，因此不会触发 first/last frame 与 reference media 的互斥错误。
+		content = make([]doubaoContentItem, 0, 2+len(referenceImages))
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
@@ -330,6 +329,13 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 			Type: "text",
 			Text: textPrompt,
 		})
+		for _, imgURL := range referenceImages {
+			content = append(content, doubaoContentItem{
+				Type:     "image_url",
+				Role:     "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
+			})
+		}
 	}
 
 	body := doubaoSubmitReq{
@@ -406,6 +412,26 @@ func (g *DoubaoGenerator) buildPromptText(req VideoGenerateReq) string {
 		return prompt
 	}
 	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+}
+
+func uniqueNonEmptyURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(urls))
+	out := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		url := strings.TrimSpace(raw)
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		out = append(out, url)
+	}
+	return out
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）

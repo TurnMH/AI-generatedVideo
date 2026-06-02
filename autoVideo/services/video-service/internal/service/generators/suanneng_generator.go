@@ -163,6 +163,7 @@ func (g *SuannengGenerator) Generate(ctx context.Context, req VideoGenerateReq) 
 // submit —— 使用 doubao ARK content[] 格式提交视频生成任务，返回任务 ID
 func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
 	textPrompt := g.buildPromptText(req)
+	referenceImages := uniqueNonEmptyURLs(req.CharacterImageURLs)
 	dur := int(req.DurationSec)
 	if dur <= 0 {
 		dur = 5
@@ -200,15 +201,13 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
-		for _, imgURL := range req.CharacterImageURLs {
-			if imgURL != "" {
-				content = append(content, doubaoContentItem{
-					Type: "image_url", Role: "reference_image",
-					ImageURL: &doubaoImageURLItem{URL: imgURL},
-				})
-			}
+		for _, imgURL := range referenceImages {
+			content = append(content, doubaoContentItem{
+				Type: "image_url", Role: "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
+			})
 		}
-		if len(req.CharacterImageURLs) == 0 && req.SourceImageURL != "" {
+		if len(referenceImages) == 0 && req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type: "image_url", Role: "reference_image",
 				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
@@ -216,13 +215,20 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		}
 
 	default:
-		content = []doubaoContentItem{
-			{Type: "text", Text: textPrompt},
-		}
+		content = make([]doubaoContentItem, 0, 2+len(referenceImages))
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
 				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
+			})
+		}
+		content = append(content, doubaoContentItem{
+			Type: "text", Text: textPrompt,
+		})
+		for _, imgURL := range referenceImages {
+			content = append(content, doubaoContentItem{
+				Type: "image_url", Role: "reference_image",
+				ImageURL: &doubaoImageURLItem{URL: imgURL},
 			})
 		}
 	}

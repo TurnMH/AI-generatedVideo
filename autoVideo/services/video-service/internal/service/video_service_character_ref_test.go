@@ -131,6 +131,17 @@ func TestIdentityCharacterReferencesPreferActiveProviderAssetRef(t *testing.T) {
 	}
 }
 
+func TestReferenceURLForVideoAnchorAcceptsProviderAssetURICompatibilityAlias(t *testing.T) {
+	anchor := videoAssetPromptAnchor{
+		Provider:            "seedance",
+		ProviderAssetStatus: "Active",
+		ProviderAssetURI:    "asset://asset-789",
+	}
+	if got := referenceURLForVideoAnchor(anchor); got != "asset://asset-789" {
+		t.Fatalf("got %q, want asset://asset-789", got)
+	}
+}
+
 func TestPerClipCharacterAssetReferenceImagesPreferActiveProviderAssetRef(t *testing.T) {
 	sceneAssetIDs := [][]int64{{11}}
 	anchors := map[int64]videoAssetPromptAnchor{

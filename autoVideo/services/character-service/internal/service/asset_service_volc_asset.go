@@ -139,6 +139,28 @@ func mergeVolcAssetMetadata(metadata map[string]interface{}, state volcAssetSync
 	metadata["provider_asset_url"] = nested["url"]
 	metadata["provider_asset_uri"] = nested["uri"]
 	metadata["provider_asset_synced_at"] = nested["synced_at"]
+
+	// Compatibility aliases for fengxi/dumps1-style top-level semantics.
+	metadata["asset_group_id"] = nested["group_id"]
+	metadata["asset_id"] = nested["asset_id"]
+	metadata["asset_status"] = nested["status"]
+	metadata["asset_type"] = nested["asset_type"]
+	metadata["asset_project_name"] = nested["project_name"]
+	metadata["asset_url"] = nested["url"]
+	metadata["asset_uri"] = nested["uri"]
+	metadata["volcengine_asset_group_id"] = nested["group_id"]
+	metadata["volcengine_asset_id"] = nested["asset_id"]
+	metadata["volcengine_asset_status"] = nested["status"]
+	metadata["volcengine_asset_uri"] = nested["uri"]
+	metadata["doubao_asset_group_id"] = nested["group_id"]
+	metadata["doubao_asset_id"] = nested["asset_id"]
+	metadata["doubao_asset_status"] = nested["status"]
+	metadata["doubao_asset_uri"] = nested["uri"]
+	metadata["seedance_asset_group_id"] = nested["group_id"]
+	metadata["seedance_asset_id"] = nested["asset_id"]
+	metadata["seedance_asset_status"] = nested["status"]
+	metadata["seedance_asset_uri"] = nested["uri"]
+
 	if strings.TrimSpace(state.Error) == "" {
 		delete(metadata, "provider_asset_error")
 	} else {
