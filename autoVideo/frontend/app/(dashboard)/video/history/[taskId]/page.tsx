@@ -41,6 +41,38 @@ type TaskShape = {
   }>
 }
 
+type ClipDebugShape = {
+  clip_order: number
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  scene_group_key?: string
+  scene_seq?: number
+  requested_generate_mode?: string
+  final_generate_mode?: string
+  model_family?: string
+  reference_bindings?: string[]
+  project_identity_refs?: string[]
+  character_refs?: string[]
+  asset_refs?: string[]
+}
+
+function humanizeVideoErrorMessage(message?: string) {
+  const msg = String(message || '')
+  if (!msg) return ''
+  if (/same-character preflight failed|no usable identity anchor|missing identity anchor/i.test(msg)) {
+    return '这次不是上游模型拒绝，而是本地在提交前发现 same-character 缺少可用人物锚点或引用图绑定。'
+  }
+  if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451|内容审核拒绝|隐私信息风控/i.test(msg)) {
+    return '这次更像是首图触发了上游内容审核，不一定是本地参数拼装本身的问题。'
+  }
+  if (/serial chain broken/i.test(msg)) {
+    return '后续 clip 的串行报错通常是前段失败后的连锁结果。'
+  }
+  return ''
+}
+
 export default function ManualVideoHistoryDetailPage() {
   const params = useParams<{ taskId: string }>()
   const { toast } = useToast()
@@ -57,7 +89,7 @@ export default function ManualVideoHistoryDetailPage() {
   const payload = data as VideoTaskDetailResponse<TaskShape> | undefined
   const task = payload?.data?.task
   const taskDebug = payload?.data?.task_debug_summary
-  const clipsDebug = payload?.data?.clips_debug || []
+  const clipsDebug = ((payload?.data?.clips_debug || []) as ClipDebugShape[])
   const submissionPreview = (payload?.data as {
     submission_preview?: {
       generate_audio?: boolean
@@ -146,6 +178,9 @@ export default function ManualVideoHistoryDetailPage() {
                 <div>subtitle_compose_status：{subtitleComposeStatus || '-'}</div>
                 <div className="md:col-span-2 break-all">subtitle_compose_error：{subtitleComposeError || '-'}</div>
                 <div className="md:col-span-2">error_msg：{task.error_msg || '-'}</div>
+                {humanizeVideoErrorMessage(task.error_msg) && (
+                  <div className="md:col-span-2 text-amber-200/90">提示：{humanizeVideoErrorMessage(task.error_msg)}</div>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {task.project_id > 0 && (
@@ -326,7 +361,24 @@ export default function ManualVideoHistoryDetailPage() {
                       <div>runtime_provider：{clip.runtime_provider || clipTask?.runtime_provider || '-'}</div>
                       <div className="break-all">clip_url：{clipTask?.clip_url || '-'}</div>
                       <div className="md:col-span-2">error_msg：{clipTask?.error_msg || '-'}</div>
+                      {humanizeVideoErrorMessage(clipTask?.error_msg) && (
+                        <div className="md:col-span-2 text-amber-200/90">提示：{humanizeVideoErrorMessage(clipTask?.error_msg)}</div>
+                      )}
+                      <div>requested_mode：{clip.requested_generate_mode || '-'}</div>
+                      <div>final_mode：{clip.final_generate_mode || '-'}</div>
+                      <div>model_family：{clip.model_family || '-'}</div>
+                      <div>scene_seq：{clip.scene_seq ?? '-'}</div>
                     </div>
+                    {!!clip.reference_bindings?.length && (
+                      <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                        <div className="text-xs font-medium text-cyan-100">reference bindings</div>
+                        <div className="mt-2 space-y-1 text-xs text-cyan-50/90">
+                          {clip.reference_bindings.map((binding, bindingIdx) => (
+                            <div key={`${clip.clip_order}-binding-${bindingIdx}`} className="break-all">{binding}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {clipTask?.clip_url && (
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-2">

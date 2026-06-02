@@ -67,6 +67,13 @@ type VideoTaskClipDebug = {
   routed_generator?: string
   runtime_provider?: string
   effective_model?: string
+  requested_generate_mode?: string
+  final_generate_mode?: string
+  model_family?: string
+  reference_bindings?: string[]
+  project_identity_refs?: string[]
+  character_refs?: string[]
+  asset_refs?: string[]
 }
 
 type VideoTaskDetailData = {
@@ -280,8 +287,12 @@ const CHARACTER_IDENTITY_CONSTRAINTS = [
   'Do not switch identity, do not generate a lookalike stranger, and do not let continuity replace identity anchoring.',
 ]
 
-function humanizeVideoTaskError(task?: VideoTask | null) {
-  const msg = String(task?.error_msg || '')
+function humanizeVideoErrorMessage(message?: string) {
+  const msg = String(message || '')
+  if (!msg) return ''
+  if (/same-character preflight failed|no usable identity anchor|missing identity anchor/i.test(msg)) {
+    return '这次不是上游模型拒绝，而是本地在提交前发现 same-character 缺少可用人物锚点或引用图绑定。'
+  }
   if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451|内容审核拒绝|隐私信息风控/i.test(msg)) {
     return '这次更像是首图触发了上游内容审核，不一定是步骤 3 参数或串行链本身的问题。'
   }
@@ -289,6 +300,10 @@ function humanizeVideoTaskError(task?: VideoTask | null) {
     return '后续 clip 的串行报错通常是首段没过审带出来的连锁结果。'
   }
   return ''
+}
+
+function humanizeVideoTaskError(task?: VideoTask | null) {
+  return humanizeVideoErrorMessage(task?.error_msg)
 }
 
 function getParamOptions(model: VideoModelMeta | null, key: string): VideoModelParamOption[] {
@@ -616,6 +631,13 @@ export default function AdVideoHistoryDetailPage() {
           effective_model: clip.effective_model || debug?.effective_model || '',
           scene_group_key: clip.scene_group_key || debug?.scene_group_key || '',
           scene_seq: clip.scene_seq ?? debug?.scene_seq,
+          requested_generate_mode: debug?.requested_generate_mode || '',
+          final_generate_mode: debug?.final_generate_mode || '',
+          model_family: debug?.model_family || '',
+          reference_bindings: Array.isArray(debug?.reference_bindings) ? debug.reference_bindings : [],
+          project_identity_refs: Array.isArray(debug?.project_identity_refs) ? debug.project_identity_refs : [],
+          character_refs: Array.isArray(debug?.character_refs) ? debug.character_refs : [],
+          asset_refs: Array.isArray(debug?.asset_refs) ? debug.asset_refs : [],
           prompt_scene_description: String(sceneDescriptions[clipOrder] || '').trim(),
           prompt_dialogue: String(dialogues[clipOrder] || '').trim(),
           prompt_camera_movement: String(cameraMovements[clipOrder] || '').trim(),
@@ -2754,6 +2776,27 @@ ${paceBlock}`
                                       <div>duration_sec：{clip.duration_sec ?? '-'}</div>
                                       <div>error：{clip.error_msg || '-'}</div>
                                     </div>
+                                    {humanizeVideoErrorMessage(clip.error_msg) && (
+                                      <div className="text-[11px] text-amber-200/90">提示：{humanizeVideoErrorMessage(clip.error_msg)}</div>
+                                    )}
+                                    <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-6">
+                                      <div>requested_mode：{clip.requested_generate_mode || '-'}</div>
+                                      <div>final_mode：{clip.final_generate_mode || '-'}</div>
+                                      <div>model_family：{clip.model_family || '-'}</div>
+                                      <div>project_refs：{Array.isArray(clip.project_identity_refs) ? clip.project_identity_refs.length : 0}</div>
+                                      <div>character_refs：{Array.isArray(clip.character_refs) ? clip.character_refs.length : 0}</div>
+                                      <div>asset_refs：{Array.isArray(clip.asset_refs) ? clip.asset_refs.length : 0}</div>
+                                    </div>
+                                    {Array.isArray(clip.reference_bindings) && clip.reference_bindings.length > 0 && (
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-[11px] text-cyan-50/90">
+                                        <div className="font-medium text-cyan-100">reference bindings</div>
+                                        <div className="mt-2 space-y-1">
+                                          {clip.reference_bindings.map((binding, bindingIdx) => (
+                                            <div key={`${clip.clip_order}-binding-${bindingIdx}`} className="break-all">{binding}</div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )
                               })}

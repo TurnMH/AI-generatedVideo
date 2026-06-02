@@ -252,6 +252,59 @@ func buildTaskSubmissionPreview(task *model.VideoTask) gin.H {
 	}
 }
 
+func stringSliceFromAny(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if trimmed := strings.TrimSpace(s); trimmed != "" {
+					out = append(out, trimmed)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func renderConfigObjectSlice(rc model.RenderConfig, key string, n int) []map[string]any {
+	result := make([]map[string]any, n)
+	if len(rc) == 0 {
+		return result
+	}
+	raw, ok := rc[key]
+	if !ok {
+		return result
+	}
+	switch v := raw.(type) {
+	case []map[string]any:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = v[i]
+		}
+	case []interface{}:
+		for i := 0; i < n && i < len(v); i++ {
+			if entry, ok := v[i].(map[string]any); ok {
+				result[i] = entry
+				continue
+			}
+			if entry, ok := v[i].(map[string]interface{}); ok {
+				result[i] = entry
+			}
+		}
+	}
+	return result
+}
+
 func buildClipDebugSummaries(task *model.VideoTask) []gin.H {
 	if task == nil || len(task.Clips) == 0 {
 		return nil
@@ -260,6 +313,7 @@ func buildClipDebugSummaries(task *model.VideoTask) []gin.H {
 	spatialAnchors := renderConfigStringSlice(task.RenderConfig, "spatial_anchors", clipCount)
 	subjectPositions := renderConfigStringSlice(task.RenderConfig, "subject_positions", clipCount)
 	transitionNotes := renderConfigStringSlice(task.RenderConfig, "transition_notes", clipCount)
+	identityDebugs := renderConfigObjectSlice(task.RenderConfig, "clip_identity_debug", clipCount)
 	items := make([]gin.H, 0, clipCount)
 	for i := range task.Clips {
 		clip := task.Clips[i]
@@ -283,6 +337,22 @@ func buildClipDebugSummaries(task *model.VideoTask) []gin.H {
 		}
 		if clip.ClipOrder >= 0 && clip.ClipOrder < len(transitionNotes) {
 			item["transition_note"] = strings.TrimSpace(transitionNotes[clip.ClipOrder])
+		}
+		if clip.ClipOrder >= 0 && clip.ClipOrder < len(identityDebugs) {
+			if entry := identityDebugs[clip.ClipOrder]; len(entry) > 0 {
+				item["model_family"] = strings.TrimSpace(fmt.Sprint(entry["model_family"]))
+				item["requested_generate_mode"] = strings.TrimSpace(fmt.Sprint(entry["requested_generate_mode"]))
+				item["final_generate_mode"] = strings.TrimSpace(fmt.Sprint(entry["final_generate_mode"]))
+				item["preferred_start_end_identity"] = entry["preferred_start_end_identity"]
+				item["has_source_image"] = entry["has_source_image"]
+				item["has_tail_image"] = entry["has_tail_image"]
+				item["project_identity_refs"] = stringSliceFromAny(entry["project_identity_refs"])
+				item["character_refs"] = stringSliceFromAny(entry["character_refs"])
+				item["asset_refs"] = stringSliceFromAny(entry["asset_refs"])
+				item["reference_bindings"] = stringSliceFromAny(entry["reference_bindings"])
+				item["serial_continuity_prompt_added"] = entry["serial_continuity_prompt_added"]
+				item["serial_chaining_source_active"] = entry["serial_chaining_source_active"]
+			}
 		}
 		items = append(items, item)
 	}

@@ -498,12 +498,6 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		if renderConfigBool(task.RenderConfig, "require_same_character") && len(projectIdentityRefs) > 0 {
 			genReq.CharacterImageURLs = mergeReferenceURLs(projectIdentityRefs, genReq.CharacterImageURLs)
 		}
-		if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, clipRefBindings); err != nil {
-			c.Status = model.StatusFailed
-			c.ErrorMsg = err.Error()
-			applyRouteExplainToClip(c, resolvedModelName, routeExplain)
-			return err
-		}
 		trace := buildClipIdentityTrace(
 			resolvedModelName,
 			requestedGenerateMode,
@@ -516,6 +510,13 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "",
 			shouldChainSerialSource(task, c.SceneSeq, c.SceneGroupKey),
 		)
+		task.RenderConfig = upsertClipIdentityTrace(task.RenderConfig, c.ClipOrder, trace)
+		if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, clipRefBindings); err != nil {
+			c.Status = model.StatusFailed
+			c.ErrorMsg = err.Error()
+			applyRouteExplainToClip(c, resolvedModelName, routeExplain)
+			return err
+		}
 		logClipIdentityTrace(s.logger, "clip identity trace", taskID, c.ID, c.ClipOrder, resolvedModelName, trace)
 		s.logger.Info("native-audio request prepared",
 			zap.Int64("task_id", taskID),
@@ -1469,6 +1470,19 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if renderConfigBool(task.RenderConfig, "require_same_character") && len(retryProjectIdentityRefs) > 0 {
 		genReq.CharacterImageURLs = mergeReferenceURLs(retryProjectIdentityRefs, genReq.CharacterImageURLs)
 	}
+	trace := buildClipIdentityTrace(
+		resolvedModelName,
+		requestedGenerateMode,
+		genReq,
+		preferredStartEndIdentity,
+		retryProjectIdentityRefs,
+		retryClipCharURLs,
+		retryClipAssetRefs,
+		retryRefBindings,
+		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
+		shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey),
+	)
+	task.RenderConfig = upsertClipIdentityTrace(task.RenderConfig, clip.ClipOrder, trace)
 	if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, retryRefBindings); err != nil {
 		clip.Status = model.StatusFailed
 		clip.ErrorMsg = err.Error()
@@ -1489,18 +1503,6 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 		return err
 	}
-	trace := buildClipIdentityTrace(
-		resolvedModelName,
-		requestedGenerateMode,
-		genReq,
-		preferredStartEndIdentity,
-		retryProjectIdentityRefs,
-		retryClipCharURLs,
-		retryClipAssetRefs,
-		retryRefBindings,
-		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
-		shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey),
-	)
 	logClipIdentityTrace(s.logger, "retry clip identity trace", taskID, clip.ID, clip.ClipOrder, resolvedModelName, trace)
 	s.logger.Info("retry clip generation request prepared",
 		zap.Int64("task_id", taskID),
@@ -4230,6 +4232,55 @@ type clipIdentityTrace struct {
 	ReferenceBindings           []string
 	SerialContinuityPromptAdded bool
 	SerialChainingSourceActive  bool
+}
+
+func upsertClipIdentityTrace(renderConfig model.RenderConfig, clipOrder int, trace clipIdentityTrace) model.RenderConfig {
+	if clipOrder < 0 {
+		return renderConfig
+	}
+	if renderConfig == nil {
+		renderConfig = model.RenderConfig{}
+	}
+	items := make([]map[string]any, clipOrder+1)
+	if raw, ok := renderConfig["clip_identity_debug"]; ok {
+		switch existing := raw.(type) {
+		case []map[string]any:
+			if len(existing) > len(items) {
+				items = make([]map[string]any, len(existing))
+			}
+			copy(items, existing)
+		case []interface{}:
+			if len(existing) > len(items) {
+				items = make([]map[string]any, len(existing))
+			}
+			for i := range existing {
+				if entry, ok := existing[i].(map[string]any); ok {
+					items[i] = entry
+					continue
+				}
+				if entry, ok := existing[i].(map[string]interface{}); ok {
+					items[i] = entry
+				}
+			}
+		}
+	}
+	items[clipOrder] = map[string]any{
+		"clip_order":                     clipOrder,
+		"model_family":                   trace.ModelFamily,
+		"requested_generate_mode":        trace.RequestedGenerateMode,
+		"final_generate_mode":            trace.FinalGenerateMode,
+		"preferred_start_end_identity":   trace.PreferredStartEndIdentity,
+		"has_source_image":               trace.HasSourceImage,
+		"has_tail_image":                 trace.HasTailImage,
+		"project_identity_refs":          append([]string(nil), trace.ProjectIdentityRefs...),
+		"character_refs":                 append([]string(nil), trace.CharacterRefs...),
+		"asset_refs":                     append([]string(nil), trace.AssetRefs...),
+		"reference_bindings":             append([]string(nil), trace.ReferenceBindings...),
+		"serial_continuity_prompt_added": trace.SerialContinuityPromptAdded,
+		"serial_chaining_source_active":  trace.SerialChainingSourceActive,
+	}
+	renderConfig["clip_identity_debug"] = items
+	return renderConfig
 }
 
 func trimReferenceURLs(urls []string, limit int) []string {
