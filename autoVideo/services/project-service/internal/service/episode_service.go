@@ -3148,8 +3148,9 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
 func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
-	// clipDuration is the user-configured default; we still expose it as a soft reference
-	// but allow the LLM to deviate based on actual scene complexity.
+	// clipDuration is the user-selected target clip length for ad storyboards.
+	// Scene splitting should follow that fixed per-clip duration instead of
+	// letting each storyboard land on a different saved duration.
 	refDuration := clipDuration
 	if refDuration < 3 {
 		refDuration = 3
@@ -3227,7 +3228,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 - items 列出该场景中可见的关键道具或物品（如 ["书桌","蜡烛","宝剑"]；无则留空数组）
 - mood 该场景的情绪基调，从以下选取：tense / romantic / comedic / sad / epic / mysterious / action / calm / dramatic
 - location 描述场景发生的地点环境（2-20字）
-- duration 该分镜的视频时长（秒数，整数），必须优先贴近并服务于当前目标单分镜时长：
+- duration 该分镜的视频时长（秒数，整数），必须严格等于当前目标单分镜时长，不允许同一轮拆分里忽长忽短：
 %s
 - 构图/画面约束（必须同步遵守）：
 %s
@@ -3270,7 +3271,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 %s`, episodeNum, modelDurationHint, visualHint, speechHint, refDuration, episodeNum, content)
 	}
 
-	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少六项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物当前的姿态和手部行为、人物穿着和造型是否延续、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置；若服装/发型/妆容没有变化，也要让 scene_description 默认体现“延续上一镜造型”的可见事实，而不是留白。"
+	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。广告工作台当前轮次的分镜 duration 必须统一服从用户所选时长，不能因为镜头复杂度或合并动作把 duration 改成不同秒数；若内容超载，应改为多拆一个分镜，而不是拉长单镜时长。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少六项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物当前的姿态和手部行为、人物穿着和造型是否延续、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置；若服装/发型/妆容没有变化，也要让 scene_description 默认体现“延续上一镜造型”的可见事实，而不是留白。"
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -3433,6 +3434,16 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 	return scenes
 }
 
+func normalizeAdSceneDuration(duration int, clipDuration int) int {
+	if clipDuration > 0 {
+		return clipDuration
+	}
+	if duration > 0 {
+		return duration
+	}
+	return 5
+}
+
 func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int) []llmScene {
 	if len(scenes) == 0 {
 		return scenes
@@ -3462,7 +3473,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 		if prev.Mood == "" {
 			prev.Mood = scene.Mood
 		}
-		prev.Duration += scene.Duration
+		prev.Duration = normalizeAdSceneDuration(prev.Duration, clipDuration)
 		if len(prev.Characters) == 0 && len(scene.Characters) > 0 {
 			prev.Characters = append(prev.Characters, scene.Characters...)
 		}
@@ -3496,10 +3507,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 		scene.Dialogue = strings.TrimSpace(scene.Dialogue)
 		scene.Description = strings.TrimSpace(scene.Description)
 		if scene.Duration <= 0 {
-			scene.Duration = clipDuration
-			if scene.Duration <= 0 {
-				scene.Duration = 5
-			}
+			scene.Duration = normalizeAdSceneDuration(scene.Duration, clipDuration)
 		}
 		if len(processed) == 0 {
 			processed = append(processed, scene)
@@ -3572,6 +3580,9 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 			mergeIntoPrev(prev, last)
 			processed = processed[:len(processed)-1]
 		}
+	}
+	for i := range processed {
+		processed[i].Duration = normalizeAdSceneDuration(processed[i].Duration, clipDuration)
 	}
 	return processed
 }

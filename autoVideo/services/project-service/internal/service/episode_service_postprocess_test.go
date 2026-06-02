@@ -24,6 +24,9 @@ func TestPostProcessAdScenes_MergesShortDialogueWithoutStructuralShift(t *testin
 	if len(got) != 1 {
 		t.Fatalf("expected 1 merged scene, got %d", len(got))
 	}
+	if got[0].Duration != 5 {
+		t.Fatalf("expected merged scene duration normalized to 5, got %d", got[0].Duration)
+	}
 }
 
 func TestPostProcessAdScenes_KeepsStructuralShiftBoundary(t *testing.T) {
@@ -132,6 +135,35 @@ func TestPostProcessAdScenes_MergesShortLeadIntoFollowingScene(t *testing.T) {
 	got := svc.postProcessAdScenes(scenes, 5)
 	if len(got) != 1 {
 		t.Fatalf("expected short lead merged into following scene, got %d scenes", len(got))
+	}
+}
+
+func TestPostProcessAdScenes_NormalizesAllDurationsToSelectedClipDuration(t *testing.T) {
+	svc := &EpisodeService{}
+	scenes := []llmScene{
+		{
+			Description: "[中景] 主播完整介绍第一段卖点",
+			Location:    "展台",
+			Characters:  []string{"主播"},
+			Dialogue:    "第一段口播内容足够完整，需要单独成镜。",
+			Duration:    4,
+		},
+		{
+			Description: "[中景] 主播继续讲第二段卖点",
+			Location:    "展台",
+			Characters:  []string{"主播"},
+			Dialogue:    "第二段口播同样完整，也需要单独成镜。",
+			Duration:    8,
+		},
+	}
+	got := svc.postProcessAdScenes(scenes, 6)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 scenes kept, got %d", len(got))
+	}
+	for i, scene := range got {
+		if scene.Duration != 6 {
+			t.Fatalf("expected scene %d duration normalized to 6, got %d", i, scene.Duration)
+		}
 	}
 }
 
