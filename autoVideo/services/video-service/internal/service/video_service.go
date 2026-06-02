@@ -418,6 +418,8 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		clipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		clipCharURLs := mergeReferenceURLs(projectIdentityRefs, clipCharacterAssetRefs, perSceneCharacterImages(characterImageURLs, characterImagesByName, sceneChars))
 		clipRefBindings := buildReferenceImageBindings(task.RenderConfig, assetAnchors, perClipAssetIDs, c.ClipOrder, sceneChars, characterImagesByName)
+		clipCharacterRefs := buildCharacterMediaReferences(clipRefBindings)
+		clipAudioRefs := buildAudioMediaReferences(clipCharacterRefs, task.RenderConfig, assetAnchors, perClipAssetIDs, c.ClipOrder, sceneChars)
 		clipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		assetAnchorHint := perClipAssetAnchorHint(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		prompt := appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(clipMotionPromptWithHints(
@@ -436,10 +438,12 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			tailURL = overrideTailURL
 		}
 		genReq := generators.VideoGenerateReq{
-			SourceImageURL:     c.SourceImageURL,
-			TailImageURL:       tailURL,
-			CharacterImageURLs: clipCharURLs,
-			ReferenceImages:    renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
+			SourceImageURL:      c.SourceImageURL,
+			TailImageURL:        tailURL,
+			CharacterImageURLs:  clipCharURLs,
+			CharacterReferences: clipCharacterRefs,
+			AudioReferences:     clipAudioRefs,
+			ReferenceImages:     renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
 			LastFrameImageURL: func() string {
 				if c.ClipOrder == len(clips)-1 {
 					return renderConfigString(task.RenderConfig, "veo_last_frame_image_url")
@@ -1361,6 +1365,8 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		retryPrompt = motionPrompt(task.MotionMode, task.StylePreset, task.SceneDescription, task.RenderConfig)
 	}
 	retryRefBindings := buildReferenceImageBindings(task.RenderConfig, retryAssetAnchors, perClipAssetIDs, clip.ClipOrder, retrySceneChars, retryCharByName)
+	retryCharacterRefs := buildCharacterMediaReferences(retryRefBindings)
+	retryAudioRefs := buildAudioMediaReferences(retryCharacterRefs, task.RenderConfig, retryAssetAnchors, perClipAssetIDs, clip.ClipOrder, retrySceneChars)
 	retryPrompt = appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(retryPrompt, retryClipCharURLs, resolvedModelName), retryRefBindings, resolvedModelName), perClipAssetAnchorHint(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder))
 
 	retryVoiceText := ""
@@ -1418,10 +1424,12 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	)
 
 	genReq := generators.VideoGenerateReq{
-		SourceImageURL:     clip.SourceImageURL,
-		TailImageURL:       tailImageURL(imageURLs, clip.ClipOrder),
-		CharacterImageURLs: retryClipCharURLs,
-		ReferenceImages:    renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
+		SourceImageURL:      clip.SourceImageURL,
+		TailImageURL:        tailImageURL(imageURLs, clip.ClipOrder),
+		CharacterImageURLs:  retryClipCharURLs,
+		CharacterReferences: retryCharacterRefs,
+		AudioReferences:     retryAudioRefs,
+		ReferenceImages:     renderConfigStringValues(task.RenderConfig, "veo_reference_images"),
 		LastFrameImageURL: func() string {
 			if clip.ClipOrder == totalClips-1 {
 				return renderConfigString(task.RenderConfig, "veo_last_frame_image_url")
@@ -3578,6 +3586,102 @@ func buildReferenceImageBindings(renderConfig model.RenderConfig, anchorMap map[
 	return bindings
 }
 
+func buildCharacterMediaReferences(bindings []referenceImageBinding) []generators.MediaReference {
+	if len(bindings) == 0 {
+		return nil
+	}
+	refs := make([]generators.MediaReference, 0, len(bindings))
+	for i, binding := range bindings {
+		url := strings.TrimSpace(binding.URL)
+		if url == "" {
+			continue
+		}
+		refs = append(refs, generators.MediaReference{
+			URL:   url,
+			Text:  strings.TrimSpace(binding.Label),
+			Role:  "reference_image",
+			Index: i + 1,
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
+}
+
+func buildAudioMediaReferences(characterRefs []generators.MediaReference, renderConfig model.RenderConfig, anchorMap map[int64]videoAssetPromptAnchor, sceneAssetIDs [][]int64, clipIndex int, sceneChars []string) []generators.MediaReference {
+	if len(characterRefs) == 0 {
+		return nil
+	}
+	audioByLabel := make(map[string]string)
+	if assetID := renderConfigInt64(renderConfig, "character_anchor_asset_id"); assetID > 0 {
+		if anchor, ok := anchorMap[assetID]; ok {
+			label := strings.TrimSpace(anchor.Name)
+			url := strings.TrimSpace(anchor.ReferenceAudioURL)
+			if label != "" && url != "" {
+				audioByLabel[strings.ToLower(label)] = url
+			}
+		}
+	}
+	if clipIndex >= 0 && clipIndex < len(sceneAssetIDs) {
+		for _, assetID := range sceneAssetIDs[clipIndex] {
+			anchor, ok := anchorMap[assetID]
+			if !ok || !strings.EqualFold(strings.TrimSpace(anchor.Type), "character") {
+				continue
+			}
+			label := strings.TrimSpace(anchor.Name)
+			url := strings.TrimSpace(anchor.ReferenceAudioURL)
+			if label != "" && url != "" {
+				audioByLabel[strings.ToLower(label)] = url
+			}
+		}
+	}
+	for _, name := range sceneChars {
+		label := strings.TrimSpace(name)
+		if label == "" {
+			continue
+		}
+		if _, ok := audioByLabel[strings.ToLower(label)]; ok {
+			continue
+		}
+		for _, anchor := range anchorMap {
+			if !strings.EqualFold(strings.TrimSpace(anchor.Name), label) {
+				continue
+			}
+			if url := strings.TrimSpace(anchor.ReferenceAudioURL); url != "" {
+				audioByLabel[strings.ToLower(label)] = url
+				break
+			}
+		}
+	}
+	refs := make([]generators.MediaReference, 0, len(characterRefs))
+	seen := make(map[string]struct{})
+	for _, ref := range characterRefs {
+		label := strings.TrimSpace(ref.Text)
+		if label == "" {
+			continue
+		}
+		url := strings.TrimSpace(audioByLabel[strings.ToLower(label)])
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		refs = append(refs, generators.MediaReference{
+			URL:   url,
+			Text:  label,
+			Role:  "reference_audio",
+			Index: len(refs) + 1,
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
+}
+
 func primaryIdentityLabel(renderConfig model.RenderConfig, anchorMap map[int64]videoAssetPromptAnchor, sceneChars []string) string {
 	if assetID := renderConfigInt64(renderConfig, "character_anchor_asset_id"); assetID > 0 {
 		if anchor, ok := anchorMap[assetID]; ok {
@@ -3729,6 +3833,7 @@ type videoAssetPromptAnchor struct {
 	ProviderAssetID     string
 	ProviderAssetStatus string
 	ProviderAssetURI    string
+	ReferenceAudioURL   string
 }
 
 func (s *VideoService) buildServiceToken() string {
@@ -3815,6 +3920,7 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 			continue
 		}
 		provider, providerAssetID, providerAssetStatus, providerAssetURI := parseVideoProviderAssetMetadata(a.Metadata)
+		referenceAudioURL := parseVideoVoiceReferenceMetadata(a.Metadata)
 		out[a.ID] = videoAssetPromptAnchor{
 			ID:                  a.ID,
 			Name:                a.Name,
@@ -3826,6 +3932,7 @@ func (s *VideoService) fetchAssetPromptAnchors(ctx context.Context, projectID in
 			ProviderAssetID:     providerAssetID,
 			ProviderAssetStatus: providerAssetStatus,
 			ProviderAssetURI:    providerAssetURI,
+			ReferenceAudioURL:   referenceAudioURL,
 		}
 	}
 	return out
@@ -3855,6 +3962,37 @@ func metadataStringValue(raw interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func parseVideoVoiceReferenceMetadata(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+		return ""
+	}
+	for _, key := range []string{"voice", "voice_sample", "reference_audio", "audio_reference"} {
+		nested, ok := metadata[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if value := strings.TrimSpace(firstNonEmpty(
+			metadataStringValue(nested["url"]),
+			metadataStringValue(nested["voice_url"]),
+			metadataStringValue(nested["voice_sample_url"]),
+			metadataStringValue(nested["reference_audio_url"]),
+			metadataStringValue(nested["audio_url"]),
+		)); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"voice_url", "voice_sample_url", "reference_audio_url", "audio_url"} {
+		if value := strings.TrimSpace(metadataStringValue(metadata[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseVideoProviderAssetMetadata(raw json.RawMessage) (provider, assetID, status, uri string) {
@@ -4098,6 +4236,11 @@ func validateSameCharacterBindings(renderConfig model.RenderConfig, modelName st
 			return nil
 		}
 	}
+	for _, ref := range req.CharacterReferences {
+		if strings.TrimSpace(ref.URL) != "" {
+			return nil
+		}
+	}
 	if strings.TrimSpace(req.SourceImageURL) == "" && strings.TrimSpace(req.TailImageURL) == "" {
 		return fmt.Errorf("same-character preflight failed: missing identity anchor and reference bindings for Doubao/Seedance clip")
 	}
@@ -4123,6 +4266,7 @@ func normalizeVideoGenerateReq(gen generators.VideoGenerator, modelName string, 
 	_ = assetRefs // scene/prop refs stay in prompt hints; do not mix them into character identity references.
 	if !supportsRefs {
 		req.CharacterImageURLs = nil
+		req.CharacterReferences = nil
 	}
 	if req.GenerateMode == "" && strings.TrimSpace(req.TailImageURL) != "" && supportsStartEnd {
 		req.GenerateMode = "startEnd2video"
@@ -4138,20 +4282,21 @@ func normalizeVideoGenerateReq(gen generators.VideoGenerator, modelName string, 
 		}
 	case "startEnd2video":
 		if !supportsStartEnd {
-			if len(req.CharacterImageURLs) > 0 && supportsRefs {
+			if supportsRefs && (len(req.CharacterReferences) > 0 || len(req.CharacterImageURLs) > 0) {
 				req.GenerateMode = "reference2video"
 			} else {
 				req.GenerateMode = "img2video"
 			}
 		}
 	case "":
-		if len(req.CharacterImageURLs) > 0 && supportsRefs && strings.TrimSpace(req.SourceImageURL) == "" {
+		if (len(req.CharacterReferences) > 0 || len(req.CharacterImageURLs) > 0) && supportsRefs && strings.TrimSpace(req.SourceImageURL) == "" {
 			req.GenerateMode = "reference2video"
 		}
 	}
 	if !gen.SupportsNativeAudio() {
 		req.GenerateAudio = false
 		req.VoiceText = ""
+		req.AudioReferences = nil
 	}
 	return req
 }

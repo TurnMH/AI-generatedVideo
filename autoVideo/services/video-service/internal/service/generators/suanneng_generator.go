@@ -163,7 +163,8 @@ func (g *SuannengGenerator) Generate(ctx context.Context, req VideoGenerateReq) 
 // submit —— 使用 doubao ARK content[] 格式提交视频生成任务，返回任务 ID
 func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
 	textPrompt := g.buildPromptText(req)
-	referenceImages := uniqueNonEmptyURLs(req.CharacterImageURLs)
+	referenceImages := typedImageReferences(req)
+	audioReferences := typedAudioReferences(req)
 	dur := int(req.DurationSec)
 	if dur <= 0 {
 		dur = 5
@@ -201,10 +202,10 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
-		for _, imgURL := range referenceImages {
+		for _, ref := range referenceImages {
 			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
+				Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index,
+				ImageURL: &doubaoImageURLItem{URL: ref.URL},
 			})
 		}
 		if len(referenceImages) == 0 && req.SourceImageURL != "" {
@@ -215,7 +216,7 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		}
 
 	default:
-		content = make([]doubaoContentItem, 0, 2+len(referenceImages))
+		content = make([]doubaoContentItem, 0, 2+len(referenceImages)+len(audioReferences))
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
@@ -225,10 +226,20 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		content = append(content, doubaoContentItem{
 			Type: "text", Text: textPrompt,
 		})
-		for _, imgURL := range referenceImages {
+		for _, ref := range referenceImages {
 			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
+				Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index,
+				ImageURL: &doubaoImageURLItem{URL: ref.URL},
+			})
+		}
+	}
+	if req.GenerateAudio {
+		for _, ref := range audioReferences {
+			content = append(content, doubaoContentItem{
+				Type:     "audio_url",
+				Role:     firstNonEmpty(ref.Role, "reference_audio"),
+				Text:     strings.TrimSpace(ref.Text),
+				AudioURL: &doubaoAudioURLItem{URL: ref.URL},
 			})
 		}
 	}
@@ -282,15 +293,14 @@ func (g *SuannengGenerator) buildPromptText(req VideoGenerateReq) string {
 	prompt := strings.TrimSpace(req.Prompt)
 	voiceText := strings.TrimSpace(req.VoiceText)
 	if !req.GenerateAudio || voiceText == "" {
-		return prompt
+		return appendAudioReferenceHint(prompt, req.CharacterReferences, req.AudioReferences, req.GenerateAudio)
 	}
 	if prompt == "" {
-		return voiceText
+		prompt = voiceText
+	} else if !strings.Contains(prompt, voiceText) {
+		prompt = prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
 	}
-	if strings.Contains(prompt, voiceText) {
-		return prompt
-	}
-	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+	return appendAudioReferenceHint(prompt, req.CharacterReferences, req.AudioReferences, req.GenerateAudio)
 }
 
 // poll —— 轮询任务状态直到完成、失败或超时（15分钟）

@@ -136,12 +136,18 @@ func (g *DoubaoGenerator) ParamOptions() []ModelParamOption {
 
 type doubaoContentItem struct {
 	Type     string              `json:"type"`
-	Role     string              `json:"role,omitempty"` // first_frame | last_frame | reference_image
+	Role     string              `json:"role,omitempty"` // first_frame | last_frame | reference_image | reference_audio
 	Text     string              `json:"text,omitempty"`
+	Index    int                 `json:"index,omitempty"`
 	ImageURL *doubaoImageURLItem `json:"image_url,omitempty"`
+	AudioURL *doubaoAudioURLItem `json:"audio_url,omitempty"`
 }
 
 type doubaoImageURLItem struct {
+	URL string `json:"url"`
+}
+
+type doubaoAudioURLItem struct {
 	URL string `json:"url"`
 }
 
@@ -267,7 +273,8 @@ func (g *DoubaoGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*
 // submit —— 提交视频生成任务，返回任务 ID
 func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
 	textPrompt := g.buildPromptText(req)
-	referenceImages := uniqueNonEmptyURLs(req.CharacterImageURLs)
+	referenceImages := typedImageReferences(req)
+	audioReferences := typedAudioReferences(req)
 	// Build content array based on generate mode.
 	var content []doubaoContentItem
 
@@ -298,11 +305,13 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		content = []doubaoContentItem{
 			{Type: "text", Text: textPrompt},
 		}
-		for _, imgURL := range referenceImages {
+		for _, ref := range referenceImages {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
-				Role:     "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
+				Role:     firstNonEmpty(ref.Role, "reference_image"),
+				Text:     strings.TrimSpace(ref.Text),
+				Index:    ref.Index,
+				ImageURL: &doubaoImageURLItem{URL: ref.URL},
 			})
 		}
 		// Fallback to source image if no character images provided
@@ -318,7 +327,7 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		// img2video（默认）: source + text。
 		// 当上游已解析到角色锚点（包括 asset://AssetId）时，继续把角色参考图作为 reference_image 下发。
 		// 这里避免把 source 误标成 first_frame，因此不会触发 first/last frame 与 reference media 的互斥错误。
-		content = make([]doubaoContentItem, 0, 2+len(referenceImages))
+		content = make([]doubaoContentItem, 0, 2+len(referenceImages)+len(audioReferences))
 		if req.SourceImageURL != "" {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
@@ -329,11 +338,23 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 			Type: "text",
 			Text: textPrompt,
 		})
-		for _, imgURL := range referenceImages {
+		for _, ref := range referenceImages {
 			content = append(content, doubaoContentItem{
 				Type:     "image_url",
-				Role:     "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: imgURL},
+				Role:     firstNonEmpty(ref.Role, "reference_image"),
+				Text:     strings.TrimSpace(ref.Text),
+				Index:    ref.Index,
+				ImageURL: &doubaoImageURLItem{URL: ref.URL},
+			})
+		}
+	}
+	if req.GenerateAudio {
+		for _, ref := range audioReferences {
+			content = append(content, doubaoContentItem{
+				Type:     "audio_url",
+				Role:     firstNonEmpty(ref.Role, "reference_audio"),
+				Text:     strings.TrimSpace(ref.Text),
+				AudioURL: &doubaoAudioURLItem{URL: ref.URL},
 			})
 		}
 	}
@@ -403,15 +424,115 @@ func (g *DoubaoGenerator) buildPromptText(req VideoGenerateReq) string {
 	prompt := strings.TrimSpace(req.Prompt)
 	voiceText := strings.TrimSpace(req.VoiceText)
 	if !g.supportsAudio || !req.GenerateAudio || voiceText == "" {
-		return prompt
+		return appendAudioReferenceHint(prompt, req.CharacterReferences, req.AudioReferences, req.GenerateAudio)
 	}
 	if prompt == "" {
-		return voiceText
+		prompt = voiceText
+	} else if !strings.Contains(prompt, voiceText) {
+		prompt = prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
 	}
-	if strings.Contains(prompt, voiceText) {
+	return appendAudioReferenceHint(prompt, req.CharacterReferences, req.AudioReferences, req.GenerateAudio)
+}
+
+func typedImageReferences(req VideoGenerateReq) []MediaReference {
+	if len(req.CharacterReferences) > 0 {
+		var out []MediaReference
+		for _, ref := range req.CharacterReferences {
+			url := strings.TrimSpace(ref.URL)
+			if url == "" {
+				continue
+			}
+			out = append(out, MediaReference{
+				URL:   url,
+				Text:  strings.TrimSpace(ref.Text),
+				Role:  firstNonEmpty(strings.TrimSpace(ref.Role), "reference_image"),
+				Index: ref.Index,
+			})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	urls := uniqueNonEmptyURLs(req.CharacterImageURLs)
+	out := make([]MediaReference, 0, len(urls))
+	for i, url := range urls {
+		out = append(out, MediaReference{URL: url, Role: "reference_image", Index: i + 1})
+	}
+	return out
+}
+
+func typedAudioReferences(req VideoGenerateReq) []MediaReference {
+	if len(req.AudioReferences) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(req.AudioReferences))
+	out := make([]MediaReference, 0, len(req.AudioReferences))
+	for i, ref := range req.AudioReferences {
+		url := strings.TrimSpace(ref.URL)
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		index := ref.Index
+		if index <= 0 {
+			index = i + 1
+		}
+		out = append(out, MediaReference{
+			URL:   url,
+			Text:  strings.TrimSpace(ref.Text),
+			Role:  firstNonEmpty(strings.TrimSpace(ref.Role), "reference_audio"),
+			Index: index,
+		})
+	}
+	return out
+}
+
+func appendAudioReferenceHint(prompt string, imageRefs, audioRefs []MediaReference, enabled bool) string {
+	if !enabled || len(audioRefs) == 0 || len(imageRefs) == 0 {
 		return prompt
 	}
-	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
+	imageIndexByLabel := make(map[string]int, len(imageRefs))
+	for i, ref := range imageRefs {
+		label := strings.TrimSpace(ref.Text)
+		if label == "" {
+			continue
+		}
+		index := ref.Index
+		if index <= 0 {
+			index = i + 1
+		}
+		if _, exists := imageIndexByLabel[label]; !exists {
+			imageIndexByLabel[label] = index
+		}
+	}
+	var hints []string
+	for i, ref := range audioRefs {
+		label := strings.TrimSpace(ref.Text)
+		if label == "" {
+			continue
+		}
+		imageIndex, ok := imageIndexByLabel[label]
+		if !ok {
+			continue
+		}
+		audioIndex := ref.Index
+		if audioIndex <= 0 {
+			audioIndex = i + 1
+		}
+		hints = append(hints, fmt.Sprintf("@图%d使用@音频%d作为参考音色。", imageIndex, audioIndex))
+	}
+	if len(hints) == 0 {
+		return prompt
+	}
+	prompt = strings.TrimSpace(prompt)
+	hintText := strings.Join(hints, "")
+	if prompt == "" {
+		return hintText
+	}
+	return prompt + "\n" + hintText
 }
 
 func uniqueNonEmptyURLs(urls []string) []string {

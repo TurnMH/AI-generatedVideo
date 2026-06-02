@@ -9,19 +9,21 @@ import (
 
 // VideoGenerateReq carries the parameters for a single clip generation.
 type VideoGenerateReq struct {
-	SourceImageURL     string
-	TailImageURL       string   // end-frame for startEnd2video mode (Kling/Doubao/Vidu)
-	CharacterImageURLs []string // reference images for subject/character consistency (reference2video)
-	ReferenceImages    []string // model-native reference images (e.g. Veo referenceImages)
-	LastFrameImageURL  string   // model-native last-frame constraint (e.g. Veo lastFrame)
-	ClipIndex          int      // 0-based position in the sequence
-	TotalClips         int      // total number of clips in the sequence
-	Prompt             string
-	NegativePrompt     string
-	StylePreset        string
-	MotionMode         string  // gentle / dynamic / cinematic
-	DurationSec        float64 // desired duration
-	VoiceText          string  // speech/TTS text for models that support native audio
+	SourceImageURL      string
+	TailImageURL        string           // end-frame for startEnd2video mode (Kling/Doubao/Vidu)
+	CharacterImageURLs  []string         // reference images for subject/character consistency (reference2video)
+	CharacterReferences []MediaReference // richer typed refs for providers like Doubao/Seedance (text/index/role)
+	AudioReferences     []MediaReference // typed audio refs for providers like Doubao/Seedance (reference_audio)
+	ReferenceImages     []string         // model-native reference images (e.g. Veo referenceImages)
+	LastFrameImageURL   string           // model-native last-frame constraint (e.g. Veo lastFrame)
+	ClipIndex           int              // 0-based position in the sequence
+	TotalClips          int              // total number of clips in the sequence
+	Prompt              string
+	NegativePrompt      string
+	StylePreset         string
+	MotionMode          string  // gentle / dynamic / cinematic
+	DurationSec         float64 // desired duration
+	VoiceText           string  // speech/TTS text for models that support native audio
 
 	// Generation mode: "img2video" (default) | "startEnd2video" | "reference2video"
 	GenerateMode string
@@ -39,6 +41,16 @@ type VideoGenerateReq struct {
 	Seed             int    // deterministic hint where the provider supports it (e.g. Veo seed)
 	PersonGeneration string // provider-native people policy (e.g. Veo personGeneration)
 	NumberOfVideos   int    // provider-native numberOfVideos hint
+}
+
+// MediaReference represents a provider-side typed media reference item.
+// It lets higher layers preserve slot/index/label semantics instead of
+// collapsing everything into bare URLs.
+type MediaReference struct {
+	URL   string
+	Text  string
+	Role  string
+	Index int
 }
 
 // VideoClip is the result of a successful generation.

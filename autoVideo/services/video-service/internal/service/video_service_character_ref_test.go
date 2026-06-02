@@ -166,6 +166,29 @@ func TestBuildReferenceImageBindingsKeepsIdentityAnchorFirst(t *testing.T) {
 	}
 }
 
+func TestBuildCharacterAndAudioMediaReferencesFromAnchors(t *testing.T) {
+	rc := model.RenderConfig{"character_anchor_asset_id": 11}
+	anchors := map[int64]videoAssetPromptAnchor{
+		11: {ID: 11, Type: "character", Name: "林夏", ProviderAssetURI: "asset://asset-123", ProviderAssetStatus: "Active", ReferenceAudioURL: "https://example.com/linxia.wav"},
+		12: {ID: 12, Type: "character", Name: "阿杰", ImageURL: "https://example.com/ajie.png", ReferenceAudioURL: "https://example.com/ajie.wav"},
+	}
+	bindings := buildReferenceImageBindings(rc, anchors, [][]int64{{11, 12}}, 0, []string{"林夏", "阿杰"}, map[string]string{"林夏": "https://example.com/linxia.png", "阿杰": "https://example.com/ajie.png"})
+	charRefs := buildCharacterMediaReferences(bindings)
+	if len(charRefs) < 2 {
+		t.Fatalf("len(charRefs)=%d, want at least 2", len(charRefs))
+	}
+	if charRefs[0].Text != "林夏" || charRefs[0].Index != 1 || charRefs[0].URL != "asset://asset-123" {
+		t.Fatalf("charRefs[0]=%+v", charRefs[0])
+	}
+	audioRefs := buildAudioMediaReferences(charRefs, rc, anchors, [][]int64{{11, 12}}, 0, []string{"林夏", "阿杰"})
+	if len(audioRefs) != 2 {
+		t.Fatalf("len(audioRefs)=%d, want 2", len(audioRefs))
+	}
+	if audioRefs[0].Text != "林夏" || audioRefs[0].URL != "https://example.com/linxia.wav" {
+		t.Fatalf("audioRefs[0]=%+v", audioRefs[0])
+	}
+}
+
 func TestAppendReferenceImageBindingHintForDoubao(t *testing.T) {
 	prompt := appendReferenceImageBindingHint("主讲人口播产品卖点", []referenceImageBinding{
 		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
