@@ -178,71 +178,7 @@ func (g *SuannengGenerator) submit(ctx context.Context, req VideoGenerateReq) (s
 		ratio = "16:9"
 	}
 
-	// Build content array based on generate mode.
-	var content []doubaoContentItem
-	switch req.GenerateMode {
-	case "startEnd2video":
-		content = []doubaoContentItem{
-			{Type: "text", Text: textPrompt},
-		}
-		if req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: "first_frame",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-		if req.TailImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: "last_frame",
-				ImageURL: &doubaoImageURLItem{URL: req.TailImageURL},
-			})
-		}
-
-	case "reference2video":
-		content = []doubaoContentItem{
-			{Type: "text", Text: textPrompt},
-		}
-		for _, ref := range referenceImages {
-			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index,
-				ImageURL: &doubaoImageURLItem{URL: ref.URL},
-			})
-		}
-		if len(referenceImages) == 0 && req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-
-	default:
-		content = make([]doubaoContentItem, 0, 2+len(referenceImages)+len(audioReferences))
-		if req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-		content = append(content, doubaoContentItem{
-			Type: "text", Text: textPrompt,
-		})
-		for _, ref := range referenceImages {
-			content = append(content, doubaoContentItem{
-				Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index,
-				ImageURL: &doubaoImageURLItem{URL: ref.URL},
-			})
-		}
-	}
-	if req.GenerateAudio {
-		for _, ref := range audioReferences {
-			content = append(content, doubaoContentItem{
-				Type:     "audio_url",
-				Role:     firstNonEmpty(ref.Role, "reference_audio"),
-				Text:     strings.TrimSpace(ref.Text),
-				AudioURL: &doubaoAudioURLItem{URL: ref.URL},
-			})
-		}
-	}
+	content := buildDoubaoLikeContent(true, req, textPrompt, referenceImages, audioReferences)
 
 	body := suannengSubmitReq{
 		Model:           g.Model,

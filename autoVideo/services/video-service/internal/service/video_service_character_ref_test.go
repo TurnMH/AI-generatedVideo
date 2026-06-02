@@ -189,6 +189,23 @@ func TestBuildCharacterAndAudioMediaReferencesFromAnchors(t *testing.T) {
 	}
 }
 
+func TestNormalizeVideoGenerateReqPromotesDoubaoRefsToReference2Video(t *testing.T) {
+	req := generators.VideoGenerateReq{
+		GenerateMode:   "img2video",
+		SourceImageURL: "https://example.com/source.png",
+		CharacterReferences: []generators.MediaReference{{
+			URL:   "asset://asset-123",
+			Role:  "reference_image",
+			Text:  "李恩泽",
+			Index: 1,
+		}},
+	}
+	got := normalizeVideoGenerateReq(testVideoGenerator{}, "doubao-seedance", req, nil)
+	if got.GenerateMode != "reference2video" {
+		t.Fatalf("got.GenerateMode=%q, want reference2video", got.GenerateMode)
+	}
+}
+
 func TestAppendReferenceImageBindingHintForDoubao(t *testing.T) {
 	prompt := appendReferenceImageBindingHint("主讲人口播产品卖点", []referenceImageBinding{
 		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
@@ -403,7 +420,7 @@ func TestShouldPreferStartEndIdentityModeForDoubaoSameCharacter(t *testing.T) {
 	}
 }
 
-func TestNormalizeVideoGenerateReqKeepsImg2VideoForDoubaoWhenSourcePresent(t *testing.T) {
+func TestNormalizeVideoGenerateReqKeepsImg2VideoWhenOnlyGenericCharacterImagesExist(t *testing.T) {
 	req := generators.VideoGenerateReq{
 		SourceImageURL:     "https://example.com/current-first.png",
 		CharacterImageURLs: []string{"https://example.com/identity-anchor.png"},
@@ -411,7 +428,7 @@ func TestNormalizeVideoGenerateReqKeepsImg2VideoForDoubaoWhenSourcePresent(t *te
 	}
 	got := normalizeVideoGenerateReq(testVideoGenerator{}, "doubao-seedance", req, nil)
 	if got.GenerateMode != "" {
-		t.Fatalf("got.GenerateMode=%q, want empty so downstream doubao img2video path can carry source + reference_image", got.GenerateMode)
+		t.Fatalf("got.GenerateMode=%q, want empty so source-only Seedance request can stay on img2video flow", got.GenerateMode)
 	}
 	if len(got.CharacterImageURLs) != 1 || got.CharacterImageURLs[0] != "https://example.com/identity-anchor.png" {
 		t.Fatalf("got.CharacterImageURLs=%v", got.CharacterImageURLs)

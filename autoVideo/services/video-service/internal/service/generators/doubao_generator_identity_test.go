@@ -54,7 +54,7 @@ func TestDoubaoStartEnd2VideoForSeedanceDoesNotMixReferenceImages(t *testing.T) 
 	}
 }
 
-func TestDoubaoSeedanceImg2VideoCarriesSourceAndReferenceImages(t *testing.T) {
+func TestDoubaoSeedanceImg2VideoUsesDedicatedFirstFrameFlow(t *testing.T) {
 	var body doubaoSubmitReq
 	g := NewDoubaoSeedanceGenerator("test-key", "https://example.com", "doubao-seedance-1-5-pro-251215", "doubao-seedance")
 	g.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -83,20 +83,14 @@ func TestDoubaoSeedanceImg2VideoCarriesSourceAndReferenceImages(t *testing.T) {
 		t.Fatalf("submit returned error: %v", err)
 	}
 
-	if len(body.Content) != 4 {
-		t.Fatalf("content len = %d, want 4", len(body.Content))
+	if len(body.Content) != 2 {
+		t.Fatalf("content len = %d, want 2", len(body.Content))
 	}
-	if body.Content[0].Role != "" || body.Content[0].ImageURL == nil || body.Content[0].ImageURL.URL != "https://example.com/source.png" {
-		t.Fatalf("source item = %#v", body.Content[0])
+	if body.Content[0].Type != "text" {
+		t.Fatalf("text item = %#v", body.Content[0])
 	}
-	if body.Content[1].Type != "text" {
-		t.Fatalf("text item = %#v", body.Content[1])
-	}
-	if body.Content[2].Role != "reference_image" || body.Content[2].ImageURL == nil || body.Content[2].ImageURL.URL != "asset://asset-456" {
-		t.Fatalf("reference_image[0] = %#v", body.Content[2])
-	}
-	if body.Content[3].Role != "reference_image" || body.Content[3].ImageURL == nil || body.Content[3].ImageURL.URL != "https://example.com/ref-b.png" {
-		t.Fatalf("reference_image[1] = %#v", body.Content[3])
+	if body.Content[1].Role != "first_frame" || body.Content[1].ImageURL == nil || body.Content[1].ImageURL.URL != "https://example.com/source.png" {
+		t.Fatalf("first_frame item = %#v", body.Content[1])
 	}
 }
 
@@ -160,7 +154,7 @@ func TestDoubaoSeedanceTypedReferencesCarryTextIndexAndAudio(t *testing.T) {
 
 	_, err := g.submit(context.Background(), VideoGenerateReq{
 		Prompt:         "林夏对镜讲解产品，阿杰在旁边配合演示。",
-		GenerateMode:   "img2video",
+		GenerateMode:   "reference2video",
 		GenerateAudio:  true,
 		SourceImageURL: "https://example.com/source.png",
 		CharacterReferences: []MediaReference{
@@ -178,20 +172,20 @@ func TestDoubaoSeedanceTypedReferencesCarryTextIndexAndAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit returned error: %v", err)
 	}
-	if len(body.Content) != 5 {
-		t.Fatalf("content len = %d, want 5", len(body.Content))
+	if len(body.Content) != 4 {
+		t.Fatalf("content len = %d, want 4", len(body.Content))
 	}
-	if body.Content[2].Text != "林夏" || body.Content[2].Index != 1 {
-		t.Fatalf("reference_image[0] = %#v", body.Content[2])
+	if body.Content[1].Text != "林夏" || body.Content[1].Index != 1 {
+		t.Fatalf("reference_image[0] = %#v", body.Content[1])
 	}
-	if body.Content[3].Text != "阿杰" || body.Content[3].Index != 2 {
-		t.Fatalf("reference_image[1] = %#v", body.Content[3])
+	if body.Content[2].Text != "阿杰" || body.Content[2].Index != 2 {
+		t.Fatalf("reference_image[1] = %#v", body.Content[2])
 	}
-	if body.Content[4].Role != "reference_audio" || body.Content[4].AudioURL == nil || body.Content[4].AudioURL.URL != "https://example.com/linxia.wav" {
-		t.Fatalf("reference_audio = %#v", body.Content[4])
+	if body.Content[3].Role != "reference_audio" || body.Content[3].AudioURL == nil || body.Content[3].AudioURL.URL != "https://example.com/linxia.wav" {
+		t.Fatalf("reference_audio = %#v", body.Content[3])
 	}
-	if !strings.Contains(body.Content[1].Text, "@图1使用@音频1作为参考音色") {
-		t.Fatalf("prompt text = %q", body.Content[1].Text)
+	if !strings.Contains(body.Content[0].Text, "@图1使用@音频1作为参考音色") {
+		t.Fatalf("prompt text = %q", body.Content[0].Text)
 	}
 }
 

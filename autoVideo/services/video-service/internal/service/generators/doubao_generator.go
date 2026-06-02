@@ -275,89 +275,7 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 	textPrompt := g.buildPromptText(req)
 	referenceImages := typedImageReferences(req)
 	audioReferences := typedAudioReferences(req)
-	// Build content array based on generate mode.
-	var content []doubaoContentItem
-
-	switch req.GenerateMode {
-	case "startEnd2video":
-		// 首尾帧生视频：只传 first_frame + last_frame，不与 reference_image 混用。
-		// Seedance 当前接口会拒绝 first/last frame 与 reference media 同时出现。
-		content = []doubaoContentItem{
-			{Type: "text", Text: textPrompt},
-		}
-		if req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     "first_frame",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-		if req.TailImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     "last_frame",
-				ImageURL: &doubaoImageURLItem{URL: req.TailImageURL},
-			})
-		}
-
-	case "reference2video":
-		// 融合生视频：text prompt + reference_image items
-		content = []doubaoContentItem{
-			{Type: "text", Text: textPrompt},
-		}
-		for _, ref := range referenceImages {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     firstNonEmpty(ref.Role, "reference_image"),
-				Text:     strings.TrimSpace(ref.Text),
-				Index:    ref.Index,
-				ImageURL: &doubaoImageURLItem{URL: ref.URL},
-			})
-		}
-		// Fallback to source image if no character images provided
-		if len(referenceImages) == 0 && req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     "reference_image",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-
-	default:
-		// img2video（默认）: source + text。
-		// 当上游已解析到角色锚点（包括 asset://AssetId）时，继续把角色参考图作为 reference_image 下发。
-		// 这里避免把 source 误标成 first_frame，因此不会触发 first/last frame 与 reference media 的互斥错误。
-		content = make([]doubaoContentItem, 0, 2+len(referenceImages)+len(audioReferences))
-		if req.SourceImageURL != "" {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL},
-			})
-		}
-		content = append(content, doubaoContentItem{
-			Type: "text",
-			Text: textPrompt,
-		})
-		for _, ref := range referenceImages {
-			content = append(content, doubaoContentItem{
-				Type:     "image_url",
-				Role:     firstNonEmpty(ref.Role, "reference_image"),
-				Text:     strings.TrimSpace(ref.Text),
-				Index:    ref.Index,
-				ImageURL: &doubaoImageURLItem{URL: ref.URL},
-			})
-		}
-	}
-	if req.GenerateAudio {
-		for _, ref := range audioReferences {
-			content = append(content, doubaoContentItem{
-				Type:     "audio_url",
-				Role:     firstNonEmpty(ref.Role, "reference_audio"),
-				Text:     strings.TrimSpace(ref.Text),
-				AudioURL: &doubaoAudioURLItem{URL: ref.URL},
-			})
-		}
-	}
+	content := buildDoubaoLikeContent(g.isSeedance(), req, textPrompt, referenceImages, audioReferences)
 
 	body := doubaoSubmitReq{
 		Model:           g.Model,
@@ -418,6 +336,93 @@ func (g *DoubaoGenerator) submit(ctx context.Context, req VideoGenerateReq) (str
 		return "", fmt.Errorf("doubao: no task id in response: %s", string(respBody))
 	}
 	return result.ID, nil
+}
+
+func buildDoubaoLikeContent(seedance bool, req VideoGenerateReq, textPrompt string, referenceImages, audioReferences []MediaReference) []doubaoContentItem {
+	// Seedance-family models should keep each parameter flow isolated:
+	// - img2video: text + one first_frame source image
+	// - startEnd2video: text + first_frame + last_frame
+	// - reference2video: text + reference_image[] (+ optional reference_audio[])
+	// Avoid mixing source-frame and reference-image flows in the same request.
+	if seedance {
+		switch req.GenerateMode {
+		case "startEnd2video":
+			content := []doubaoContentItem{{Type: "text", Text: textPrompt}}
+			if req.SourceImageURL != "" {
+				content = append(content, doubaoContentItem{Type: "image_url", Role: "first_frame", ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+			}
+			if req.TailImageURL != "" {
+				content = append(content, doubaoContentItem{Type: "image_url", Role: "last_frame", ImageURL: &doubaoImageURLItem{URL: req.TailImageURL}})
+			}
+			return content
+		case "reference2video":
+			content := []doubaoContentItem{{Type: "text", Text: textPrompt}}
+			for _, ref := range referenceImages {
+				content = append(content, doubaoContentItem{
+					Type:     "image_url",
+					Role:     firstNonEmpty(ref.Role, "reference_image"),
+					Text:     strings.TrimSpace(ref.Text),
+					Index:    ref.Index,
+					ImageURL: &doubaoImageURLItem{URL: ref.URL},
+				})
+			}
+			if req.GenerateAudio {
+				for _, ref := range audioReferences {
+					content = append(content, doubaoContentItem{
+						Type:     "audio_url",
+						Role:     firstNonEmpty(ref.Role, "reference_audio"),
+						Text:     strings.TrimSpace(ref.Text),
+						AudioURL: &doubaoAudioURLItem{URL: ref.URL},
+					})
+				}
+			}
+			if len(content) == 1 && req.SourceImageURL != "" {
+				content = append(content, doubaoContentItem{Type: "image_url", Role: "reference_image", Index: 1, ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+			}
+			return content
+		default:
+			content := []doubaoContentItem{{Type: "text", Text: textPrompt}}
+			if req.SourceImageURL != "" {
+				content = append(content, doubaoContentItem{Type: "image_url", Role: "first_frame", ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+			}
+			return content
+		}
+	}
+
+	var content []doubaoContentItem
+	switch req.GenerateMode {
+	case "startEnd2video":
+		content = []doubaoContentItem{{Type: "text", Text: textPrompt}}
+		if req.SourceImageURL != "" {
+			content = append(content, doubaoContentItem{Type: "image_url", Role: "first_frame", ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+		}
+		if req.TailImageURL != "" {
+			content = append(content, doubaoContentItem{Type: "image_url", Role: "last_frame", ImageURL: &doubaoImageURLItem{URL: req.TailImageURL}})
+		}
+	case "reference2video":
+		content = []doubaoContentItem{{Type: "text", Text: textPrompt}}
+		for _, ref := range referenceImages {
+			content = append(content, doubaoContentItem{Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index, ImageURL: &doubaoImageURLItem{URL: ref.URL}})
+		}
+		if len(referenceImages) == 0 && req.SourceImageURL != "" {
+			content = append(content, doubaoContentItem{Type: "image_url", Role: "reference_image", ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+		}
+	default:
+		content = make([]doubaoContentItem, 0, 2+len(referenceImages)+len(audioReferences))
+		if req.SourceImageURL != "" {
+			content = append(content, doubaoContentItem{Type: "image_url", ImageURL: &doubaoImageURLItem{URL: req.SourceImageURL}})
+		}
+		content = append(content, doubaoContentItem{Type: "text", Text: textPrompt})
+		for _, ref := range referenceImages {
+			content = append(content, doubaoContentItem{Type: "image_url", Role: firstNonEmpty(ref.Role, "reference_image"), Text: strings.TrimSpace(ref.Text), Index: ref.Index, ImageURL: &doubaoImageURLItem{URL: ref.URL}})
+		}
+	}
+	if req.GenerateAudio {
+		for _, ref := range audioReferences {
+			content = append(content, doubaoContentItem{Type: "audio_url", Role: firstNonEmpty(ref.Role, "reference_audio"), Text: strings.TrimSpace(ref.Text), AudioURL: &doubaoAudioURLItem{URL: ref.URL}})
+		}
+	}
+	return content
 }
 
 func (g *DoubaoGenerator) buildPromptText(req VideoGenerateReq) string {

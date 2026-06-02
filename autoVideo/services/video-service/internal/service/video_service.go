@@ -4260,13 +4260,33 @@ func shouldPreferStartEndIdentityMode(modelName string, renderConfig model.Rende
 	return len(identityAnchorReferences(renderConfig)) > 0 || len(req.CharacterImageURLs) > 0
 }
 
+func hasCharacterReferenceInputs(req generators.VideoGenerateReq) bool {
+	if len(req.CharacterReferences) > 0 {
+		for _, ref := range req.CharacterReferences {
+			if strings.TrimSpace(ref.URL) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func normalizeVideoGenerateReq(gen generators.VideoGenerator, modelName string, req generators.VideoGenerateReq, assetRefs []string) generators.VideoGenerateReq {
 	supportsRefs := generatorSupportsReferenceImages(modelName)
 	supportsStartEnd := generatorSupportsStartEnd(modelName)
+	isDoubaoFamily := videoModelFamily(modelName) == "doubao" || videoModelFamily(modelName) == "suanneng"
 	_ = assetRefs // scene/prop refs stay in prompt hints; do not mix them into character identity references.
 	if !supportsRefs {
 		req.CharacterImageURLs = nil
 		req.CharacterReferences = nil
+	}
+	if req.GenerateMode == "img2video" && isDoubaoFamily && supportsRefs && hasCharacterReferenceInputs(req) {
+		// Keep Seedance / Doubao parameter flows isolated instead of mixing
+		// source-image and reference-image semantics in one request.
+		req.GenerateMode = "reference2video"
+	}
+	if req.GenerateMode == "" && isDoubaoFamily && supportsRefs && hasCharacterReferenceInputs(req) {
+		req.GenerateMode = "reference2video"
 	}
 	if req.GenerateMode == "" && strings.TrimSpace(req.TailImageURL) != "" && supportsStartEnd {
 		req.GenerateMode = "startEnd2video"
