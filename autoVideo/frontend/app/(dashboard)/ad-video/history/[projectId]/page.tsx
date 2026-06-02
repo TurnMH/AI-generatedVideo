@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
@@ -910,7 +910,19 @@ ${paceBlock}`
   const filteredCharacterAssets = useMemo(() => {
     const query = characterAssetSearch.trim().toLowerCase()
     if (!query) return characterAssets
-    return characterAssets.filter((asset) => buildCharacterAssetSearchText(asset).includes(query))
+    return characterAssets
+      .filter((asset) => buildCharacterAssetSearchText(asset).includes(query))
+      .sort((a, b) => {
+        const aName = String(a.name || '').trim().toLowerCase()
+        const bName = String(b.name || '').trim().toLowerCase()
+        const aExact = aName === query ? 1 : 0
+        const bExact = bName === query ? 1 : 0
+        if (aExact !== bExact) return bExact - aExact
+        const aStarts = aName.startsWith(query) ? 1 : 0
+        const bStarts = bName.startsWith(query) ? 1 : 0
+        if (aStarts !== bStarts) return bStarts - aStarts
+        return Number(a.id) - Number(b.id)
+      })
   }, [characterAssetSearch, characterAssets])
 
   useEffect(() => {
@@ -933,6 +945,12 @@ ${paceBlock}`
     if (preferred) return preferred
     return firstWithImage || null
   }, [characterAssets, selectedCharacterAnchorAssetId])
+
+  const countSameNameCharacterAssets = useCallback((name: string) => {
+    const query = String(name || '').trim().toLowerCase()
+    if (!query) return 0
+    return characterAssets.filter((asset) => String(asset.name || '').trim().toLowerCase() === query).length
+  }, [characterAssets])
 
   const characterAnchorImageUrl = String(characterAnchorAsset?.image_url || project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim()
   const characterAnchorSource = characterAnchorAsset?.image_url
@@ -2160,14 +2178,14 @@ ${paceBlock}`
                         {characterAssets.length > 0 && (
                           <div className="grid gap-3 rounded-lg border border-white/10 bg-black/10 p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                             <div className="space-y-2">
-                              <Label className="text-slate-200">本地资源库搜索（按人物名称 / 描述 / ID）</Label>
+                              <Label className="text-slate-200">本地资源库搜索（按人物名称）</Label>
                               <Input
                                 value={characterAssetSearch}
                                 onChange={(event) => setCharacterAssetSearch(event.target.value)}
-                                placeholder="例如：李恩泽 / 主讲人 / 35869"
+                                placeholder="输入人物名称，例如：李恩泽"
                                 className="border-white/10 bg-slate-950/50 text-slate-100"
                               />
-                              <div className="text-[11px] text-slate-400">用于在当前项目的本地角色素材库里快速找到同名人物，并显式指定步骤 3 的主角色锚点。</div>
+                              <div className="text-[11px] text-slate-400">这里会在当前项目的本地角色素材库里按人物名称优先搜索，也兼容描述 / ID。你也可以在下方人物卡片里一键按同名素材搜索。</div>
                             </div>
                             <div className="text-[11px] text-slate-400">搜索结果：{filteredCharacterAssets.length} / {characterAssets.length}</div>
                           </div>
@@ -2188,6 +2206,7 @@ ${paceBlock}`
                               const boundStoryboards = (assetToStoryboardMap.get(asset.id) || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
                               const isFocused = focusedAssetId === asset.id
                               const isSelectedAnchor = characterAnchorAsset?.id === asset.id
+                              const sameNameCount = countSameNameCharacterAssets(asset.name || '')
                               return (
                                 <div
                                   key={`step2-character-asset-${asset.id}`}
@@ -2197,16 +2216,31 @@ ${paceBlock}`
                                     <div>
                                       <div className="text-sm font-medium text-white">人物 #{asset.id} · {asset.name || '未命名角色'}</div>
                                       <div className="mt-1 text-[11px] text-slate-400">状态：{imageUrl ? '已上传人物图' : '待上传人物图'} · 类型：{asset.type}</div>
+                                      {asset.name ? (
+                                        <div className="mt-1 text-[11px] text-slate-400">当前库同名素材：{sameNameCount} 个</div>
+                                      ) : null}
                                     </div>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="ghost"
-                                      className="h-8 px-2 text-[11px] text-slate-300 hover:text-white"
-                                      onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
-                                    >
-                                      {isFocused ? '取消高亮' : '高亮关联分镜'}
-                                    </Button>
+                                    <div className="flex flex-col items-end gap-2">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-8 px-2 text-[11px] text-slate-300 hover:text-white"
+                                        onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
+                                      >
+                                        {isFocused ? '取消高亮' : '高亮关联分镜'}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 px-2 text-[11px]"
+                                        disabled={!String(asset.name || '').trim()}
+                                        onClick={() => setCharacterAssetSearch(String(asset.name || '').trim())}
+                                      >
+                                        按人物名搜同库素材
+                                      </Button>
+                                    </div>
                                   </div>
 
                                   <div className="flex flex-wrap items-center gap-2 text-[11px]">
