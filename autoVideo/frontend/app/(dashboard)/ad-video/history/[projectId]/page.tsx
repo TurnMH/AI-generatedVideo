@@ -999,7 +999,7 @@ ${paceBlock}`
   const allStoryboardFramesReady = storyboardScopeReady && completedStoryboardImages > 0 && completedStoryboardImages === displayStoryboards.length
   const allCharacterStoryboardsBound = storyboardsWithCharacters.length === 0 || characterBoundStoryboardCount === storyboardsWithCharacters.length
 
-  const step1Done = splitConfigReady && storyboardScopeReady && !step1Running
+  const step1Done = storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
   const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && allCharacterStoryboardsBound && allStoryboardFramesReady && firstFrameIdentityApproved
@@ -2754,7 +2754,7 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!splitConfigReady || !allStoryboardFramesReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!allStoryboardFramesReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
                       onClick={() => void startScopedVideoGeneration()}
                     >
                       {generationAction === 'video-start'
