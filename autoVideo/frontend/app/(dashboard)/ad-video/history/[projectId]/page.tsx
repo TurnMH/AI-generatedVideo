@@ -172,6 +172,13 @@ function uniqueNonEmptyUrls(values: Array<string | undefined | null>, limit?: nu
   return result
 }
 
+function buildCharacterAssetSearchText(asset: Asset) {
+  return [asset.id, asset.name, asset.description, asset.type, asset.status, asset.image_url]
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ')
+}
+
 const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，也不是直接写成逐镜头分镜稿，而是先把整篇广告文案优化成更适合后续“按台词 / 口播为主自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
 
 必须遵守：
@@ -366,7 +373,9 @@ function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
 function buildEpisodeVideoPayload(
   storyboards: Storyboard[],
   episodeId: number | undefined,
+  options?: { serialScene?: boolean },
 ) {
+  const serialScene = options?.serialScene !== false
   const sorted = storyboards
     .slice()
     .sort((a, b) => a.sequence_number - b.sequence_number)
@@ -426,7 +435,7 @@ function buildEpisodeVideoPayload(
     scene_characters: sceneCharacters.some((arr) => arr.length > 0) ? sceneCharacters : undefined,
     scene_asset_ids: sceneAssetIds.some((arr) => arr.length > 0) ? sceneAssetIds : undefined,
     scene_description: softenVideoPromptText(sceneDescriptions.filter(Boolean).join(' ')) || undefined,
-    scene_group_keys: serialStoryboards.map(() => `ad-episode-${episodeId || 'single'}`),
+    scene_group_keys: serialScene ? serialStoryboards.map(() => `ad-episode-${episodeId || 'single'}`) : undefined,
   }
 }
 
@@ -458,6 +467,7 @@ export default function AdVideoHistoryDetailPage() {
   const [selectedStep3AspectRatio, setSelectedStep3AspectRatio] = useState('')
   const [selectedStep3Resolution, setSelectedStep3Resolution] = useState('')
   const [selectedStep3Duration, setSelectedStep3Duration] = useState('')
+  const [selectedStep3ExecutionMode, setSelectedStep3ExecutionMode] = useState<'serial' | 'parallel'>('serial')
   const [selectedStep3VeoPersonGeneration, setSelectedStep3VeoPersonGeneration] = useState('allow_adult')
   const [selectedStep3VeoSeed, setSelectedStep3VeoSeed] = useState('')
   const [selectedStep3VeoUseReferenceImages, setSelectedStep3VeoUseReferenceImages] = useState(false)
@@ -467,6 +477,8 @@ export default function AdVideoHistoryDetailPage() {
   const [selectedStep3GenerateAudio, setSelectedStep3GenerateAudio] = useState(false)
   const [selectedStoryboardImageModel, setSelectedStoryboardImageModel] = useState('')
   const [videoModelMismatch, setVideoModelMismatch] = useState('')
+  const [characterAssetSearch, setCharacterAssetSearch] = useState('')
+  const [selectedCharacterAnchorAssetId, setSelectedCharacterAnchorAssetId] = useState<number | null>(null)
   const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
   const [focusedStoryboardId, setFocusedStoryboardId] = useState<number | null>(null)
   const [bindingStoryboardId, setBindingStoryboardId] = useState<number | null>(null)
@@ -895,10 +907,32 @@ ${paceBlock}`
     return assets.filter((item) => item.type === 'character')
   }, [scopeAssets, assets])
 
+  const filteredCharacterAssets = useMemo(() => {
+    const query = characterAssetSearch.trim().toLowerCase()
+    if (!query) return characterAssets
+    return characterAssets.filter((asset) => buildCharacterAssetSearchText(asset).includes(query))
+  }, [characterAssetSearch, characterAssets])
+
+  useEffect(() => {
+    if (characterAssets.length === 0) {
+      setSelectedCharacterAnchorAssetId(null)
+      return
+    }
+    const hasSelected = selectedCharacterAnchorAssetId != null && characterAssets.some((asset) => asset.id === selectedCharacterAnchorAssetId)
+    if (hasSelected) return
+    const preferred = characterAssets.find((asset) => String(asset.image_url || '').trim()) || characterAssets[0]
+    setSelectedCharacterAnchorAssetId(preferred?.id ?? null)
+  }, [characterAssets, selectedCharacterAnchorAssetId])
+
   const characterAnchorAsset = useMemo(() => {
+    const preferred = selectedCharacterAnchorAssetId != null
+      ? characterAssets.find((asset) => asset.id === selectedCharacterAnchorAssetId) || null
+      : null
+    if (preferred && String(preferred.image_url || '').trim()) return preferred
     const firstWithImage = characterAssets.find((asset) => String(asset.image_url || '').trim())
+    if (preferred) return preferred
     return firstWithImage || null
-  }, [characterAssets])
+  }, [characterAssets, selectedCharacterAnchorAssetId])
 
   const characterAnchorImageUrl = String(characterAnchorAsset?.image_url || project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim()
   const characterAnchorSource = characterAnchorAsset?.image_url
@@ -926,6 +960,7 @@ ${paceBlock}`
   }, [displayStoryboards])
   const step3UsesVeoReferenceImages = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length > 0
   const step3UsesVeoLastFrame = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseLastFrame && Boolean(step3VeoLastFrameImageUrl)
+  const step3ExecutionModeLabel = selectedStep3ExecutionMode === 'parallel' ? '并行生成（每段独立提交）' : '串行生成（按分镜链式衔接）'
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
@@ -1012,7 +1047,7 @@ ${paceBlock}`
               ? '当前已经有视频任务在执行，先等这一轮结果。'
               : step3Done
                 ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的首尾帧分镜图继续重生。'
-                : '当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。'
+                : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。`
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1548,14 +1583,16 @@ ${paceBlock}`
     const motionMode = project?.storyboard_config?.motion_mode || undefined
     const clipDuration = Number(selectedStep3Duration || project?.storyboard_config?.duration || 0) || undefined
     const veoSeedValue = Number(selectedStep3VeoSeed)
+    const isSerialMode = selectedStep3ExecutionMode === 'serial'
 
     setGenerationAction('video-start')
     try {
-      const payload = buildEpisodeVideoPayload(storyboardPool, undefined)
+      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, { serialScene: isSerialMode })
       const renderConfigBase: Record<string, unknown> = {
         aspect_ratio: selectedStep3AspectRatio,
         resolution: selectedStep3Resolution,
         generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
+        ad_execution_mode: selectedStep3ExecutionMode,
       }
       if (selectedModelSupportsVeoNativeControls) {
         renderConfigBase.veo_person_generation = selectedStep3VeoPersonGeneration || undefined
@@ -1606,7 +1643,7 @@ ${paceBlock}`
         video_mode: project?.video_mode,
         clip_duration_sec: clipDuration,
         render_config: renderConfig,
-        serial_scene: true,
+        serial_scene: isSerialMode,
       })
 
       await refreshAll()
@@ -2120,20 +2157,41 @@ ${paceBlock}`
                           <div className="text-[11px] text-violet-100/80">当前角色素材：{characterAssets.length} 个</div>
                         </div>
 
+                        {characterAssets.length > 0 && (
+                          <div className="grid gap-3 rounded-lg border border-white/10 bg-black/10 p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                            <div className="space-y-2">
+                              <Label className="text-slate-200">本地资源库搜索（按人物名称 / 描述 / ID）</Label>
+                              <Input
+                                value={characterAssetSearch}
+                                onChange={(event) => setCharacterAssetSearch(event.target.value)}
+                                placeholder="例如：李恩泽 / 主讲人 / 35869"
+                                className="border-white/10 bg-slate-950/50 text-slate-100"
+                              />
+                              <div className="text-[11px] text-slate-400">用于在当前项目的本地角色素材库里快速找到同名人物，并显式指定步骤 3 的主角色锚点。</div>
+                            </div>
+                            <div className="text-[11px] text-slate-400">搜索结果：{filteredCharacterAssets.length} / {characterAssets.length}</div>
+                          </div>
+                        )}
+
                         {characterAssets.length === 0 ? (
                           <div className="rounded-lg border border-dashed border-white/10 bg-black/10 p-4 text-sm text-slate-400">
                             当前步骤 2 还没有角色素材。可以先点上方“准备人物 / 素材槽位”，然后回到这里上传人物图并做分镜绑定。
                           </div>
+                        ) : filteredCharacterAssets.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-white/10 bg-black/10 p-4 text-sm text-slate-400">
+                            本地资源库里没有匹配“{characterAssetSearch.trim()}”的人物素材。可以换个名字关键词试试。
+                          </div>
                         ) : (
                           <div className="grid gap-3 xl:grid-cols-2">
-                            {characterAssets.map((asset) => {
+                            {filteredCharacterAssets.map((asset) => {
                               const imageUrl = String(asset.image_url || '').trim()
                               const boundStoryboards = (assetToStoryboardMap.get(asset.id) || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
                               const isFocused = focusedAssetId === asset.id
+                              const isSelectedAnchor = characterAnchorAsset?.id === asset.id
                               return (
                                 <div
                                   key={`step2-character-asset-${asset.id}`}
-                                  className={`rounded-lg border p-3 space-y-3 ${isFocused ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}
+                                  className={`rounded-lg border p-3 space-y-3 ${isSelectedAnchor ? 'border-emerald-400/40 bg-emerald-500/10' : isFocused ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}
                                 >
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
@@ -2148,6 +2206,22 @@ ${paceBlock}`
                                       onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
                                     >
                                       {isFocused ? '取消高亮' : '高亮关联分镜'}
+                                    </Button>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                    <span className={`rounded-full border px-2 py-0.5 ${isSelectedAnchor ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'}`}>
+                                      {isSelectedAnchor ? '当前主角色锚点' : '可设为主角色锚点'}
+                                    </span>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant={isSelectedAnchor ? 'secondary' : 'outline'}
+                                      className="h-8 px-2 text-[11px]"
+                                      disabled={!imageUrl}
+                                      onClick={() => setSelectedCharacterAnchorAssetId(asset.id)}
+                                    >
+                                      {isSelectedAnchor ? '当前用于步骤 3' : '设为步骤 3 主角色'}
                                     </Button>
                                   </div>
 
@@ -2438,6 +2512,7 @@ ${paceBlock}`
                       <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
                         <div>当前范围：{scopeLabel}</div>
                         <div>目标模型：{selectedGenerationModelActualLabel || '未选择'}</div>
+                        <div>执行方式：{step3ExecutionModeLabel}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         {selectedModelSupportsVeoNativeControls && (
                           <div>Veo 原生约束：人物策略 {selectedStep3VeoPersonGeneration || '-'} / 参考图 {step3UsesVeoReferenceImages ? `${step3VeoReferenceImages.length} 张` : '关闭'} / 尾帧 {step3UsesVeoLastFrame ? '开启' : '关闭'} / seed {selectedStep3VeoSeed || '-'}</div>
@@ -2445,11 +2520,25 @@ ${paceBlock}`
                         <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
                         <div>含人物分镜绑定：{characterBoundStoryboardCount} / {storyboardsWithCharacters.length}</div>
                         <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
-                        <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id}` : ''}` : '缺失'}</div>
+                        <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id} ${characterAnchorAsset.name || ''}` : ''}` : '缺失'}</div>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 执行方式</Label>
+                        <select
+                          value={selectedStep3ExecutionMode}
+                          onChange={(e) => setSelectedStep3ExecutionMode(e.target.value === 'parallel' ? 'parallel' : 'serial')}
+                          disabled={step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="serial">串行，按分镜顺序链式衔接</option>
+                          <option value="parallel">并行，各分镜独立生成</option>
+                        </select>
+                        <div className="text-[11px] text-emerald-100/75">首尾帧分镜图会继续参与当前流程，区别只在于是否提交 `serial_scene=true` 让各段串起来。</div>
+                      </div>
+
                       <div className="space-y-2">
                         <Label className="text-emerald-100">步骤 3 画面比例</Label>
                         <select
