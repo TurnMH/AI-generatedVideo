@@ -981,11 +981,11 @@ ${paceBlock}`
   const step3ExecutionModeLabel = selectedStep3ExecutionMode === 'parallel' ? '并行生成（每段独立提交）' : '串行生成（按分镜链式衔接）'
   const step3ExecutionModeHint = selectedStep3ExecutionMode === 'parallel'
     ? '并行会让每段分镜独立提交，不再依赖上一段链式衔接。'
-    : '选择串行后，只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。'
-  const step2StoryboardPrepLabel = selectedStep3ExecutionMode === 'parallel' ? '并行模式分镜图预生成' : '串行模式首尾帧预生成'
+    : '串行也仍需先准备整批分镜图。每段会按分镜顺序链式衔接，但依然要用当前分镜图和后续分镜图作为过渡锚点，避免直接拿空图或错图提交。'
+  const step2StoryboardPrepLabel = selectedStep3ExecutionMode === 'parallel' ? '并行模式分镜图预生成' : '串行模式分镜锚点图预生成'
   const step2StoryboardPrepHint = selectedStep3ExecutionMode === 'parallel'
     ? '当前是并行模式，这里预生成的是每段独立提交前要看的分镜图，不依赖前一段链式衔接。'
-    : '当前是串行模式，这里预生成的整批分镜图会作为后续链式视频生成的首尾帧基础，请先在这里看图、补图、确认图。'
+    : '当前是串行模式，但这里仍然必须先生成整批分镜图。它们不是可省略的静态图，而是每段链式视频生成前要用到的起止过渡锚点，请先在这里看图、补图、确认图。'
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
@@ -1894,7 +1894,7 @@ ${paceBlock}`
                     <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step3Status)}</div>
                   </div>
                   <div className="mt-1 text-base font-semibold text-white">开始生成视频</div>
-                  <div className="mt-2 text-xs text-current/80">只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。</div>
+                  <div className="mt-2 text-xs text-current/80">串行并不代表跳过分镜图准备。它的区别只是后续视频按顺序链式衔接，但提交前仍要先把分镜锚点图准备完整。</div>
                   <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step3' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
                 </button>
               </div>
@@ -2467,7 +2467,7 @@ ${paceBlock}`
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-sm font-medium text-white">已生成的首尾帧分镜图预览</div>
-                            <div className="mt-1 text-[11px] text-slate-400">这里直接展示步骤 2 当前范围内的分镜图结果，不用再切去别的区域找。生成后先在这里看图是否为空图、错图、旧图。</div>
+                            <div className="mt-1 text-[11px] text-slate-400">这里直接展示步骤 2 当前范围内的分镜图结果，不用再切去别的区域找。生成后先在这里看图是否为空图、错图、旧图。串行模式下，这批图依然是链式生成要用到的过渡锚点。</div>
                           </div>
                           <div className="text-[11px] text-violet-100/80">{completedStoryboardImages} / {displayStoryboards.length} 已可见 · {step3ExecutionModeLabel}</div>
                         </div>
@@ -2504,7 +2504,7 @@ ${paceBlock}`
                                 )}
 
                                 <div className="rounded-lg border border-violet-400/20 bg-violet-500/10 p-3 text-[11px] text-violet-50">
-                                  <div>{index === 0 ? '第 1 张分镜图，会同时承担首镜确认基准。' : selectedStep3ExecutionMode === 'serial' ? '串行模式下，这张图会参与当前段链式衔接的起止参考。' : '并行模式下，这张图会作为当前段独立提交时的直接参考图。'}</div>
+                                  <div>{index === 0 ? '第 1 张分镜图，会同时承担首镜确认基准。' : selectedStep3ExecutionMode === 'serial' ? '串行模式下，这张图不会因为链式衔接而失效，仍会参与当前段与后一段之间的过渡锚定。' : '并行模式下，这张图会作为当前段独立提交时的直接参考图。'}</div>
                                   {imageUrl && <div className="mt-1 break-all text-violet-100/75">{imageUrl}</div>}
                                 </div>
                               </div>
