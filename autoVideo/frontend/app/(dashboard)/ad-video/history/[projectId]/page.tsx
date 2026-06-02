@@ -1422,9 +1422,13 @@ ${paceBlock}`
   const toggleStoryboardCharacterBinding = async (storyboard: Storyboard, asset: Asset) => {
     const currentIds = Array.isArray(storyboard.asset_ids) ? storyboard.asset_ids : []
     const alreadyBound = currentIds.includes(asset.id)
-    const nextIds = alreadyBound
-      ? currentIds.filter((id) => id !== asset.id)
-      : Array.from(new Set([...currentIds, asset.id]))
+    if (alreadyBound) {
+      setFocusedStoryboardId(storyboard.id)
+      setFocusedAssetId(asset.id)
+      toast({ title: `分镜 #${storyboard.sequence_number} 已绑定人物「${asset.name || `#${asset.id}`}」`, variant: 'success' })
+      return
+    }
+    const nextIds = Array.from(new Set([...currentIds, asset.id]))
 
     setBindingStoryboardId(storyboard.id)
     setFocusedStoryboardId(storyboard.id)
@@ -1441,9 +1445,7 @@ ${paceBlock}`
       }, false)
       await refreshAll()
       toast({
-        title: alreadyBound
-          ? `已从分镜 #${storyboard.sequence_number} 解绑人物「${asset.name || `#${asset.id}`}」`
-          : `已将人物「${asset.name || `#${asset.id}`}」绑定到分镜 #${storyboard.sequence_number}`,
+        title: `已将人物「${asset.name || `#${asset.id}`}」绑定到分镜 #${storyboard.sequence_number}`,
         variant: 'success',
       })
     } catch (error) {
@@ -2343,7 +2345,7 @@ ${paceBlock}`
                                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-xs font-medium text-amber-100">人物绑定</div>
-                                    <div className="text-[11px] text-amber-100/75">点击下方角色即可绑定 / 解绑当前分镜</div>
+                                    <div className="text-[11px] text-amber-100/75">点击下方角色即可绑定到当前分镜，已绑定的不再支持在这里删除</div>
                                   </div>
                                   <div className="flex flex-wrap gap-2">
                                     {characterAssets.map((asset) => {
@@ -2357,7 +2359,7 @@ ${paceBlock}`
                                           onClick={() => void toggleStoryboardCharacterBinding(storyboard, asset)}
                                           className={`rounded-full border px-3 py-1 text-[11px] transition ${isBound ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-100' : 'border-white/10 bg-black/20 text-slate-300'} ${isActive ? 'ring-1 ring-cyan-300/60' : ''} disabled:cursor-not-allowed disabled:opacity-60`}
                                         >
-                                          {bindingStoryboardId === storyboard.id ? '保存中…' : `${isBound ? '已绑定' : '未绑定'} · ${asset.name || `人物#${asset.id}`}`}
+                                          {bindingStoryboardId === storyboard.id ? '保存中…' : `${isBound ? '已绑定（保留）' : '点击绑定'} · ${asset.name || `人物#${asset.id}`}`}
                                         </button>
                                       )
                                     })}
