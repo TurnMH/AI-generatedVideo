@@ -1046,6 +1046,65 @@ ${paceBlock}`
           ? `当前范围已经有可用分镜，可继续重跑覆盖；当前语速档位：${selectedSpeechPaceMeta.label}。`
           : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的整条广告分镜文本。`
 
+  const step2PendingReasons = useMemo(() => {
+    const reasons: string[] = []
+    if (!step2Enabled) {
+      reasons.push('步骤 1 还没完成，当前还没有可用分镜文本。')
+      return reasons
+    }
+    if (!assetScopeReady) reasons.push('还没有人物 / 素材槽位，请先点“准备人物槽位”。')
+    if (!allScopeAssetsUploaded) reasons.push(`当前范围素材图未全部就绪，已完成 ${uploadedScopeAssets} / ${scopeAssets.length}。`)
+    if (!allCharacterStoryboardsBound) reasons.push(`还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜未绑定角色图。`)
+    if (selectedStep3ExecutionMode === 'serial') {
+      if (!firstStoryboardImageReady) reasons.push('串行模式下还缺第 1 张分镜图。')
+    } else if (!allStoryboardFramesReady) {
+      reasons.push(`并行模式下分镜图未备齐，当前 ${completedStoryboardImages} / ${displayStoryboards.length}。`)
+    }
+    if (!firstFrameIdentityApproved) reasons.push('首镜人物一致性还没确认。')
+    return reasons
+  }, [
+    step2Enabled,
+    assetScopeReady,
+    allScopeAssetsUploaded,
+    uploadedScopeAssets,
+    scopeAssets.length,
+    allCharacterStoryboardsBound,
+    storyboardsWithCharacters.length,
+    characterBoundStoryboardCount,
+    selectedStep3ExecutionMode,
+    firstStoryboardImageReady,
+    allStoryboardFramesReady,
+    completedStoryboardImages,
+    displayStoryboards.length,
+    firstFrameIdentityApproved,
+  ])
+
+  const step3PendingReasons = useMemo(() => {
+    const reasons: string[] = []
+    if (!latestTaskIsPaused) {
+      if (!step2StoryboardReady) {
+        reasons.push(selectedStep3ExecutionMode === 'serial'
+          ? '串行模式下还缺第 1 张分镜图。'
+          : `并行模式下分镜图未备齐，当前 ${completedStoryboardImages} / ${displayStoryboards.length}。`)
+      }
+      if (!allCharacterStoryboardsBound) reasons.push(`还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜未绑定角色图。`)
+      if (!firstFrameIdentityApproved) reasons.push('首镜人物一致性还没确认。')
+      if (!step3ConfigReady) reasons.push('步骤 3 的模型参数还没选完整。')
+    }
+    return reasons
+  }, [
+    latestTaskIsPaused,
+    step2StoryboardReady,
+    selectedStep3ExecutionMode,
+    completedStoryboardImages,
+    displayStoryboards.length,
+    allCharacterStoryboardsBound,
+    storyboardsWithCharacters.length,
+    characterBoundStoryboardCount,
+    firstFrameIdentityApproved,
+    step3ConfigReady,
+  ])
+
   const step2Hint = !step2Enabled
     ? '先完成步骤 1，先让这一轮视频配置真正产出新的广告分镜文案。'
     : step2Running
@@ -2189,6 +2248,13 @@ ${paceBlock}`
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
                       {step2Hint}
+                      {step2PendingReasons.length > 0 && (
+                        <div className="mt-2 space-y-1 text-amber-200/90">
+                          {step2PendingReasons.map((reason, index) => (
+                            <div key={`step2-pending-${index}`}>- {reason}</div>
+                          ))}
+                        </div>
+                      )}
                       {step2Done && (
                         <div className="mt-2 text-emerald-200/90">
                           当前范围的人物绑定、首尾帧分镜图和首镜确认都已完成，可以直接点上方“去步骤 3 生成视频”。
@@ -2851,6 +2917,13 @@ ${paceBlock}`
 
                     <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
                       {step3Hint}
+                      {step3PendingReasons.length > 0 && (
+                        <div className="mt-2 space-y-1 text-amber-200/90">
+                          {step3PendingReasons.map((reason, index) => (
+                            <div key={`step3-pending-${index}`}>- {reason}</div>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-2 text-amber-200/90">补充提醒：如果首段返回 `InputImageSensitiveContentDetected`、`HTTP 451` 或类似“real-person/sensitive image”的拒绝，通常先查首图是否过于像真人肖像；这类情况会让后续 clip 继续报 `serial chain broken`，但那是连锁结果，不是每一段都单独坏了。</div>
                       <div className="mt-2 text-emerald-100/75">当前页面会在提交前自动做一层“降敏软化”：弱化真实姓名、portrait / photorealistic / RAW photo 等强真人肖像化措辞，并把 scene descriptions / dialogues / scene characters 一并按软化后的版本透传给 video-service。</div>
                     </div>
