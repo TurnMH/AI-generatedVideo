@@ -982,6 +982,10 @@ ${paceBlock}`
   const step3ExecutionModeHint = selectedStep3ExecutionMode === 'parallel'
     ? '并行会让每段分镜独立提交，不再依赖上一段链式衔接。'
     : '选择串行后，只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。'
+  const step2StoryboardPrepLabel = selectedStep3ExecutionMode === 'parallel' ? '并行模式分镜图预生成' : '串行模式首尾帧预生成'
+  const step2StoryboardPrepHint = selectedStep3ExecutionMode === 'parallel'
+    ? '当前是并行模式，这里预生成的是每段独立提交前要看的分镜图，不依赖前一段链式衔接。'
+    : '当前是串行模式，这里预生成的整批分镜图会作为后续链式视频生成的首尾帧基础，请先在这里看图、补图、确认图。'
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
@@ -1049,7 +1053,7 @@ ${paceBlock}`
           : !allCharacterStoryboardsBound
             ? `当前还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜没绑定已上传角色图，建议先补齐，再生成对应首尾帧。`
             : !allStoryboardFramesReady
-              ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。`
+              ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。当前模式：${step3ExecutionModeLabel}。`
               : !firstFrameIdentityApproved
                 ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
                 : '当前范围的人物绑定和首尾帧分镜图都已备齐，步骤 2 可以视为完成。'
@@ -2098,6 +2102,7 @@ ${paceBlock}`
                     <div>
                       <div className="text-sm font-medium text-violet-100">步骤 2：人物绑定与首尾帧分镜图预生成</div>
                       <div className="mt-1 text-xs text-violet-100/80">这一步不再只准备首镜。现在要先把角色素材绑定到对应分镜，再提前生成整条广告要用到的分镜图，供后续视频生成直接作为首尾帧参考。</div>
+                      <div className="mt-2 text-[11px] text-violet-100/75">当前模式：{step3ExecutionModeLabel}。{step2StoryboardPrepHint}</div>
                       {step2Running && (
                         <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
                           当前进行中：正在准备素材槽位 / 上传参考图 / 补齐人物绑定 / 批量生成首尾帧分镜图，请勿重复点击
@@ -2128,21 +2133,38 @@ ${paceBlock}`
                       </div>
                     </div>
 
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-white">先在步骤 2 确定视频执行方式</div>
+                          <div className="mt-1 text-[11px] text-violet-100/80">串行 / 并行会直接影响这里怎么看待和检查这批分镜图，所以前置到步骤 2。步骤 3 只读取这里的选择，不再在最后一步临时改。</div>
+                        </div>
+                        <div className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2 py-0.5 text-[11px] text-violet-100">当前：{step3ExecutionModeLabel}</div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] md:items-start">
+                        <select
+                          value={selectedStep3ExecutionMode}
+                          onChange={(e) => setSelectedStep3ExecutionMode(e.target.value === 'parallel' ? 'parallel' : 'serial')}
+                          disabled={pipelineBusy || step2Running || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-violet-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="serial">串行，按分镜顺序链式衔接</option>
+                          <option value="parallel">并行，各分镜独立生成</option>
+                        </select>
+                        <div className="rounded-lg border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-[11px] text-violet-50">
+                          <div>{step2StoryboardPrepLabel}</div>
+                          <div className="mt-1 text-violet-100/80">{step2StoryboardPrepHint}</div>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={pipelineBusy || !step2Enabled}
-                        onClick={() => void triggerAssetExtraction()}
-                      >
-                        {generationAction === 'asset-all' ? '正在准备槽位…' : '1）先准备人物 / 素材槽位'}
-                      </Button>
                       <Button
                         size="sm"
                         disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
                         onClick={() => void triggerStoryboardImageGeneration()}
                       >
-                        {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : '2）批量生成首尾帧分镜图'}
+                        {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : `2）${step2StoryboardPrepLabel}`}
                       </Button>
                       <Button
                         size="sm"
@@ -2433,7 +2455,7 @@ ${paceBlock}`
                                   disabled={pipelineBusy || !step2Enabled || !firstStoryboard}
                                   onClick={() => void triggerStoryboardImageGeneration()}
                                 >
-                                  {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : '补生成当前批次分镜图'}
+                                  {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : `补生成当前批次${selectedStep3ExecutionMode === 'serial' ? '首尾帧分镜图' : '分镜图'}`}
                                 </Button>
                               </div>
                             </div>
@@ -2441,11 +2463,57 @@ ${paceBlock}`
                         ) : null}
                       </div>
 
-                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-white">分镜拆分文本总览</div>
-                          <div className="text-[11px] text-violet-100/80">当前范围 {displayStoryboards.length} 条分镜文本全部展示，供你判断拆分是否合适</div>
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">已生成的首尾帧分镜图预览</div>
+                            <div className="mt-1 text-[11px] text-slate-400">这里直接展示步骤 2 当前范围内的分镜图结果，不用再切去别的区域找。生成后先在这里看图是否为空图、错图、旧图。</div>
+                          </div>
+                          <div className="text-[11px] text-violet-100/80">{completedStoryboardImages} / {displayStoryboards.length} 已可见 · {step3ExecutionModeLabel}</div>
                         </div>
+
+                        <div className="grid max-h-[640px] gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+                          {displayStoryboards.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
+                              {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜文本，因此也还没有可展示的分镜图。'}
+                            </div>
+                          ) : displayStoryboards.map((storyboard, index) => {
+                            const imageUrl = String(storyboard.image_url || '').trim()
+                            const hasImage = Boolean(imageUrl)
+                            return (
+                              <div key={`step2-storyboard-image-${storyboard.id}`} className={`rounded-lg border p-3 space-y-3 ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-medium text-white">分镜 #{storyboard.sequence_number}</div>
+                                    <div className="mt-1 text-[11px] text-slate-400">目标时长 {storyboard.duration || '-'} 秒 · {storyboard.status || '-'}</div>
+                                  </div>
+                                  <div className={`rounded-full border px-2 py-0.5 text-[10px] ${hasImage ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                    {hasImage ? '已生成' : '待补图'}
+                                  </div>
+                                </div>
+
+                                {hasImage ? (
+                                  <a href={imageUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={imageUrl} alt={`step2-storyboard-image-${storyboard.id}`} className="h-48 w-full object-cover transition hover:opacity-90" />
+                                  </a>
+                                ) : (
+                                  <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-slate-500">
+                                    当前还没有生成这张分镜图
+                                  </div>
+                                )}
+
+                                <div className="rounded-lg border border-violet-400/20 bg-violet-500/10 p-3 text-[11px] text-violet-50">
+                                  <div>{index === 0 ? '第 1 张分镜图，会同时承担首镜确认基准。' : selectedStep3ExecutionMode === 'serial' ? '串行模式下，这张图会参与当前段链式衔接的起止参考。' : '并行模式下，这张图会作为当前段独立提交时的直接参考图。'}</div>
+                                  {imageUrl && <div className="mt-1 break-all text-violet-100/75">{imageUrl}</div>}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4">
 
                         <div className="max-h-[560px] space-y-3 overflow-auto pr-1">
                           {displayStoryboards.length === 0 ? (
@@ -2564,17 +2632,23 @@ ${paceBlock}`
 
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                       <div className="space-y-2">
-                        <Label className="text-emerald-100">步骤 3 执行方式</Label>
-                        <select
-                          value={selectedStep3ExecutionMode}
-                          onChange={(e) => setSelectedStep3ExecutionMode(e.target.value === 'parallel' ? 'parallel' : 'serial')}
-                          disabled={step3Running}
-                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <option value="serial">串行，按分镜顺序链式衔接</option>
-                          <option value="parallel">并行，各分镜独立生成</option>
-                        </select>
-                        <div className="text-[11px] text-emerald-100/75">{step3ExecutionModeHint}</div>
+                        <Label className="text-emerald-100">执行方式（已在步骤 2 确定）</Label>
+                        <div className="flex h-10 w-full items-center rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900">
+                          {step3ExecutionModeLabel}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-[11px] text-emerald-100/75">{step3ExecutionModeHint}</div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2 text-[11px]"
+                            disabled={step3Running}
+                            onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step2') }}
+                          >
+                            回步骤 2 调整
+                          </Button>
+                        </div>
                       </div>
 
                       <div className="space-y-2">
