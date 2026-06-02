@@ -1001,19 +1001,23 @@ ${paceBlock}`
   const assetScopeReady = scopeAssets.length > 0
   const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
   const allStoryboardFramesReady = storyboardScopeReady && completedStoryboardImages > 0 && completedStoryboardImages === displayStoryboards.length
+  const serialStepStoryboardReady = firstStoryboardImageReady
+  const step3NeedsAllStoryboardFrames = selectedStep3ExecutionMode !== 'serial'
+  const step2StoryboardReady = step3NeedsAllStoryboardFrames ? allStoryboardFramesReady : serialStepStoryboardReady
   const allCharacterStoryboardsBound = storyboardsWithCharacters.length === 0 || characterBoundStoryboardCount === storyboardsWithCharacters.length
 
   const step1Done = storyboardScopeReady && !step1Running
   const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
   const step2Enabled = step1Done
-  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && allCharacterStoryboardsBound && allStoryboardFramesReady && firstFrameIdentityApproved
+  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && allCharacterStoryboardsBound && step2StoryboardReady && firstFrameIdentityApproved
   const latestTaskIsPaused = String(latestTask?.status || '').toLowerCase() === 'paused'
   const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
   const step3Enabled = latestTaskIsPaused || (step2Done && step3ConfigReady)
   const step3Done = Boolean(resultUrl)
 
   const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
-  const step2Status: 'pending' | 'active' | 'done' | 'blocked' = !step2Enabled ? 'blocked' : step2Running ? 'active' : step2Done ? 'done' : 'pending'
+  const step2NeedsAttention = step2Enabled && !step2Done && (!assetScopeReady || !allScopeAssetsUploaded || !allCharacterStoryboardsBound || !step2StoryboardReady || !firstFrameIdentityApproved)
+  const step2Status: 'pending' | 'active' | 'done' | 'blocked' = !step2Enabled ? 'blocked' : step2Running ? 'active' : step2Done ? 'done' : step2NeedsAttention ? 'blocked' : 'pending'
   const step3Status: 'pending' | 'active' | 'done' | 'blocked' = !step3Enabled ? 'blocked' : step3Running ? 'active' : step3Done ? 'done' : 'pending'
 
   useEffect(() => {
@@ -1052,27 +1056,33 @@ ${paceBlock}`
           ? '先把当前范围需要的参考图补齐；没上传完之前，不建议批量生成首尾帧分镜图。'
           : !allCharacterStoryboardsBound
             ? `当前还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜没绑定已上传角色图，建议先补齐，再生成对应首尾帧。`
-            : !allStoryboardFramesReady
-              ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。当前模式：${step3ExecutionModeLabel}。`
-              : !firstFrameIdentityApproved
-                ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
-                : '当前范围的人物绑定和首尾帧分镜图都已备齐，步骤 2 可以视为完成。'
+            : selectedStep3ExecutionMode === 'serial' && !firstStoryboardImageReady
+              ? '当前是串行模式，步骤 3 只要求人物图、首张分镜图和首镜确认；请先把第 1 张分镜图准备好。'
+              : selectedStep3ExecutionMode !== 'serial' && !allStoryboardFramesReady
+                ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。当前模式：${step3ExecutionModeLabel}。`
+                : !firstFrameIdentityApproved
+                  ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
+                  : '当前范围的人物绑定和当前执行模式所需的分镜图门槛都已备齐，步骤 2 可以视为完成。'
 
   const step3Hint = latestTaskIsPaused
     ? '检测到上一步有已暂停但未完成的视频任务；这里会优先继续旧任务，而不是重新新建一条视频任务。'
-    : !allStoryboardFramesReady
-      ? `当前范围还没有把首尾帧分镜图备齐，已完成 ${completedStoryboardImages} / ${displayStoryboards.length}。请先回步骤 2 批量生成。`
-      : !allCharacterStoryboardsBound
-        ? '当前仍有含人物的分镜没有绑定可用角色图。建议先在步骤 2 补齐绑定，再提交视频生成。'
-        : !firstFrameIdentityApproved
-          ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
-          : !step3ConfigReady
-            ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
-            : step3Running
-              ? '当前已经有视频任务在执行，先等这一轮结果。'
-              : step3Done
-                ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的首尾帧分镜图继续重生。'
-                : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。${step3ExecutionModeHint}`
+    : selectedStep3ExecutionMode === 'serial' && !firstStoryboardImageReady
+      ? '当前是串行模式。只要人物图、首张分镜图和首镜确认完成即可进入步骤 3；请先把首张分镜图准备好。'
+      : selectedStep3ExecutionMode !== 'serial' && !allStoryboardFramesReady
+        ? `当前范围还没有把首尾帧分镜图备齐，已完成 ${completedStoryboardImages} / ${displayStoryboards.length}。请先回步骤 2 批量生成。`
+        : !allCharacterStoryboardsBound
+          ? '当前仍有含人物的分镜没有绑定可用角色图。建议先在步骤 2 补齐绑定，再提交视频生成。'
+          : !firstFrameIdentityApproved
+            ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
+            : !step3ConfigReady
+              ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
+              : step3Running
+                ? '当前已经有视频任务在执行，先等这一轮结果。'
+                : step3Done
+                  ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的分镜锚点继续重生。'
+                  : selectedStep3ExecutionMode === 'serial'
+                    ? `当前已满足串行提交流程的最低门槛，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。`
+                    : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。${step3ExecutionModeHint}`
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -1559,7 +1569,9 @@ ${paceBlock}`
       return
     }
 
-    if (!allStoryboardFramesReady) {
+    const isSerialMode = selectedStep3ExecutionMode === 'serial'
+
+    if (!isSerialMode && !allStoryboardFramesReady) {
       toast({ title: `请先在步骤 2 把首尾帧分镜图补齐，当前仅完成 ${completedStoryboardImages} / ${displayStoryboards.length}`, variant: 'destructive' })
       releaseActionLock('video-start')
       return
@@ -1598,7 +1610,7 @@ ${paceBlock}`
       releaseActionLock('video-start')
       return
     }
-    if (!storyboardPool.every((item) => String(item.image_url || '').trim())) {
+    if (!isSerialMode && !storyboardPool.every((item) => String(item.image_url || '').trim())) {
       toast({ title: '当前范围还有分镜图未生成完成，请先回步骤 2 补齐全部首尾帧分镜图', variant: 'destructive' })
       releaseActionLock('video-start')
       return
@@ -1608,7 +1620,6 @@ ${paceBlock}`
     const motionMode = project?.storyboard_config?.motion_mode || undefined
     const clipDuration = Number(selectedStep3Duration || project?.storyboard_config?.duration || 0) || undefined
     const veoSeedValue = Number(selectedStep3VeoSeed)
-    const isSerialMode = selectedStep3ExecutionMode === 'serial'
 
     setGenerationAction('video-start')
     try {
@@ -2828,7 +2839,7 @@ ${paceBlock}`
                     </div>
 
                     <Button
-                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!allStoryboardFramesReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!step2StoryboardReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
                       onClick={() => void startScopedVideoGeneration()}
                     >
                       {generationAction === 'video-start'
