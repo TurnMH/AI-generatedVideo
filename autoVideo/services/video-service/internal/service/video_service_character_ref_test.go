@@ -179,6 +179,32 @@ func TestAppendReferenceImageBindingHintForDoubao(t *testing.T) {
 	}
 }
 
+func TestAppendReferenceImageBindingHintReplacesCharacterNamesInsidePrompt(t *testing.T) {
+	prompt := appendReferenceImageBindingHint("林夏走向镜头，阿杰在后景看向林夏。", []referenceImageBinding{
+		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
+		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
+	}, "doubao-seedance")
+	if !strings.Contains(prompt, "林夏(@图1)走向镜头") {
+		t.Fatalf("prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "阿杰(@图2)在后景") {
+		t.Fatalf("prompt=%q", prompt)
+	}
+	if strings.Contains(prompt, "【参考图绑定】") {
+		t.Fatalf("prompt should prefer inline replacement once @图 markers are present: %q", prompt)
+	}
+}
+
+func TestBindReferenceImageMentionsPrefersLongerNamesFirst(t *testing.T) {
+	got := bindReferenceImageMentions("小林夏站在林夏身后。", []referenceImageBinding{
+		{Label: "林夏", URL: "asset://asset-1"},
+		{Label: "小林夏", URL: "asset://asset-2"},
+	})
+	if !strings.Contains(got, "小林夏(@图2)站在林夏(@图1)身后") {
+		t.Fatalf("got=%q", got)
+	}
+}
+
 func TestAppendReferenceImageBindingHintSkipsNonDoubaoFamily(t *testing.T) {
 	prompt := appendReferenceImageBindingHint("plain prompt", []referenceImageBinding{{Label: "林夏", URL: "asset://asset-123"}}, "vidu")
 	if prompt != "plain prompt" {

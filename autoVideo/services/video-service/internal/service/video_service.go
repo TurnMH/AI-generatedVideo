@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -3585,6 +3586,7 @@ func appendReferenceImageBindingHint(prompt string, bindings []referenceImageBin
 	if len(bindings) == 0 {
 		return prompt
 	}
+	prompt = bindReferenceImageMentions(prompt, bindings)
 	if strings.Contains(prompt, "@图") {
 		return prompt
 	}
@@ -3608,6 +3610,69 @@ func appendReferenceImageBindingHint(prompt string, bindings []referenceImageBin
 		return hint
 	}
 	return prompt + "\n" + hint
+}
+
+func bindReferenceImageMentions(prompt string, bindings []referenceImageBinding) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" || len(bindings) == 0 || strings.Contains(prompt, "@图") {
+		return prompt
+	}
+	type candidate struct {
+		label       string
+		index       int
+		placeholder string
+		repl        string
+	}
+	seen := make(map[string]struct{}, len(bindings))
+	candidates := make([]candidate, 0, len(bindings))
+	for i, binding := range bindings {
+		label := strings.TrimSpace(binding.Label)
+		if label == "" || utf8.RuneCountInString(label) <= 1 {
+			continue
+		}
+		key := strings.ToLower(label)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		index := i + 1
+		candidates = append(candidates, candidate{
+			label:       label,
+			index:       index,
+			placeholder: fmt.Sprintf("<<REFIMG%d>>", index),
+			repl:        fmt.Sprintf("%s(@图%d)", label, index),
+		})
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		lb := utf8.RuneCountInString(b.label)
+		la := utf8.RuneCountInString(a.label)
+		if lb != la {
+			return lb - la
+		}
+		return a.index - b.index
+	})
+	out := prompt
+	for _, item := range candidates {
+		from := 0
+		for from <= len(out)-len(item.label) {
+			pos := strings.Index(out[from:], item.label)
+			if pos < 0 {
+				break
+			}
+			pos += from
+			if pos > 0 && out[pos-1] == '@' {
+				out = out[:pos-1] + item.placeholder + out[pos+len(item.label):]
+				from = pos - 1 + len(item.placeholder)
+				continue
+			}
+			out = out[:pos] + item.placeholder + out[pos+len(item.label):]
+			from = pos + len(item.placeholder)
+		}
+	}
+	for _, item := range candidates {
+		out = strings.ReplaceAll(out, item.placeholder, item.repl)
+	}
+	return out
 }
 
 func appendAssetAnchorHint(prompt, assetHint string) string {
