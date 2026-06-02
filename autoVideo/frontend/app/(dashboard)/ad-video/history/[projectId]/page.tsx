@@ -979,6 +979,9 @@ ${paceBlock}`
   const step3UsesVeoReferenceImages = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length > 0
   const step3UsesVeoLastFrame = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseLastFrame && Boolean(step3VeoLastFrameImageUrl)
   const step3ExecutionModeLabel = selectedStep3ExecutionMode === 'parallel' ? '并行生成（每段独立提交）' : '串行生成（按分镜链式衔接）'
+  const step3ExecutionModeHint = selectedStep3ExecutionMode === 'parallel'
+    ? '并行会让每段分镜独立提交，不再依赖上一段链式衔接。'
+    : '选择串行后，只有分镜图准备完成后才启动视频生成，避免直接拿空图或错图提交。'
 
   const focusedStoryboardIds = useMemo(() => {
     if (focusedAssetId == null) return new Set<number>()
@@ -1065,7 +1068,7 @@ ${paceBlock}`
               ? '当前已经有视频任务在执行，先等这一轮结果。'
               : step3Done
                 ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的首尾帧分镜图继续重生。'
-                : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。`
+                : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。${step3ExecutionModeHint}`
 
   useEffect(() => {
     if (!realOptimizedScript) return
@@ -2547,6 +2550,7 @@ ${paceBlock}`
                         <div>当前范围：{scopeLabel}</div>
                         <div>目标模型：{selectedGenerationModelActualLabel || '未选择'}</div>
                         <div>执行方式：{step3ExecutionModeLabel}</div>
+                        <div>{step3ExecutionModeHint}</div>
                         <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
                         {selectedModelSupportsVeoNativeControls && (
                           <div>Veo 原生约束：人物策略 {selectedStep3VeoPersonGeneration || '-'} / 参考图 {step3UsesVeoReferenceImages ? `${step3VeoReferenceImages.length} 张` : '关闭'} / 尾帧 {step3UsesVeoLastFrame ? '开启' : '关闭'} / seed {selectedStep3VeoSeed || '-'}</div>
@@ -2570,7 +2574,7 @@ ${paceBlock}`
                           <option value="serial">串行，按分镜顺序链式衔接</option>
                           <option value="parallel">并行，各分镜独立生成</option>
                         </select>
-                        <div className="text-[11px] text-emerald-100/75">首尾帧分镜图会继续参与当前流程，区别只在于是否提交 `serial_scene=true` 让各段串起来。</div>
+                        <div className="text-[11px] text-emerald-100/75">{step3ExecutionModeHint}</div>
                       </div>
 
                       <div className="space-y-2">
