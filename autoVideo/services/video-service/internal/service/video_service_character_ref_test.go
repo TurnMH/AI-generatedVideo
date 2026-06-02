@@ -205,6 +205,30 @@ func TestBindReferenceImageMentionsPrefersLongerNamesFirst(t *testing.T) {
 	}
 }
 
+func TestValidateSameCharacterBindingsRequiresRefsForDoubao(t *testing.T) {
+	err := validateSameCharacterBindings(model.RenderConfig{"require_same_character": true}, "doubao-seedance", generators.VideoGenerateReq{}, nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "same-character preflight failed") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestValidateSameCharacterBindingsAllowsBoundRefsForDoubao(t *testing.T) {
+	err := validateSameCharacterBindings(model.RenderConfig{"require_same_character": true}, "doubao-seedance", generators.VideoGenerateReq{}, []referenceImageBinding{{Label: "林夏", URL: "asset://asset-123"}})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
+func TestValidateSameCharacterBindingsSkipsNonDoubaoFamilies(t *testing.T) {
+	err := validateSameCharacterBindings(model.RenderConfig{"require_same_character": true}, "vidu", generators.VideoGenerateReq{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+}
+
 func TestFormatReferenceBindingsIncludesSlotAndURL(t *testing.T) {
 	got := formatReferenceBindings([]referenceImageBinding{
 		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},

@@ -498,6 +498,12 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		if renderConfigBool(task.RenderConfig, "require_same_character") && len(projectIdentityRefs) > 0 {
 			genReq.CharacterImageURLs = mergeReferenceURLs(projectIdentityRefs, genReq.CharacterImageURLs)
 		}
+		if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, clipRefBindings); err != nil {
+			c.Status = model.StatusFailed
+			c.ErrorMsg = err.Error()
+			applyRouteExplainToClip(c, resolvedModelName, routeExplain)
+			return err
+		}
 		trace := buildClipIdentityTrace(
 			resolvedModelName,
 			requestedGenerateMode,
@@ -1462,6 +1468,26 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, retryClipAssetRefs)
 	if renderConfigBool(task.RenderConfig, "require_same_character") && len(retryProjectIdentityRefs) > 0 {
 		genReq.CharacterImageURLs = mergeReferenceURLs(retryProjectIdentityRefs, genReq.CharacterImageURLs)
+	}
+	if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, retryRefBindings); err != nil {
+		clip.Status = model.StatusFailed
+		clip.ErrorMsg = err.Error()
+		if updateErr := s.repo.UpdateClip(ctx, clip); updateErr != nil {
+			s.logger.Error("update clip preflight validation failure", zap.Int64("clip_id", clipID), zap.Error(updateErr))
+		}
+
+		task.Status = prevTaskStatus
+		task.ComposeStage = model.ComposeStageNone
+		if prevTaskStatus != model.StatusSucceeded {
+			task.Status = model.StatusFailed
+			task.ErrorMsg = err.Error()
+		} else {
+			task.ErrorMsg = prevTaskError
+		}
+		if updateErr := s.repo.UpdateTask(ctx, task); updateErr != nil {
+			s.logger.Error("restore task after clip preflight validation failure", zap.Int64("task_id", taskID), zap.Error(updateErr))
+		}
+		return err
 	}
 	trace := buildClipIdentityTrace(
 		resolvedModelName,
@@ -4049,6 +4075,31 @@ func generatorSupportsStartEnd(modelName string) bool {
 	default:
 		return false
 	}
+}
+
+func validateSameCharacterBindings(renderConfig model.RenderConfig, modelName string, req generators.VideoGenerateReq, bindings []referenceImageBinding) error {
+	if !renderConfigBool(renderConfig, "require_same_character") {
+		return nil
+	}
+	switch videoModelFamily(modelName) {
+	case "doubao", "suanneng":
+		// keep strict preflight only for the current Seedance/Doubao path where
+		// missing identity anchors usually means low-value upstream moderation failures.
+	default:
+		return nil
+	}
+	if len(bindings) > 0 {
+		return nil
+	}
+	for _, ref := range req.CharacterImageURLs {
+		if strings.TrimSpace(ref) != "" {
+			return nil
+		}
+	}
+	if strings.TrimSpace(req.SourceImageURL) == "" && strings.TrimSpace(req.TailImageURL) == "" {
+		return fmt.Errorf("same-character preflight failed: missing identity anchor and reference bindings for Doubao/Seedance clip")
+	}
+	return fmt.Errorf("same-character preflight failed: require_same_character is enabled, but this Doubao/Seedance clip has no usable identity anchor / reference binding; please bind a character anchor asset or scene character references before submission")
 }
 
 func shouldPreferStartEndIdentityMode(modelName string, renderConfig model.RenderConfig, req generators.VideoGenerateReq) bool {
