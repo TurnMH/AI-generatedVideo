@@ -205,6 +205,35 @@ func TestBindReferenceImageMentionsPrefersLongerNamesFirst(t *testing.T) {
 	}
 }
 
+func TestFormatReferenceBindingsIncludesSlotAndURL(t *testing.T) {
+	got := formatReferenceBindings([]referenceImageBinding{
+		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
+		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("len(got)=%d", len(got))
+	}
+	if got[0] != "@图1=林夏(主角色身份锚点) -> asset://asset-123" {
+		t.Fatalf("got[0]=%q", got[0])
+	}
+	if got[1] != "@图2=阿杰(角色参考图) -> https://example.com/ajie.png" {
+		t.Fatalf("got[1]=%q", got[1])
+	}
+}
+
+func TestBuildClipIdentityTraceCarriesReferenceBindings(t *testing.T) {
+	trace := buildClipIdentityTrace("doubao-seedance", "", generators.VideoGenerateReq{SourceImageURL: "https://example.com/source.png"}, false, []string{"asset://asset-123"}, []string{"asset://asset-123", "https://example.com/ajie.png"}, nil, []referenceImageBinding{
+		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
+		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
+	}, false, false)
+	if len(trace.ReferenceBindings) != 2 {
+		t.Fatalf("len(trace.ReferenceBindings)=%d", len(trace.ReferenceBindings))
+	}
+	if trace.ReferenceBindings[0] != "@图1=林夏(主角色身份锚点) -> asset://asset-123" {
+		t.Fatalf("trace.ReferenceBindings[0]=%q", trace.ReferenceBindings[0])
+	}
+}
+
 func TestAppendReferenceImageBindingHintSkipsNonDoubaoFamily(t *testing.T) {
 	prompt := appendReferenceImageBindingHint("plain prompt", []referenceImageBinding{{Label: "林夏", URL: "asset://asset-123"}}, "vidu")
 	if prompt != "plain prompt" {
@@ -369,6 +398,7 @@ func TestBuildClipIdentityTraceSummarizesSources(t *testing.T) {
 		[]string{"https://example.com/project-anchor.png", "https://example.com/approved-first.png"},
 		[]string{"https://example.com/char-a.png", "https://example.com/char-b.png"},
 		[]string{"https://example.com/scene-ref.png"},
+		[]referenceImageBinding{{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"}},
 		true,
 		true,
 	)

@@ -506,6 +506,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			projectIdentityRefs,
 			clipCharURLs,
 			clipAssetRefs,
+			clipRefBindings,
 			shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "",
 			shouldChainSerialSource(task, c.SceneSeq, c.SceneGroupKey),
 		)
@@ -1352,7 +1353,8 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if strings.TrimSpace(retryPrompt) == "" {
 		retryPrompt = motionPrompt(task.MotionMode, task.StylePreset, task.SceneDescription, task.RenderConfig)
 	}
-	retryPrompt = appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(retryPrompt, retryClipCharURLs, resolvedModelName), buildReferenceImageBindings(task.RenderConfig, retryAssetAnchors, perClipAssetIDs, clip.ClipOrder, retrySceneChars, retryCharByName), resolvedModelName), perClipAssetAnchorHint(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder))
+	retryRefBindings := buildReferenceImageBindings(task.RenderConfig, retryAssetAnchors, perClipAssetIDs, clip.ClipOrder, retrySceneChars, retryCharByName)
+	retryPrompt = appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(retryPrompt, retryClipCharURLs, resolvedModelName), retryRefBindings, resolvedModelName), perClipAssetAnchorHint(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder))
 
 	retryVoiceText := ""
 	if gen.SupportsNativeAudio() {
@@ -1469,6 +1471,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		retryProjectIdentityRefs,
 		retryClipCharURLs,
 		retryClipAssetRefs,
+		retryRefBindings,
 		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
 		shouldChainSerialSource(task, clip.SceneSeq, clip.SceneGroupKey),
 	)
@@ -4173,6 +4176,7 @@ type clipIdentityTrace struct {
 	ProjectIdentityRefs         []string
 	CharacterRefs               []string
 	AssetRefs                   []string
+	ReferenceBindings           []string
 	SerialContinuityPromptAdded bool
 	SerialChainingSourceActive  bool
 }
@@ -4193,7 +4197,7 @@ func trimReferenceURLs(urls []string, limit int) []string {
 	return trimmed
 }
 
-func buildClipIdentityTrace(modelName string, requestedMode string, finalReq generators.VideoGenerateReq, preferredStartEnd bool, projectIdentityRefs, characterRefs, assetRefs []string, serialPromptAdded, serialChainingSourceActive bool) clipIdentityTrace {
+func buildClipIdentityTrace(modelName string, requestedMode string, finalReq generators.VideoGenerateReq, preferredStartEnd bool, projectIdentityRefs, characterRefs, assetRefs []string, refBindings []referenceImageBinding, serialPromptAdded, serialChainingSourceActive bool) clipIdentityTrace {
 	return clipIdentityTrace{
 		ModelFamily:                 videoModelFamily(modelName),
 		RequestedGenerateMode:       strings.TrimSpace(requestedMode),
@@ -4204,6 +4208,7 @@ func buildClipIdentityTrace(modelName string, requestedMode string, finalReq gen
 		ProjectIdentityRefs:         trimReferenceURLs(projectIdentityRefs, 4),
 		CharacterRefs:               trimReferenceURLs(characterRefs, 4),
 		AssetRefs:                   trimReferenceURLs(assetRefs, 4),
+		ReferenceBindings:           trimReferenceURLs(formatReferenceBindings(refBindings), 6),
 		SerialContinuityPromptAdded: serialPromptAdded,
 		SerialChainingSourceActive:  serialChainingSourceActive,
 	}
@@ -4230,9 +4235,32 @@ func logClipIdentityTrace(logger *zap.Logger, message string, taskID, clipID int
 		zap.Strings("character_refs", trace.CharacterRefs),
 		zap.Int("asset_ref_count", len(trace.AssetRefs)),
 		zap.Strings("asset_refs", trace.AssetRefs),
+		zap.Int("reference_binding_count", len(trace.ReferenceBindings)),
+		zap.Strings("reference_bindings", trace.ReferenceBindings),
 		zap.Bool("serial_continuity_prompt_added", trace.SerialContinuityPromptAdded),
 		zap.Bool("serial_chaining_source_active", trace.SerialChainingSourceActive),
 	)
+}
+
+func formatReferenceBindings(bindings []referenceImageBinding) []string {
+	if len(bindings) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(bindings))
+	for i, binding := range bindings {
+		label := strings.TrimSpace(binding.Label)
+		url := strings.TrimSpace(binding.URL)
+		if label == "" || url == "" {
+			continue
+		}
+		entry := fmt.Sprintf("@图%d=%s", i+1, label)
+		if note := strings.TrimSpace(binding.Note); note != "" {
+			entry += "(" + note + ")"
+		}
+		entry += " -> " + url
+		out = append(out, entry)
+	}
+	return out
 }
 
 func countNonEmptyStrings(items []string) int {
