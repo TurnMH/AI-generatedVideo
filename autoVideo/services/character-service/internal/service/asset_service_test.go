@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +113,66 @@ func TestComposeAssetImagePromptIncludesTypeSpecificGuidance(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSyncCharacterAssetMetadataForImageURL(t *testing.T) {
+	var getAssetCalls int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Query().Get("Action")
+		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "HMAC-SHA256 Credential=test-ak/") {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&map[string]interface{}{})
+		w.Header().Set("Content-Type", "application/json")
+		switch action {
+		case "CreateAssetGroup":
+			_, _ = w.Write([]byte(`{"ResponseMetadata":{"RequestId":"req-group"},"Result":{"Id":"group-123","Status":"Active","ProjectName":"default"}}`))
+		case "CreateAsset":
+			_, _ = w.Write([]byte(`{"ResponseMetadata":{"RequestId":"req-create"},"Result":{"Id":"asset-456","GroupId":"group-123","Status":"Processing","ProjectName":"default","AssetType":"Image","URL":"https://cdn.example.com/selected.png"}}`))
+		case "GetAsset":
+			call := atomic.AddInt32(&getAssetCalls, 1)
+			if call < 2 {
+				_, _ = w.Write([]byte(`{"ResponseMetadata":{"RequestId":"req-get-1"},"Result":{"Id":"asset-456","GroupId":"group-123","Status":"Processing","ProjectName":"default","AssetType":"Image","URL":"https://cdn.example.com/selected.png"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ResponseMetadata":{"RequestId":"req-get-2"},"Result":{"Id":"asset-456","GroupId":"group-123","Status":"Active","ProjectName":"default","AssetType":"Image","URL":"https://cdn.example.com/selected.png"}}`))
+		default:
+			t.Fatalf("unexpected action: %s", action)
+		}
+	}))
+	defer server.Close()
+
+	svc := NewAssetService(nil, nil, zap.NewNop(), "https://fallback.example/v1", "fallback-key", "gpt-4.1", "", time.Second, "", "", "", "", "", "", "", "", "")
+	svc.SetVolcAssetClient(NewVolcAssetClient(VolcAssetClientConfig{
+		Enabled:         true,
+		AccessKey:       "test-ak",
+		SecretKey:       "test-sk",
+		Host:            strings.TrimPrefix(server.URL, "https://"),
+		ProjectName:     "default",
+		PollInterval:    5 * time.Millisecond,
+		PollTimeout:     time.Second,
+		HTTPClient:      server.Client(),
+		GroupNamePrefix: "autovideo-character",
+	}, zap.NewNop()))
+
+	metadata, err := svc.syncCharacterAssetMetadataForImageURL(context.Background(), &model.Asset{
+		ID:        35869,
+		ProjectID: 176,
+		Type:      "character",
+		Name:      "林夏",
+		ImageURL:  "https://cdn.example.com/original.png",
+	}, map[string]interface{}{
+		"selected_generated_image_url": "https://cdn.example.com/selected.png",
+	}, "")
+	if err != nil {
+		t.Fatalf("syncCharacterAssetMetadataForImageURL() error = %v", err)
+	}
+	if got := strings.TrimSpace(stringValue(metadata["provider_asset_id"])); got != "asset-456" {
+		t.Fatalf("provider_asset_id = %q, want asset-456", got)
+	}
+	if got := strings.TrimSpace(stringValue(metadata["seedance_asset_uri"])); got != "asset://asset-456" {
+		t.Fatalf("seedance_asset_uri = %q, want asset://asset-456", got)
+	}
 }
 
 func TestResolveAssetSuccessfulImageURL(t *testing.T) {

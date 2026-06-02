@@ -1,12 +1,18 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/autovideo/character-service/internal/model"
 	"github.com/autovideo/character-service/internal/repository"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -16,6 +22,7 @@ type CharacterService struct {
 	storage   *StorageClient
 	assetRepo *repository.AssetRepo
 	log       *zap.Logger
+	volcAsset *VolcAssetClient
 }
 
 // NewCharacterService —— 创建角色服务实例，返回 *CharacterService
@@ -27,6 +34,10 @@ func NewCharacterService(
 	log *zap.Logger,
 ) *CharacterService {
 	return &CharacterService{repo: repo, styleR: styleR, storage: storage, assetRepo: assetRepo, log: log}
+}
+
+func (s *CharacterService) SetVolcAssetClient(client *VolcAssetClient) {
+	s.volcAsset = client
 }
 
 // ListByProject —— 按项目 ID 查询该项目下的所有角色
@@ -93,7 +104,49 @@ func (s *CharacterService) UploadReference(id int64, filename string, content io
 	if err = s.repo.UpdateReferenceImage(id, cdnURL); err != nil {
 		return "", err
 	}
+	if err = s.syncLinkedCharacterAssets(context.Background(), id, cdnURL); err != nil {
+		return "", err
+	}
 	return cdnURL, nil
+}
+
+func (s *CharacterService) syncLinkedCharacterAssets(ctx context.Context, characterID int64, sourceURL string) error {
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return nil
+	}
+	assets, err := s.assetRepo.ListByCharacterID(characterID)
+	if err != nil {
+		return fmt.Errorf("list linked character assets: %w", err)
+	}
+	for i := range assets {
+		asset := &assets[i]
+		if !strings.EqualFold(strings.TrimSpace(asset.Type), "character") {
+			continue
+		}
+		metadata, parseErr := parseAssetMetadata(asset.Metadata)
+		if parseErr != nil {
+			return fmt.Errorf("parse linked asset metadata: %w", parseErr)
+		}
+		metadata["selected_generated_image_url"] = sourceURL
+		metadata, err = syncCharacterAssetProviderMetadata(ctx, s.volcAsset, asset, sourceURL, metadata)
+		if err != nil {
+			return err
+		}
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("marshal linked asset metadata: %w", err)
+		}
+		asset.ImageURL = sourceURL
+		asset.Metadata = datatypes.JSON(metadataJSON)
+		asset.Status = "completed"
+		asset.ErrorMsg = ""
+		asset.UpdatedAt = time.Now()
+		if err := s.assetRepo.Update(asset); err != nil {
+			return fmt.Errorf("update linked asset %d: %w", asset.ID, err)
+		}
+	}
+	return nil
 }
 
 // SetStyle 设置角色风格

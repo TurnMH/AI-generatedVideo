@@ -112,6 +112,22 @@ func main() {
 
 	charSvc := service.NewCharacterService(charRepo, styleRepo, storageClient, assetRepo, log)
 
+	volcAssetClient := service.NewVolcAssetClient(service.VolcAssetClientConfig{
+		Enabled:         cfg.VolcAsset.Enabled,
+		AccessKey:       cfg.VolcAsset.AccessKey,
+		SecretKey:       cfg.VolcAsset.SecretKey,
+		Region:          cfg.VolcAsset.Region,
+		Service:         cfg.VolcAsset.Service,
+		Host:            cfg.VolcAsset.Host,
+		Version:         cfg.VolcAsset.Version,
+		ProjectName:     cfg.VolcAsset.ProjectName,
+		GroupType:       cfg.VolcAsset.GroupType,
+		GroupNamePrefix: cfg.VolcAsset.GroupNamePrefix,
+		PollInterval:    time.Duration(cfg.VolcAsset.PollIntervalMs) * time.Millisecond,
+		PollTimeout:     time.Duration(cfg.VolcAsset.PollTimeoutSeconds) * time.Second,
+	}, log)
+	charSvc.SetVolcAssetClient(volcAssetClient)
+
 	// Gemini config: bases and keys are comma-separated; pick first entry for chat routing.
 	geminiBase, geminiKey := "", ""
 	if bases := strings.Split(cfg.Gemini.Bases, ","); len(bases) > 0 {
@@ -130,20 +146,7 @@ func main() {
 		geminiBase, geminiKey,
 		cfg.ModelService.BaseURL,
 	)
-	assetSvc.SetVolcAssetClient(service.NewVolcAssetClient(service.VolcAssetClientConfig{
-		Enabled:         cfg.VolcAsset.Enabled,
-		AccessKey:       cfg.VolcAsset.AccessKey,
-		SecretKey:       cfg.VolcAsset.SecretKey,
-		Region:          cfg.VolcAsset.Region,
-		Service:         cfg.VolcAsset.Service,
-		Host:            cfg.VolcAsset.Host,
-		Version:         cfg.VolcAsset.Version,
-		ProjectName:     cfg.VolcAsset.ProjectName,
-		GroupType:       cfg.VolcAsset.GroupType,
-		GroupNamePrefix: cfg.VolcAsset.GroupNamePrefix,
-		PollInterval:    time.Duration(cfg.VolcAsset.PollIntervalMs) * time.Millisecond,
-		PollTimeout:     time.Duration(cfg.VolcAsset.PollTimeoutSeconds) * time.Second,
-	}, log))
+	assetSvc.SetVolcAssetClient(volcAssetClient)
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	var kafkaProducer *service.KafkaProducer

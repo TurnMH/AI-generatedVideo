@@ -386,6 +386,12 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 		return nil, err
 	}
 
+	metadata, err := parseAssetMetadata(asset.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("parse metadata: %w", err)
+	}
+	providerSyncCandidate := ""
+
 	if v, ok := updates["name"]; ok {
 		if name, ok := v.(string); ok {
 			asset.Name = name
@@ -399,6 +405,10 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 	if v, ok := updates["metadata"]; ok {
 		b, _ := json.Marshal(v)
 		asset.Metadata = datatypes.JSON(b)
+		if parsed, parseErr := parseAssetMetadata(asset.Metadata); parseErr == nil {
+			metadata = parsed
+			providerSyncCandidate = strings.TrimSpace(stringValue(metadata["selected_generated_image_url"]))
+		}
 	}
 	if v, ok := updates["episode_ids"]; ok {
 		if arr, ok := v.([]interface{}); ok {
@@ -429,6 +439,10 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 	if v, ok := updates["image_url"]; ok {
 		if imageURL, ok := v.(string); ok {
 			asset.ImageURL = imageURL
+			providerSyncCandidate = strings.TrimSpace(imageURL)
+			if providerSyncCandidate != "" {
+				metadata["selected_generated_image_url"] = providerSyncCandidate
+			}
 		}
 	}
 	if v, ok := updates["status"]; ok {
@@ -451,6 +465,15 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 			asset.CharacterID = nil
 		}
 	}
+	metadata, err = s.syncCharacterAssetMetadataForImageURL(context.Background(), asset, metadata, providerSyncCandidate)
+	if err != nil {
+		return nil, err
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata: %w", err)
+	}
+	asset.Metadata = datatypes.JSON(metadataJSON)
 	asset.UpdatedAt = time.Now()
 
 	if err := s.repo.Update(asset); err != nil {
@@ -820,6 +843,29 @@ func (s *AssetService) ResetAsset(id uint64) (*model.Asset, error) {
 }
 
 // Upload —— 手动上传资产图片并标记为已完成
+func (s *AssetService) syncCharacterAssetMetadataForImageURL(ctx context.Context, asset *model.Asset, metadata map[string]interface{}, explicitURLs ...string) (map[string]interface{}, error) {
+	if asset == nil {
+		return metadata, nil
+	}
+	sourceURL := ""
+	for _, candidate := range explicitURLs {
+		if strings.TrimSpace(candidate) != "" {
+			sourceURL = strings.TrimSpace(candidate)
+			break
+		}
+	}
+	if sourceURL == "" && metadata != nil {
+		sourceURL = strings.TrimSpace(stringValue(metadata["selected_generated_image_url"]))
+	}
+	if sourceURL == "" {
+		sourceURL = strings.TrimSpace(asset.ImageURL)
+	}
+	if sourceURL == "" {
+		return metadata, nil
+	}
+	return s.syncCharacterAssetProviderMetadata(ctx, asset, sourceURL, metadata)
+}
+
 func (s *AssetService) Upload(ctx context.Context, id uint64, filename string, content interface{ Read([]byte) (int, error) }) (*model.Asset, error) {
 	asset, err := s.GetByID(id)
 	if err != nil {
@@ -840,7 +886,7 @@ func (s *AssetService) Upload(ctx context.Context, id uint64, filename string, c
 	delete(metadata, "seed")
 	delete(metadata, "generation_request")
 	metadata["selected_generated_image_url"] = cdnURL
-	metadata, err = s.syncCharacterAssetProviderMetadata(ctx, asset, cdnURL, metadata)
+	metadata, err = s.syncCharacterAssetMetadataForImageURL(ctx, asset, metadata, cdnURL)
 	if err != nil {
 		return nil, err
 	}
@@ -2389,6 +2435,10 @@ func (s *AssetService) UpdateGenerated(id uint64, imageURL, prompt, modelName st
 	versions := appendGeneratedImageVersion(metadata, asset.ImageURL, imageURL, prompt, modelName, asset.UpdatedAt)
 	metadata["generated_images"] = versions
 	metadata["selected_generated_image_url"] = imageURL
+	metadata, err = s.syncCharacterAssetMetadataForImageURL(context.Background(), asset, metadata, imageURL)
+	if err != nil {
+		return err
+	}
 	delete(metadata, "generation_progress")
 	delete(metadata, "panel_images")
 	delete(metadata, "composite_image_url")
@@ -2465,6 +2515,10 @@ func (s *AssetService) UpdateGeneratedPanels(id uint64, panelURLs []string, comp
 	metadata["panel_images"] = panelURLs
 	metadata["composite_image_url"] = compositeURL
 	metadata["seed"] = seed
+	metadata, err = s.syncCharacterAssetMetadataForImageURL(context.Background(), asset, metadata, primaryImageURL, compositeURL)
+	if err != nil {
+		return err
+	}
 	delete(metadata, "generation_progress")
 
 	metadataJSON, err := json.Marshal(metadata)

@@ -25,11 +25,11 @@ func (s *AssetService) SetVolcAssetClient(client *VolcAssetClient) {
 	s.volcAsset = client
 }
 
-func (s *AssetService) syncCharacterAssetProviderMetadata(ctx context.Context, asset *model.Asset, sourceURL string, metadata map[string]interface{}) (map[string]interface{}, error) {
+func syncCharacterAssetProviderMetadata(ctx context.Context, client *VolcAssetClient, asset *model.Asset, sourceURL string, metadata map[string]interface{}) (map[string]interface{}, error) {
 	if asset == nil {
 		return metadata, nil
 	}
-	if s.volcAsset == nil || !s.volcAsset.Enabled() {
+	if client == nil || !client.Enabled() {
 		return metadata, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(asset.Type), "character") {
@@ -41,22 +41,22 @@ func (s *AssetService) syncCharacterAssetProviderMetadata(ctx context.Context, a
 	}
 	groupID := existingVolcAssetGroupID(metadata)
 	if groupID == "" {
-		groupName := buildVolcAssetGroupName(s.volcAsset.GroupNamePrefix(), asset)
+		groupName := buildVolcAssetGroupName(client.GroupNamePrefix(), asset)
 		description := strings.TrimSpace(asset.Description)
 		if description == "" {
 			description = strings.TrimSpace(asset.Name)
 		}
-		group, err := s.volcAsset.CreateAssetGroup(ctx, groupName, description)
+		group, err := client.CreateAssetGroup(ctx, groupName, description)
 		if err != nil {
 			return metadata, fmt.Errorf("create provider asset group: %w", err)
 		}
 		groupID = strings.TrimSpace(group.ID)
 	}
-	created, err := s.volcAsset.CreateAsset(ctx, groupID, sourceURL, "Image")
+	created, err := client.CreateAsset(ctx, groupID, sourceURL, "Image")
 	if err != nil {
 		return metadata, fmt.Errorf("create provider asset: %w", err)
 	}
-	active, err := s.volcAsset.WaitForAssetActive(ctx, created.ID)
+	active, err := client.WaitForAssetActive(ctx, created.ID)
 	if err != nil {
 		failedState := volcAssetSyncState{
 			Provider:    "volcengine",
@@ -64,7 +64,7 @@ func (s *AssetService) syncCharacterAssetProviderMetadata(ctx context.Context, a
 			AssetID:     strings.TrimSpace(created.ID),
 			Status:      strings.TrimSpace(created.Status),
 			AssetType:   firstNonEmptyString(created.AssetType, "Image"),
-			ProjectName: firstNonEmptyString(created.ProjectName, s.volcAsset.ProjectName()),
+			ProjectName: firstNonEmptyString(created.ProjectName, client.ProjectName()),
 			URL:         firstNonEmptyString(created.URL, sourceURL),
 			Error:       err.Error(),
 			SyncedAt:    time.Now().Format(time.RFC3339),
@@ -77,11 +77,15 @@ func (s *AssetService) syncCharacterAssetProviderMetadata(ctx context.Context, a
 		AssetID:     strings.TrimSpace(active.ID),
 		Status:      firstNonEmptyString(active.Status, "Active"),
 		AssetType:   firstNonEmptyString(active.AssetType, "Image"),
-		ProjectName: firstNonEmptyString(active.ProjectName, s.volcAsset.ProjectName()),
+		ProjectName: firstNonEmptyString(active.ProjectName, client.ProjectName()),
 		URL:         firstNonEmptyString(active.URL, sourceURL),
 		SyncedAt:    time.Now().Format(time.RFC3339),
 	}
 	return mergeVolcAssetMetadata(metadata, successState), nil
+}
+
+func (s *AssetService) syncCharacterAssetProviderMetadata(ctx context.Context, asset *model.Asset, sourceURL string, metadata map[string]interface{}) (map[string]interface{}, error) {
+	return syncCharacterAssetProviderMetadata(ctx, s.volcAsset, asset, sourceURL, metadata)
 }
 
 func buildVolcAssetGroupName(prefix string, asset *model.Asset) string {

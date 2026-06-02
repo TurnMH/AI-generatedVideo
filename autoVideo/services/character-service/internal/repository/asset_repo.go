@@ -221,6 +221,13 @@ func (r *AssetRepo) DeleteByCharacterID(characterID int64) error {
 	return r.db.Where("character_id = ?", characterID).Delete(&model.Asset{}).Error
 }
 
+// ListByCharacterID —— 查询与指定角色关联的所有资产
+func (r *AssetRepo) ListByCharacterID(characterID int64) ([]model.Asset, error) {
+	var assets []model.Asset
+	err := r.db.Where("character_id = ?", characterID).Order("updated_at DESC, id DESC").Find(&assets).Error
+	return assets, err
+}
+
 func removeEpisodeID(ids []int64, episodeID int64) []int64 {
 	filtered := make([]int64, 0, len(ids))
 	for _, id := range ids {
