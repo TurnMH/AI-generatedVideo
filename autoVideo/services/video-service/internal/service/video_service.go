@@ -413,16 +413,18 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// maxAttempts: 串行模式传 3，并行模式传 6
 	buildAndGenClip := func(c *model.VideoClip, overrideTailURL string, maxAttempts int) error {
 		projectIdentityRefs := identityCharacterReferences(task.RenderConfig, assetAnchors)
+		sceneChars := clipScenePersons(perClipSceneChars, c.ClipOrder)
 		clipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
-		clipCharURLs := mergeReferenceURLs(projectIdentityRefs, clipCharacterAssetRefs, perSceneCharacterImages(characterImageURLs, characterImagesByName, clipScenePersons(perClipSceneChars, c.ClipOrder)))
+		clipCharURLs := mergeReferenceURLs(projectIdentityRefs, clipCharacterAssetRefs, perSceneCharacterImages(characterImageURLs, characterImagesByName, sceneChars))
+		clipRefBindings := buildReferenceImageBindings(task.RenderConfig, assetAnchors, perClipAssetIDs, c.ClipOrder, sceneChars, characterImagesByName)
 		clipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, assetAnchors, c.ClipOrder)
 		assetAnchorHint := perClipAssetAnchorHint(perClipAssetIDs, assetAnchors, c.ClipOrder)
-		prompt := appendAssetAnchorHint(appendCharacterSheetHint(clipMotionPromptWithHints(
+		prompt := appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(clipMotionPromptWithHints(
 			c.ClipOrder, len(clips), perClipDescs,
 			resolvedMotionMode, resolvedStylePreset, resolvedModelName,
 			task.RenderConfig, charDescriptions,
 			perClipCameras, perClipMoods,
-		), clipCharURLs, resolvedModelName), assetAnchorHint)
+		), clipCharURLs, resolvedModelName), clipRefBindings, resolvedModelName), assetAnchorHint)
 		// 串行模式非首帧：文案基础可用时再额外注入强连续性提示，
 		// 但是否继承上一段尾帧由独立的串行链条件决定，不能被这里卡断。
 		if shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "" {
@@ -1337,7 +1339,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		}
 	}
 
-	retryClipCharURLs := mergeReferenceURLs(retryClipCharacterAssetRefs, perSceneCharacterImages(retryAllCharURLs, retryCharByName, clipScenePersons(perClipSceneChars, clip.ClipOrder)))
+	retryProjectIdentityRefs := identityCharacterReferences(task.RenderConfig, retryAssetAnchors)
+	retrySceneChars := clipScenePersons(perClipSceneChars, clip.ClipOrder)
+	retryClipCharURLs := mergeReferenceURLs(retryProjectIdentityRefs, retryClipCharacterAssetRefs, perSceneCharacterImages(retryAllCharURLs, retryCharByName, retrySceneChars))
 	retryPrompt := clipMotionPromptWithHints(
 		clip.ClipOrder, totalClips, perClipDescs,
 		task.MotionMode, task.StylePreset, resolvedModelName,
@@ -1347,7 +1351,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if strings.TrimSpace(retryPrompt) == "" {
 		retryPrompt = motionPrompt(task.MotionMode, task.StylePreset, task.SceneDescription, task.RenderConfig)
 	}
-	retryPrompt = appendAssetAnchorHint(appendCharacterSheetHint(retryPrompt, retryClipCharURLs, resolvedModelName), perClipAssetAnchorHint(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder))
+	retryPrompt = appendAssetAnchorHint(appendReferenceImageBindingHint(appendCharacterSheetHint(retryPrompt, retryClipCharURLs, resolvedModelName), buildReferenceImageBindings(task.RenderConfig, retryAssetAnchors, perClipAssetIDs, clip.ClipOrder, retrySceneChars, retryCharByName), resolvedModelName), perClipAssetAnchorHint(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder))
 
 	retryVoiceText := ""
 	if gen.SupportsNativeAudio() {
@@ -1453,12 +1457,15 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	}
 	requestedGenerateMode := genReq.GenerateMode
 	genReq = normalizeVideoGenerateReq(gen, resolvedModelName, genReq, retryClipAssetRefs)
+	if renderConfigBool(task.RenderConfig, "require_same_character") && len(retryProjectIdentityRefs) > 0 {
+		genReq.CharacterImageURLs = mergeReferenceURLs(retryProjectIdentityRefs, genReq.CharacterImageURLs)
+	}
 	trace := buildClipIdentityTrace(
 		resolvedModelName,
 		requestedGenerateMode,
 		genReq,
 		preferredStartEndIdentity,
-		identityCharacterReferences(task.RenderConfig, retryAssetAnchors),
+		retryProjectIdentityRefs,
 		retryClipCharURLs,
 		retryClipAssetRefs,
 		shouldAddSerialContinuityPrompt(task, clip.ClipOrder, clip.SceneSeq, clip.SceneGroupKey, perClipDialogues, perClipDescs) && clip.SourceImageURL != "",
@@ -3480,6 +3487,122 @@ func appendCharacterSheetHint(prompt string, characterRefs []string, modelName s
 	} else {
 		hint = "[Character reference note] The provided character reference image is a 4-panel reference sheet of ONE single character, arranged left-to-right as: (1) head-and-upper-body close-up with clear face, (2) front full-body, (3) side full-body, (4) back full-body. Treat all four panels as the SAME person and reconstruct that same character's face, hairstyle and costume. Do not treat them as four different people."
 	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return hint
+	}
+	return prompt + "\n" + hint
+}
+
+type referenceImageBinding struct {
+	Label string
+	URL   string
+	Note  string
+}
+
+func buildReferenceImageBindings(renderConfig model.RenderConfig, anchorMap map[int64]videoAssetPromptAnchor, sceneAssetIDs [][]int64, clipIndex int, sceneChars []string, charByName map[string]string) []referenceImageBinding {
+	var bindings []referenceImageBinding
+	anchorLabel := primaryIdentityLabel(renderConfig, anchorMap, sceneChars)
+	identityRefs := identityCharacterReferences(renderConfig, anchorMap)
+	for i, ref := range identityRefs {
+		note := "主角色身份锚点"
+		if i > 0 {
+			note = "补充身份参考"
+		}
+		bindings = appendReferenceImageBinding(bindings, referenceImageBinding{
+			Label: anchorLabel,
+			URL:   ref,
+			Note:  note,
+		})
+	}
+	if clipIndex >= 0 && clipIndex < len(sceneAssetIDs) {
+		for _, assetID := range sceneAssetIDs[clipIndex] {
+			anchor, ok := anchorMap[assetID]
+			if !ok || !strings.EqualFold(strings.TrimSpace(anchor.Type), "character") {
+				continue
+			}
+			bindings = appendReferenceImageBinding(bindings, referenceImageBinding{
+				Label: firstNonEmpty(strings.TrimSpace(anchor.Name), fmt.Sprintf("角色%d", assetID)),
+				URL:   referenceURLForVideoAnchor(anchor),
+				Note:  "角色参考图",
+			})
+		}
+	}
+	for _, name := range sceneChars {
+		raw := strings.TrimSpace(name)
+		if raw == "" {
+			continue
+		}
+		url := strings.TrimSpace(charByName[raw])
+		if url == "" {
+			url = strings.TrimSpace(charByName[strings.ToLower(raw)])
+		}
+		bindings = appendReferenceImageBinding(bindings, referenceImageBinding{
+			Label: raw,
+			URL:   url,
+			Note:  "场景角色参考",
+		})
+	}
+	return bindings
+}
+
+func primaryIdentityLabel(renderConfig model.RenderConfig, anchorMap map[int64]videoAssetPromptAnchor, sceneChars []string) string {
+	if assetID := renderConfigInt64(renderConfig, "character_anchor_asset_id"); assetID > 0 {
+		if anchor, ok := anchorMap[assetID]; ok {
+			if name := strings.TrimSpace(anchor.Name); name != "" {
+				return name
+			}
+		}
+	}
+	for _, name := range sceneChars {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "主角色"
+}
+
+func appendReferenceImageBinding(bindings []referenceImageBinding, binding referenceImageBinding) []referenceImageBinding {
+	binding.Label = strings.TrimSpace(binding.Label)
+	binding.URL = strings.TrimSpace(binding.URL)
+	binding.Note = strings.TrimSpace(binding.Note)
+	if binding.Label == "" || binding.URL == "" {
+		return bindings
+	}
+	for _, existing := range bindings {
+		if strings.EqualFold(strings.TrimSpace(existing.URL), binding.URL) {
+			return bindings
+		}
+	}
+	return append(bindings, binding)
+}
+
+func appendReferenceImageBindingHint(prompt string, bindings []referenceImageBinding, modelName string) string {
+	family := videoModelFamily(modelName)
+	if family != "doubao" && family != "suanneng" {
+		return prompt
+	}
+	if len(bindings) == 0 {
+		return prompt
+	}
+	if strings.Contains(prompt, "@图") {
+		return prompt
+	}
+	parts := make([]string, 0, len(bindings))
+	for i, binding := range bindings {
+		label := binding.Label
+		if binding.Note != "" {
+			label += "（" + binding.Note + "）"
+		}
+		parts = append(parts, fmt.Sprintf("@图%d=%s", i+1, label))
+		if len(parts) >= 4 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return prompt
+	}
+	hint := "【参考图绑定】" + strings.Join(parts, "；") + "。同名/同角色参考图表示同一人物，请严格保持同一张脸、发型、服装与身份，不要混成人物拼接或新角色。"
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return hint

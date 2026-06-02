@@ -131,6 +131,61 @@ func TestIdentityCharacterReferencesPreferActiveProviderAssetRef(t *testing.T) {
 	}
 }
 
+func TestBuildReferenceImageBindingsKeepsIdentityAnchorFirst(t *testing.T) {
+	rc := model.RenderConfig{
+		"character_anchor_asset_id":      11,
+		"character_anchor_image_url":     "https://example.com/project-anchor.png",
+		"approved_first_frame_image_url": "https://example.com/approved-first-frame.png",
+	}
+	anchors := map[int64]videoAssetPromptAnchor{
+		11: {
+			ID:                  11,
+			Type:                "character",
+			Name:                "林夏",
+			ImageURL:            "https://example.com/project-anchor.png",
+			Provider:            "seedance",
+			ProviderAssetURI:    "asset://asset-123",
+			ProviderAssetStatus: "Active",
+		},
+		12: {
+			ID:       12,
+			Type:     "character",
+			Name:     "阿杰",
+			ImageURL: "https://example.com/ajie.png",
+		},
+	}
+	got := buildReferenceImageBindings(rc, anchors, [][]int64{{11, 12}}, 0, []string{"林夏", "阿杰"}, map[string]string{"林夏": "https://example.com/linxia-sheet.png", "阿杰": "https://example.com/ajie.png"})
+	if len(got) < 3 {
+		t.Fatalf("len(got)=%d, want at least 3", len(got))
+	}
+	if got[0].URL != "asset://asset-123" || got[0].Label != "林夏" {
+		t.Fatalf("got[0]=%+v", got[0])
+	}
+	if got[1].URL != "https://example.com/approved-first-frame.png" {
+		t.Fatalf("got[1]=%+v", got[1])
+	}
+}
+
+func TestAppendReferenceImageBindingHintForDoubao(t *testing.T) {
+	prompt := appendReferenceImageBindingHint("主讲人口播产品卖点", []referenceImageBinding{
+		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
+		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
+	}, "doubao-seedance")
+	if !strings.Contains(prompt, "@图1=林夏") {
+		t.Fatalf("prompt=%q", prompt)
+	}
+	if !strings.Contains(prompt, "@图2=阿杰") {
+		t.Fatalf("prompt=%q", prompt)
+	}
+}
+
+func TestAppendReferenceImageBindingHintSkipsNonDoubaoFamily(t *testing.T) {
+	prompt := appendReferenceImageBindingHint("plain prompt", []referenceImageBinding{{Label: "林夏", URL: "asset://asset-123"}}, "vidu")
+	if prompt != "plain prompt" {
+		t.Fatalf("prompt=%q", prompt)
+	}
+}
+
 func TestReferenceURLForVideoAnchorAcceptsProviderAssetURICompatibilityAlias(t *testing.T) {
 	anchor := videoAssetPromptAnchor{
 		Provider:            "seedance",
