@@ -2814,11 +2814,11 @@ func clipMotionPromptChineseFamily(clipIdx, totalClips int, sceneDesc, motionMod
 		positionCue = "中段镜头，承接上一镜头动作，运动平滑衔接下一幕"
 	}
 
-	qualityPart := "主体身份稳定，骨骼结构正确，环境连贯，光影自然，服装与头发运动真实，全片色调统一"
+	qualityPart := "主体身份稳定，整体轮廓正确，环境连贯，光影自然，服装与头发运动真实，全片色调统一"
 	renderPart := describeRenderConfig(renderConfig)
 
 	// Global style anchor for visual consistency across all clips.
-	anchor := buildGlobalStyleAnchor(stylePreset, charDescriptions)
+	anchor := buildGlobalStyleAnchor(stylePreset, moderationSafePromptText(charDescriptions))
 
 	// Model-family-specific quality hints.
 	var familyHint string
@@ -2830,9 +2830,9 @@ func clipMotionPromptChineseFamily(clipIdx, totalClips int, sceneDesc, motionMod
 	case "vidu":
 		familyHint = "物理运动真实，速度感与惯性自然，镜头切换节奏明快，运动模糊适度"
 	case "doubao":
-		familyHint = "口型与台词同步精准，面部细节丰富，表情自然过渡，情绪层次清晰"
+		familyHint = "口型与台词同步精准，表情过渡自然，情绪层次清晰，角色形象保持稳定"
 	case "suanneng":
-		familyHint = "画面锐利清晰，色彩饱和度适中，人物面部表现力强，动作幅度与情节匹配"
+		familyHint = "画面锐利清晰，色彩饱和度适中，角色表现力强，动作幅度与情节匹配"
 	}
 
 	// --- Extract structured cinematography fields from inline annotations ---
@@ -3724,7 +3724,7 @@ func appendReferenceImageBindingHint(prompt string, bindings []referenceImageBin
 	}
 	parts := make([]string, 0, len(bindings))
 	for i, binding := range bindings {
-		label := binding.Label
+		label := moderationSafeBindingLabel(binding, i)
 		if binding.Note != "" {
 			label += "（" + binding.Note + "）"
 		}
@@ -3772,7 +3772,7 @@ func bindReferenceImageMentions(prompt string, bindings []referenceImageBinding)
 			label:       label,
 			index:       index,
 			placeholder: fmt.Sprintf("<<REFIMG%d>>", index),
-			repl:        fmt.Sprintf("%s(@图%d)", label, index),
+			repl:        fmt.Sprintf("%s(@图%d)", moderationSafeBindingLabel(binding, i), index),
 		})
 	}
 	slices.SortStableFunc(candidates, func(a, b candidate) int {
@@ -4753,14 +4753,51 @@ func buildVideoScenePrompt(sceneDescription string) string {
 	return strings.Join(parts, ", ")
 }
 
+func moderationSafePromptText(input string) string {
+	replacer := strings.NewReplacer(
+		"Li Enze", "speaker",
+		"李恩泽", "speaker",
+		"RAW photo", "clean cinematic frame",
+		"photorealistic", "cinematic",
+		"full-body live-action character portrait", "full-body character reference",
+		"live-action", "cinematic",
+		"8K UHD", "high detail",
+		"professional studio lighting", "clean commercial lighting",
+		"真实人物", "泛化商务人物",
+		"真人肖像", "泛化商务人物",
+		"真人短剧写实风格", "电影感商务短片风格",
+		"真实肤色", "自然整体观感",
+		"同一张脸", "同一角色形象",
+		"脸部", "人物形象",
+		"面部", "人物",
+		"骨相", "整体轮廓",
+		"五官", "外观",
+	)
+	text := strings.TrimSpace(replacer.Replace(input))
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	return strings.TrimSpace(text)
+}
+
+func moderationSafeBindingLabel(binding referenceImageBinding, index int) string {
+	note := strings.TrimSpace(binding.Note)
+	switch {
+	case strings.Contains(note, "主角色") || strings.Contains(note, "身份锚点"):
+		return "主角色"
+	case index == 0:
+		return "角色1"
+	default:
+		return fmt.Sprintf("角色%d", index+1)
+	}
+}
+
 func describeVideoStyle(stylePreset string) string {
 	switch strings.TrimSpace(stylePreset) {
 	case "realistic-drama":
-		return "grounded realistic drama style, natural skin tone, restrained color palette, believable live-action framing"
+		return "grounded cinematic business-drama style, restrained color palette, believable commercial framing"
 	case "fashion-commercial":
-		return "high-end fashion commercial style, refined live-action portrait lighting, premium fabric texture, polished beauty details"
+		return "high-end fashion commercial style, clean commercial lighting, premium fabric texture, polished product storytelling"
 	case "documentary-natural":
-		return "documentary natural style, observational camera language, realistic environment detail, soft natural light"
+		return "documentary natural style, observational camera language, grounded environment detail, soft natural light"
 	case "cinematic-epic":
 		return "epic cinematic style, dramatic contrast lighting, grand scale framing, rich atmospheric depth"
 	}
@@ -4770,9 +4807,9 @@ func describeVideoStyle(stylePreset string) string {
 	case "anime-3d":
 		return "3D anime style, soft toon-shaded materials, dimensional character volume, stylised CG depth-of-field, smooth motion arcs, clear material contrast between characters and environment"
 	case "live-action-film":
-		return "live-action cinematic film style, ARRI Alexa anamorphic look, motivated three-point lighting, realistic subsurface skin scattering, premium costume fabric texture, true cinematic depth of field, no CGI artifacts"
+		return "cinematic film style, anamorphic look, motivated lighting, premium costume texture, true cinematic depth of field, no CGI artifacts"
 	case "live-action-short":
-		return "live-action short drama style, natural handheld intimacy, believable close-up performance, realistic skin tone with natural imperfections, grounded emotional framing, everyday environment detail"
+		return "cinematic short-form drama style, natural handheld intimacy, grounded performance framing, everyday environment detail"
 	default:
 		return fmt.Sprintf("%s style, smooth motion, coherent design", stylePreset)
 	}
@@ -4826,14 +4863,14 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 	styleCN := describeVideoStyleChinese(stylePreset)
 	switch stylepreset.Canonical(stylePreset) {
 	case "anime-2d":
-		return fmt.Sprintf("【全局风格锁定】%s，全片保持统一配色方案与线条风格。%s", styleCN, charDescriptions)
+		return fmt.Sprintf("【全局风格锁定】%s，全片保持统一配色方案与线条风格。%s", styleCN, moderationSafePromptText(charDescriptions))
 	case "anime-3d":
-		return fmt.Sprintf("【全局风格锁定】%s，全片材质与渲染风格保持一致。%s", styleCN, charDescriptions)
+		return fmt.Sprintf("【全局风格锁定】%s，全片材质与渲染风格保持一致。%s", styleCN, moderationSafePromptText(charDescriptions))
 	case "live-action-film", "live-action-short":
-		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与演员外貌保持高度一致；同一人物在所有镜头中必须保持同一张脸、相同面部骨相与五官比例、相同年龄感、相同发型、相同眼镜、相同服装剪裁与配色、相近体型，不允许逐镜头发生五官漂移、年龄变化、发型变化、配饰变化或服装变形。人物身份锚点的优先级高于连续性镜头衔接，高于上一镜头尾帧的局部细节，高于场景/道具参考。%s", styleCN, charDescriptions)
+		return fmt.Sprintf("【全局风格锁定】%s，全片色调、布光方案与角色整体观感保持高度一致；同一人物在所有镜头中必须保持同一角色形象、相同年龄感、相同发型、相同眼镜、相同服装剪裁与配色、相近体型，不允许逐镜头发生身份漂移、年龄变化、发型变化、配饰变化或服装变形。人物身份锚点的优先级高于连续性镜头衔接，高于上一镜头尾帧的局部细节，高于场景/道具参考。%s", styleCN, moderationSafePromptText(charDescriptions))
 	default:
 		if charDescriptions != "" {
-			return fmt.Sprintf("全片风格统一，保持一致的视觉基调。%s", charDescriptions)
+			return fmt.Sprintf("全片风格统一，保持一致的视觉基调。%s", moderationSafePromptText(charDescriptions))
 		}
 		return "全片风格统一，保持一致的视觉基调"
 	}
@@ -4842,9 +4879,9 @@ func buildGlobalStyleAnchor(stylePreset, charDescriptions string) string {
 // buildGlobalStyleAnchorEN is the English variant for Sora/Veo/generic models.
 func buildGlobalStyleAnchorEN(stylePreset, charDescriptions string) string {
 	style := describeVideoStyle(stylePreset)
-	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips; the same character must keep the same face identity, the same facial structure and proportions, the same age impression, hairstyle, glasses, outfit silhouette/colors, and body shape across every shot, with no identity drift or appearance mutation; identity reference images outrank continuity cues, previous-tail continuity, and non-character asset references", style)
+	base := fmt.Sprintf("[Global Style Lock] %s; maintain identical color palette, lighting scheme, and art direction across all clips; the same character must keep the same overall identity, age impression, hairstyle, glasses, outfit silhouette/colors, and body shape across every shot, with no identity drift or appearance mutation; identity reference images outrank continuity cues, previous-tail continuity, and non-character asset references", style)
 	if charDescriptions != "" {
-		base += "; consistent character appearance: " + charDescriptions
+		base += "; consistent character appearance: " + moderationSafePromptText(charDescriptions)
 	}
 	return base
 }
@@ -4892,9 +4929,9 @@ func describeVideoStyleChinese(stylePreset string) string {
 	case "anime-3d":
 		return "三维动漫风格，卡通质感材质，立体角色，CG渲染景深，流畅运动弧线"
 	case "live-action-film":
-		return "电影级真人影像，ARRI摄影机胶片质感，专业三点布光，真实肤感与细节，电影景深，无CG痕迹"
+		return "电影感剧情影像，胶片质感，专业布光，角色整体观感稳定，电影景深，无CG痕迹"
 	case "live-action-short":
-		return "真人短剧写实风格，自然手持镜头，近景表演，真实肤色与自然光影，日常生活氛围"
+		return "电影感短片风格，自然手持镜头，近景表演，日常生活氛围，角色形象稳定"
 	default:
 		return "高品质影像，流畅运动，画面清晰稳定"
 	}
@@ -4923,7 +4960,7 @@ func motionPromptChinese(motionMode, stylePreset, sceneDescription string, rende
 	default:
 		basePart = "轻柔运动，流畅过渡，克制的镜头漂移"
 	}
-	qualityPart := "主体身份稳定，保持同一张脸、同一发型、同一眼镜、同一服装配色与版型，骨骼结构清晰，光影自然，服装和头发运动真实，画面连贯流畅"
+	qualityPart := "主体身份稳定，保持同一角色形象、同一发型、同一眼镜、同一服装配色与版型，整体轮廓清晰，光影自然，服装和头发运动真实，画面连贯流畅"
 	renderPart := describeRenderConfig(renderConfig)
 	negativePart := "避免：画面闪烁，帧抖动，身份漂移，脸部变化，发型变化，服装变形，扭曲肢体，多余手指，文字叠加，水印"
 

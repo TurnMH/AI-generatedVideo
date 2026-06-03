@@ -16,7 +16,7 @@ func TestMotionPromptIncludesRenderConfigHints(t *testing.T) {
 
 	for _, want := range []string{
 		"cinematic slow pan",
-		"grounded realistic drama style",
+		"grounded cinematic business-drama style",
 		"stable subject identity",
 		"portrait 9:16 composition",
 		"close-up framing",

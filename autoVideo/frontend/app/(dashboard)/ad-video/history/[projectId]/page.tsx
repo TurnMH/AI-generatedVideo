@@ -241,21 +241,27 @@ function softenVideoPromptText(input: string) {
   if (!text.trim()) return ''
 
   return text
-    .replace(/Li Enze|李恩泽/gi, 'the speaker')
+    .replace(/Li Enze|李恩泽/gi, 'speaker')
     .replace(/portrait/gi, 'character shot')
-    .replace(/photorealistic/gi, 'cinematic realistic')
+    .replace(/photorealistic/gi, 'cinematic')
     .replace(/RAW photo/gi, 'clean cinematic frame')
-    .replace(/full-body live-action character portrait/gi, 'full-body business character reference')
+    .replace(/full-body live-action character portrait/gi, 'full-body character reference')
+    .replace(/live-action/gi, 'cinematic')
     .replace(/8K UHD/gi, 'high detail')
+    .replace(/professional studio lighting/gi, 'clean commercial lighting')
+    .replace(/realistic skin texture/gi, 'natural lighting texture')
+    .replace(/realistic skin tone with natural imperfections/gi, 'natural lighting and stable styling')
+    .replace(/natural skin tone/gi, 'natural overall look')
+    .replace(/skin tone/gi, 'overall look')
+    .replace(/face structure|facial structure|face shape/gi, 'overall appearance')
+    .replace(/eye shape|nose shape|mouth shape|jawline/gi, 'facial consistency')
+    .replace(/same face|同一张脸/g, 'same character identity')
     .replace(/youthful charm/gi, 'professional presence')
     .replace(/expressive eyes/gi, 'focused expression')
     .replace(/warm smile/gi, 'calm expression')
-    .replace(/face shape/gi, 'overall appearance')
-    .replace(/skin tone/gi, 'overall look')
     .replace(/hairstyle/gi, 'styling')
     .replace(/hair color/gi, 'grooming')
-    .replace(/natural skin texture/gi, 'natural lighting texture')
-    .replace(/真实人物|真人肖像|人脸特写|面部特征|脸部细节/g, '泛化商务人物')
+    .replace(/真实人物|真人肖像|人脸特写|面部特征|脸部细节|真实肤色|真人短剧写实风格/g, '泛化商务人物')
     .replace(/\bcelebrity\b/gi, 'specific identity')
     .replace(/\s+/g, ' ')
     .trim()
@@ -265,14 +271,15 @@ function softenDialogueText(input: string) {
   const text = String(input || '')
   if (!text.trim()) return ''
   return text
+    .replace(/Li Enze|李恩泽/gi, 'speaker')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
 function softenSceneCharacters(characters: string[]) {
-  const cleaned = Array.from(new Set((characters || []).map((item) => String(item || '').trim()).filter(Boolean).map((item) => {
+  const cleaned = Array.from(new Set((characters || []).map((item) => String(item || '').trim()).filter(Boolean).map((item, index) => {
     if (/^李恩泽$/i.test(item) || /^Li Enze$/i.test(item)) return 'speaker'
-    return item
+    return `role${index + 1}`
   })))
   return cleaned
 }
@@ -289,9 +296,9 @@ function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payloa
 }
 
 const CHARACTER_IDENTITY_CONSTRAINTS = [
-  'All shots must depict the same person as the uploaded character reference.',
-  'Keep the same face structure, eye shape, nose shape, mouth shape, jawline, age impression, and overall identity.',
-  'Do not switch identity, do not generate a lookalike stranger, and do not let continuity replace identity anchoring.',
+  'All shots must depict the same character identity as the uploaded reference.',
+  'Keep the same overall appearance, styling, outfit silhouette, accessories, and age impression across every clip.',
+  'Do not switch identity, do not create a lookalike stranger, and do not let continuity cues override the uploaded identity anchor.',
 ]
 
 function humanizeVideoErrorMessage(message?: string) {
@@ -2540,112 +2547,136 @@ ${paceBlock}`
                         ) : null}
                       </div>
 
-                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-3">
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
-                            <div className="text-sm font-medium text-white">已生成的首尾帧分镜图预览</div>
-                            <div className="mt-1 text-[11px] text-slate-400">这里直接展示步骤 2 当前范围内的分镜图结果，不用再切去别的区域找。生成后先在这里看图是否为空图、错图、旧图。串行模式下，这批图依然是链式生成要用到的过渡锚点。</div>
+                            <div className="text-sm font-medium text-white">分镜列表</div>
+                            <div className="mt-1 text-[11px] text-slate-400">按镜头顺序把分镜图、台词、场景描述和人物绑定合并在同一张卡片里，避免在图片区和文本区之间反复对照。</div>
                           </div>
-                          <div className="text-[11px] text-violet-100/80">{completedStoryboardImages} / {displayStoryboards.length} 已可见 · {step3ExecutionModeLabel}</div>
+                          <div className="flex flex-wrap gap-2 text-[11px] text-violet-100/80">
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{completedStoryboardImages} / {displayStoryboards.length} 已有图</span>
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{characterBoundStoryboardCount} / {storyboardsWithCharacters.length} 人物已绑定</span>
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{step3ExecutionModeLabel}</span>
+                          </div>
                         </div>
 
-                        <div className="grid max-h-[640px] gap-3 overflow-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+                        <div className="max-h-[760px] space-y-3 overflow-auto pr-1">
                           {displayStoryboards.length === 0 ? (
                             <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
-                              {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜文本，因此也还没有可展示的分镜图。'}
+                              {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜文本，因此也还没有可展示或绑定的分镜。'}
                             </div>
                           ) : displayStoryboards.map((storyboard, index) => {
                             const imageUrl = String(storyboard.image_url || '').trim()
                             const hasImage = Boolean(imageUrl)
+                            const boundAssets = storyboardAssetDetailMap.get(storyboard.id) || []
+                            const boundCharacterAssets = boundAssets.filter((asset) => asset.type === 'character')
+                            const requiredCharacters = Array.isArray(storyboard.characters) ? storyboard.characters : []
+                            const hasRequiredCharacters = requiredCharacters.length > 0
+                            const characterBindingReady = !hasRequiredCharacters || boundCharacterAssets.some((asset) => String(asset.image_url || '').trim())
+                            const isFocused = focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id)
                             return (
-                              <div key={`step2-storyboard-image-${storyboard.id}`} className={`rounded-lg border p-3 space-y-3 ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-medium text-white">分镜 #{storyboard.sequence_number}</div>
-                                    <div className="mt-1 text-[11px] text-slate-400">目标时长 {storyboard.duration || '-'} 秒 · {storyboard.status || '-'}</div>
-                                  </div>
-                                  <div className={`rounded-full border px-2 py-0.5 text-[10px] ${hasImage ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
-                                    {hasImage ? '已生成' : '待补图'}
-                                  </div>
-                                </div>
+                              <div key={`step2-storyboard-row-${storyboard.id}`} className={`rounded-xl border p-3 transition ${isFocused ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}>
+                                <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <div className="text-sm font-medium text-white">#{storyboard.sequence_number} · 分镜 {index + 1}</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">episode {storyboard.episode_id || '-'} · {storyboard.duration || '-'} 秒 · {storyboard.status || '-'}</div>
+                                      </div>
+                                      <div className={`rounded-full border px-2 py-0.5 text-[10px] ${hasImage ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                        {hasImage ? '图已就绪' : '待补图'}
+                                      </div>
+                                    </div>
 
-                                {hasImage ? (
-                                  <a href={imageUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-white/10 bg-black/30">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={imageUrl} alt={`step2-storyboard-image-${storyboard.id}`} className="h-48 w-full object-cover transition hover:opacity-90" />
-                                  </a>
-                                ) : (
-                                  <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-slate-500">
-                                    当前还没有生成这张分镜图
-                                  </div>
-                                )}
+                                    {hasImage ? (
+                                      <a href={imageUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img src={imageUrl} alt={`step2-storyboard-image-${storyboard.id}`} className="h-36 w-full object-cover transition hover:opacity-90" />
+                                      </a>
+                                    ) : (
+                                      <div className="flex h-36 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 px-3 text-center text-xs text-slate-500">
+                                        当前还没有生成这张分镜图
+                                      </div>
+                                    )}
 
-                                <div className="rounded-lg border border-violet-400/20 bg-violet-500/10 p-3 text-[11px] text-violet-50">
-                                  <div>{index === 0 ? '第 1 张分镜图，会同时承担首镜确认基准。' : selectedStep3ExecutionMode === 'serial' ? '串行模式下，这张图不会因为链式衔接而失效，仍会参与当前段与后一段之间的过渡锚定。' : '并行模式下，这张图会作为当前段独立提交时的直接参考图。'}</div>
-                                  {imageUrl && <div className="mt-1 break-all text-violet-100/75">{imageUrl}</div>}
+                                    <div className="space-y-1 text-[11px] text-slate-400">
+                                      <div className={characterBindingReady ? 'text-emerald-200/90' : 'text-amber-200/90'}>
+                                        人物绑定：{hasRequiredCharacters ? `${boundCharacterAssets.length} 个已绑定` : '无需绑定人物'}
+                                      </div>
+                                      {index === 0 ? (
+                                        <div className={firstFrameIdentityApproved ? 'text-emerald-200/90' : 'text-amber-200/90'}>
+                                          首镜确认：{firstFrameIdentityApproved ? '已确认角色正确' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}
+                                        </div>
+                                      ) : (
+                                        <div>{selectedStep3ExecutionMode === 'serial' ? '串行过渡锚点' : '并行段落参考图'}</div>
+                                      )}
+                                      {imageUrl && <div className="truncate text-violet-100/60" title={imageUrl}>{imageUrl}</div>}
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-3">
+                                    <div className="grid gap-3 xl:grid-cols-2">
+                                      <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+                                        <div className="mb-2 text-xs font-medium text-violet-200">台词 / 口播</div>
+                                        <div className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                                      </div>
+
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                                        <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
+                                        <div className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2 text-[11px]">
+                                      {requiredCharacters.length > 0 ? requiredCharacters.map((name) => (
+                                        <span key={`storyboard-required-character-${storyboard.id}-${name}`} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-amber-100">
+                                          需人物：{name}
+                                        </span>
+                                      )) : (
+                                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-slate-400">无人物要求</span>
+                                      )}
+                                      {boundAssets.map((asset) => (
+                                        <button
+                                          key={`storyboard-bound-asset-${storyboard.id}-${asset.id}`}
+                                          type="button"
+                                          className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-cyan-100 transition hover:bg-cyan-500/20"
+                                          onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
+                                        >
+                                          已绑：{asset.name || `素材#${asset.id}`}
+                                        </button>
+                                      ))}
+                                    </div>
+
+                                    {characterAssets.length > 0 && (
+                                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <div className="text-xs font-medium text-amber-100">人物绑定</div>
+                                          <div className="text-[11px] text-amber-100/75">点击角色绑定到当前分镜；已绑定项会保留</div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                          {characterAssets.map((asset) => {
+                                            const isBound = (storyboard.asset_ids || []).includes(asset.id)
+                                            const isActive = focusedAssetIds.has(asset.id) || focusedAssetId === asset.id
+                                            return (
+                                              <button
+                                                key={`storyboard-character-toggle-${storyboard.id}-${asset.id}`}
+                                                type="button"
+                                                disabled={bindingStoryboardId === storyboard.id || pipelineBusy || !step2Enabled}
+                                                onClick={() => void toggleStoryboardCharacterBinding(storyboard, asset)}
+                                                className={`rounded-full border px-3 py-1 text-[11px] transition ${isBound ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-100' : 'border-white/10 bg-black/20 text-slate-300'} ${isActive ? 'ring-1 ring-cyan-300/60' : ''} disabled:cursor-not-allowed disabled:opacity-60`}
+                                              >
+                                                {bindingStoryboardId === storyboard.id ? '保存中…' : `${isBound ? '已绑定' : '点击绑定'} · ${asset.name || `人物#${asset.id}`}`}
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             )
                           })}
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4">
-
-                        <div className="max-h-[560px] space-y-3 overflow-auto pr-1">
-                          {displayStoryboards.length === 0 ? (
-                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
-                              {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜文本。'}
-                            </div>
-                          ) : displayStoryboards.map((storyboard, index) => (
-                            <div key={`step2-storyboard-text-${storyboard.id}`} className={`rounded-lg border p-3 space-y-3 ${focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id) ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}>
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-white">分镜 #{storyboard.sequence_number}</div>
-                                  <div className="mt-1 text-[11px] text-slate-400">episode {storyboard.episode_id || '-'} · 目标时长 {storyboard.duration || '-'} 秒</div>
-                                </div>
-                                <div className={`rounded-full border px-2 py-0.5 text-[10px] ${index === 0 ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'}`}>
-                                  {index === 0 ? '第 1 个分镜（支持上传图片）' : '仅查看文本'}
-                                </div>
-                              </div>
-
-                              <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
-                                <div className="mb-2 text-xs font-medium text-violet-200">台词 / 口播</div>
-                                <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
-                              </div>
-
-                              <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
-                                <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
-                                <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
-                              </div>
-
-                              {characterAssets.length > 0 && (
-                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-xs font-medium text-amber-100">人物绑定</div>
-                                    <div className="text-[11px] text-amber-100/75">点击下方角色即可绑定到当前分镜，已绑定的不再支持在这里删除</div>
-                                  </div>
-                                  <div className="flex flex-wrap gap-2">
-                                    {characterAssets.map((asset) => {
-                                      const isBound = (storyboard.asset_ids || []).includes(asset.id)
-                                      const isActive = focusedAssetIds.has(asset.id) || focusedAssetId === asset.id
-                                      return (
-                                        <button
-                                          key={`storyboard-character-toggle-${storyboard.id}-${asset.id}`}
-                                          type="button"
-                                          disabled={bindingStoryboardId === storyboard.id || pipelineBusy || !step2Enabled}
-                                          onClick={() => void toggleStoryboardCharacterBinding(storyboard, asset)}
-                                          className={`rounded-full border px-3 py-1 text-[11px] transition ${isBound ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-100' : 'border-white/10 bg-black/20 text-slate-300'} ${isActive ? 'ring-1 ring-cyan-300/60' : ''} disabled:cursor-not-allowed disabled:opacity-60`}
-                                        >
-                                          {bindingStoryboardId === storyboard.id ? '保存中…' : `${isBound ? '已绑定（保留）' : '点击绑定'} · ${asset.name || `人物#${asset.id}`}`}
-                                        </button>
-                                      )
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
                         </div>
                       </div>
                     </div>

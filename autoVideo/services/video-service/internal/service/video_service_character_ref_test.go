@@ -211,10 +211,10 @@ func TestAppendReferenceImageBindingHintForDoubao(t *testing.T) {
 		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
 		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
 	}, "doubao-seedance")
-	if !strings.Contains(prompt, "@图1=林夏") {
+	if !strings.Contains(prompt, "@图1=主角色") {
 		t.Fatalf("prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "@图2=阿杰") {
+	if !strings.Contains(prompt, "@图2=角色2") {
 		t.Fatalf("prompt=%q", prompt)
 	}
 }
@@ -224,10 +224,10 @@ func TestAppendReferenceImageBindingHintReplacesCharacterNamesInsidePrompt(t *te
 		{Label: "林夏", URL: "asset://asset-123", Note: "主角色身份锚点"},
 		{Label: "阿杰", URL: "https://example.com/ajie.png", Note: "角色参考图"},
 	}, "doubao-seedance")
-	if !strings.Contains(prompt, "林夏(@图1)走向镜头") {
+	if !strings.Contains(prompt, "主角色(@图1)走向镜头") {
 		t.Fatalf("prompt=%q", prompt)
 	}
-	if !strings.Contains(prompt, "阿杰(@图2)在后景") {
+	if !strings.Contains(prompt, "角色2(@图2)在后景") {
 		t.Fatalf("prompt=%q", prompt)
 	}
 	if strings.Contains(prompt, "【参考图绑定】") {
@@ -240,7 +240,7 @@ func TestBindReferenceImageMentionsPrefersLongerNamesFirst(t *testing.T) {
 		{Label: "林夏", URL: "asset://asset-1"},
 		{Label: "小林夏", URL: "asset://asset-2"},
 	})
-	if !strings.Contains(got, "小林夏(@图2)站在林夏(@图1)身后") {
+	if !strings.Contains(got, "角色2(@图2)站在角色1(@图1)身后") {
 		t.Fatalf("got=%q", got)
 	}
 }
