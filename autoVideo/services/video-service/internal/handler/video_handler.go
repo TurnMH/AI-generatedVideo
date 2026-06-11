@@ -192,6 +192,19 @@ func buildNativeAudioSubmissionText(prompt, voiceText string, generateAudio bool
 	return prompt + "\n\n[Audio dialogue / narration]\n" + voiceText
 }
 
+func bridgeCharacterFocusToSceneCharacters(focuses []string) [][]string {
+	if len(focuses) == 0 {
+		return nil
+	}
+	out := make([][]string, len(focuses))
+	for i, focus := range focuses {
+		if trimmed := strings.TrimSpace(focus); trimmed != "" {
+			out[i] = []string{trimmed}
+		}
+	}
+	return out
+}
+
 func buildTaskSubmissionPreview(task *model.VideoTask) gin.H {
 	if task == nil {
 		return gin.H{}
@@ -470,6 +483,10 @@ type generateReq struct {
 	SpatialAnchors              []string           `json:"spatial_anchors"`
 	SubjectPositions            []string           `json:"subject_positions"`
 	TransitionNotes             []string           `json:"transition_notes"`
+	TransitionPlan              []string           `json:"transition_plan"`
+	CharacterFocus              []string           `json:"character_focus"`
+	CostumeHints                []string           `json:"costume_hints"`
+	LocationTags                []string           `json:"location_tags"`
 	SceneCharacters             [][]string         `json:"scene_characters"`
 	SceneAssetIDs               [][]int64          `json:"scene_asset_ids"`
 	StylePreset                 string             `json:"style_preset"`
@@ -477,6 +494,7 @@ type generateReq struct {
 	ModelName                   string             `json:"model_name"`
 	AudioURL                    string             `json:"audio_url"`
 	SubtitleText                string             `json:"subtitle_text"`
+	SubtitleTimeline            []map[string]any   `json:"subtitle_timeline"`
 	VideoMode                   string             `json:"video_mode"`
 	ExportFormat                string             `json:"export_format"`
 	SceneDescription            string             `json:"scene_description"`
@@ -547,6 +565,12 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	req.ModelName = setDefault(req.ModelName, "kling")
 
 	// Store per-clip scene descriptions in render_config for use during generation.
+	if len(req.TransitionNotes) == 0 && len(req.TransitionPlan) > 0 {
+		req.TransitionNotes = req.TransitionPlan
+	}
+	if len(req.SceneCharacters) == 0 && len(req.CharacterFocus) > 0 {
+		req.SceneCharacters = bridgeCharacterFocusToSceneCharacters(req.CharacterFocus)
+	}
 	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
 	req.RenderConfig = applyCharacterIdentityConfig(req.RenderConfig, req.CharacterConsistencyEnabled, req.RequireSameCharacter, req.CharacterAnchorAssetID, req.CharacterAnchorImageURL, req.CharacterAnchorSource, req.IdentityConstraints, req.SameCharacterAsFirstScene)
 	if len(req.Dialogues) == 0 && strings.TrimSpace(req.SubtitleText) != "" {
@@ -561,6 +585,9 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 		if strings.TrimSpace(req.SubtitleText) == "" {
 			req.SubtitleText = strings.Join(req.Dialogues, "\n")
 		}
+	}
+	if len(req.SubtitleTimeline) > 0 {
+		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
 	}
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
@@ -577,6 +604,15 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	}
 	if len(req.Moods) > 0 {
 		req.RenderConfig["moods"] = req.Moods
+	}
+	if len(req.CharacterFocus) > 0 {
+		req.RenderConfig["character_focus"] = req.CharacterFocus
+	}
+	if len(req.CostumeHints) > 0 {
+		req.RenderConfig["costume_hints"] = req.CostumeHints
+	}
+	if len(req.LocationTags) > 0 {
+		req.RenderConfig["location_tags"] = req.LocationTags
 	}
 	if len(req.SceneAssetIDs) > 0 {
 		req.RenderConfig["scene_asset_ids"] = req.SceneAssetIDs
@@ -933,6 +969,10 @@ type projectGenerateReq struct {
 	SpatialAnchors              []string           `json:"spatial_anchors"`
 	SubjectPositions            []string           `json:"subject_positions"`
 	TransitionNotes             []string           `json:"transition_notes"`
+	TransitionPlan              []string           `json:"transition_plan"`
+	CharacterFocus              []string           `json:"character_focus"`
+	CostumeHints                []string           `json:"costume_hints"`
+	LocationTags                []string           `json:"location_tags"`
 	SceneCharacters             [][]string         `json:"scene_characters"` // per-clip character names for ref image filtering
 	SceneAssetIDs               [][]int64          `json:"scene_asset_ids"`  // per-clip related asset IDs for scene/prop continuity
 	StylePreset                 string             `json:"style_preset"`
@@ -940,6 +980,7 @@ type projectGenerateReq struct {
 	ModelName                   string             `json:"model_name"`
 	AudioURL                    string             `json:"audio_url"`
 	SubtitleText                string             `json:"subtitle_text"`
+	SubtitleTimeline            []map[string]any   `json:"subtitle_timeline"`
 	VideoMode                   string             `json:"video_mode"`
 	ExportFormat                string             `json:"export_format"`
 	SceneDescription            string             `json:"scene_description"`
@@ -986,6 +1027,12 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 		return v
 	}
 
+	if len(req.TransitionNotes) == 0 && len(req.TransitionPlan) > 0 {
+		req.TransitionNotes = req.TransitionPlan
+	}
+	if len(req.SceneCharacters) == 0 && len(req.CharacterFocus) > 0 {
+		req.SceneCharacters = bridgeCharacterFocusToSceneCharacters(req.CharacterFocus)
+	}
 	req.RenderConfig = normalizeContinuityRenderConfig(req.RenderConfig, req.SpatialAnchors, req.SubjectPositions, req.TransitionNotes, req.SceneCharacters)
 	req.RenderConfig = applyCharacterIdentityConfig(req.RenderConfig, req.CharacterConsistencyEnabled, req.RequireSameCharacter, req.CharacterAnchorAssetID, req.CharacterAnchorImageURL, req.CharacterAnchorSource, req.IdentityConstraints, req.SameCharacterAsFirstScene)
 	if len(req.SceneDescriptions) > 0 {
@@ -997,6 +1044,9 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 			req.SubtitleText = strings.Join(req.Dialogues, "\n")
 		}
 	}
+	if len(req.SubtitleTimeline) > 0 {
+		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
+	}
 	if len(req.Durations) > 0 {
 		req.RenderConfig["durations"] = req.Durations
 	}
@@ -1005,6 +1055,15 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 	}
 	if len(req.Moods) > 0 {
 		req.RenderConfig["moods"] = req.Moods
+	}
+	if len(req.CharacterFocus) > 0 {
+		req.RenderConfig["character_focus"] = req.CharacterFocus
+	}
+	if len(req.CostumeHints) > 0 {
+		req.RenderConfig["costume_hints"] = req.CostumeHints
+	}
+	if len(req.LocationTags) > 0 {
+		req.RenderConfig["location_tags"] = req.LocationTags
 	}
 	if len(req.SceneCharacters) > 0 {
 		req.RenderConfig["scene_characters"] = req.SceneCharacters
@@ -1171,11 +1230,16 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		SpatialAnchors    []string   `json:"spatial_anchors"`
 		SubjectPositions  []string   `json:"subject_positions"`
 		TransitionNotes   []string   `json:"transition_notes"`
+		TransitionPlan    []string   `json:"transition_plan"`
+		CharacterFocus    []string   `json:"character_focus"`
+		CostumeHints      []string   `json:"costume_hints"`
+		LocationTags      []string   `json:"location_tags"`
 		SceneCharacters   [][]string `json:"scene_characters"` // per-clip character names
 		SceneAssetIDs     [][]int64  `json:"scene_asset_ids"`  // per-clip related asset IDs
-		AudioURL          string     `json:"audio_url"`
-		SceneDescription  string     `json:"scene_description"`
-		SceneGroupKeys    []string   `json:"scene_group_keys"` // 串行模式：每 clip 的场景 key
+		AudioURL          string           `json:"audio_url"`
+		SubtitleTimeline  []map[string]any `json:"subtitle_timeline"`
+		SceneDescription  string           `json:"scene_description"`
+		SceneGroupKeys    []string         `json:"scene_group_keys"` // 串行模式：每 clip 的场景 key
 	}
 	var req struct {
 		Episodes        []episodeImages    `json:"episodes" binding:"required,min=1"`
@@ -1224,12 +1288,21 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 			}
 			rc = copy
 		}
+		if len(ep.TransitionNotes) == 0 && len(ep.TransitionPlan) > 0 {
+			ep.TransitionNotes = ep.TransitionPlan
+		}
+		if len(ep.SceneCharacters) == 0 && len(ep.CharacterFocus) > 0 {
+			ep.SceneCharacters = bridgeCharacterFocusToSceneCharacters(ep.CharacterFocus)
+		}
 		rc = normalizeContinuityRenderConfig(rc, ep.SpatialAnchors, ep.SubjectPositions, ep.TransitionNotes, ep.SceneCharacters)
 		if len(ep.SceneDescriptions) > 0 {
 			rc["scene_descriptions"] = ep.SceneDescriptions
 		}
 		if len(ep.Dialogues) > 0 {
 			rc["dialogues"] = ep.Dialogues
+		}
+		if len(ep.SubtitleTimeline) > 0 {
+			rc["subtitle_timeline"] = ep.SubtitleTimeline
 		}
 		if len(ep.Durations) > 0 {
 			rc["durations"] = ep.Durations
@@ -1239,6 +1312,15 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		}
 		if len(ep.Moods) > 0 {
 			rc["moods"] = ep.Moods
+		}
+		if len(ep.CharacterFocus) > 0 {
+			rc["character_focus"] = ep.CharacterFocus
+		}
+		if len(ep.CostumeHints) > 0 {
+			rc["costume_hints"] = ep.CostumeHints
+		}
+		if len(ep.LocationTags) > 0 {
+			rc["location_tags"] = ep.LocationTags
 		}
 		if len(ep.SceneCharacters) > 0 {
 			rc["scene_characters"] = ep.SceneCharacters

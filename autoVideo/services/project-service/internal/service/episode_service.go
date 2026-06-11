@@ -665,6 +665,13 @@ func (s *EpisodeService) extractAssetsAfterSplit(ctx context.Context, projectID 
 		return
 	}
 
+	firstEpisode := episodes[0]
+	for i := range episodes {
+		if episodes[i].EpisodeNumber > 0 && episodes[i].EpisodeNumber < firstEpisode.EpisodeNumber {
+			firstEpisode = episodes[i]
+		}
+	}
+
 	if err := s.deleteExistingAssets(ctx, projectID); err != nil {
 		if s.logger != nil {
 			s.logger.Error("delete existing assets before episode extraction failed; aborting re-extraction to avoid duplicates",
@@ -675,36 +682,25 @@ func (s *EpisodeService) extractAssetsAfterSplit(ctx context.Context, projectID 
 		return // don't proceed — we'd create duplicate assets
 	}
 
-	const workers = 2
-	sem := make(chan struct{}, workers)
-	var wg sync.WaitGroup
-
-	for i := range episodes {
-		episode := episodes[i]
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(ep model.Episode) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if err := s.extractAssetsForEpisode(ctx, projectID, uint64(ep.ID)); err != nil && s.logger != nil {
-				s.logger.Warn("episode asset extraction failed",
-					zap.Uint64("project_id", projectID),
-					zap.Uint64("episode_id", uint64(ep.ID)),
-					zap.Int("episode_number", ep.EpisodeNumber),
-					zap.Error(err),
-				)
-				return
-			}
-			if s.logger != nil {
-				s.logger.Info("episode asset extraction completed",
-					zap.Uint64("project_id", projectID),
-					zap.Uint64("episode_id", uint64(ep.ID)),
-					zap.Int("episode_number", ep.EpisodeNumber),
-				)
-			}
-		}(episode)
+	if err := s.extractAssetsForEpisode(ctx, projectID, uint64(firstEpisode.ID)); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("default episode asset extraction failed",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("episode_id", uint64(firstEpisode.ID)),
+				zap.Int("episode_number", firstEpisode.EpisodeNumber),
+				zap.Error(err),
+			)
+		}
+		return
 	}
-	wg.Wait()
+	if s.logger != nil {
+		s.logger.Info("default episode asset extraction completed; remaining episodes require manual start",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("episode_id", uint64(firstEpisode.ID)),
+			zap.Int("episode_number", firstEpisode.EpisodeNumber),
+			zap.Int("remaining_episodes", max(len(episodes)-1, 0)),
+		)
+	}
 }
 
 // ─── Progress tracking ──────────────────────────────────────────────────────
@@ -2084,17 +2080,28 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 		storyboardsTriggered := false
 		defer func() {
 			if !timedOut && processedEpisodes >= len(eps) && s.storyboardSvc != nil {
+				firstEpisodeID := eps[0].ID
+				firstEpisodeNumber := eps[0].EpisodeNumber
+				for i := range eps {
+					if eps[i].EpisodeNumber > 0 && eps[i].EpisodeNumber < firstEpisodeNumber {
+						firstEpisodeID = eps[i].ID
+						firstEpisodeNumber = eps[i].EpisodeNumber
+					}
+				}
 				if s.logger != nil {
-					s.logger.Info("auto preparation finished; triggering storyboard extraction",
+					s.logger.Info("auto preparation finished; triggering storyboard extraction for first episode only",
 						zap.Uint64("project_id", project.ID),
+						zap.Uint64("episode_id", firstEpisodeID),
+						zap.Int("episode_number", firstEpisodeNumber),
 						zap.Int("episode_count", len(eps)),
 						zap.Bool("resumed", resumed),
 					)
 				}
-				if _, err := s.ExtractStoryboards(autoCtx, project.ID, nil); err != nil {
+				if _, err := s.ExtractStoryboards(autoCtx, project.ID, &firstEpisodeID); err != nil {
 					if s.logger != nil {
 						s.logger.Warn("auto storyboard extraction after preparation failed",
 							zap.Uint64("project_id", project.ID),
+							zap.Uint64("episode_id", firstEpisodeID),
 							zap.Bool("resumed", resumed),
 							zap.Error(err),
 						)

@@ -196,6 +196,7 @@ export function ScriptTab({
   const [polishingEpisode, setPolishingEpisode] = useState(false)
   const [deletingEpisodeId, setDeletingEpisodeId] = useState<number | null>(null)
   const [episodeDeleteTarget, setEpisodeDeleteTarget] = useState<Episode | null>(null)
+  const [extractingEpisodeAssets, setExtractingEpisodeAssets] = useState<number | null>(null)
   const [generatingEpisodeAssets, setGeneratingEpisodeAssets] = useState<number | null>(null)
   // Script optimize + AI review states
   const [optimizingEpisode, setOptimizingEpisode] = useState<number | null>(null)
@@ -992,6 +993,7 @@ export function ScriptTab({
   }
 
   const handleExtractEpisodeAssets = async (episodeId: number, episodeNum: number) => {
+    setExtractingEpisodeAssets(episodeId)
     try {
       await assetAPI.extractEpisode(projectId, episodeId)
       mutateExtractAssets()
@@ -1001,6 +1003,28 @@ export function ScriptTab({
       setTimeout(() => mutateExtractAssets(), 2500)
     } catch {
       toast({ title: `第 ${episodeNum} 集资源提取失败`, variant: 'destructive' })
+    } finally {
+      setExtractingEpisodeAssets(null)
+    }
+  }
+
+  const handleAutoStartEpisodeAssets = async (episodeId: number, episodeNum: number) => {
+    setExtractingEpisodeAssets(episodeId)
+    try {
+      await assetAPI.extractEpisode(projectId, episodeId)
+      mutateExtractAssets()
+      setTimeout(() => mutateExtractAssets(), 1000)
+      setTimeout(() => mutateExtractAssets(), 2500)
+
+      setGeneratingEpisodeAssets(episodeId)
+      await assetAPI.generateAll(projectId, episodeId, selectedProjectImageModelName)
+      mutateExtractAssets()
+      toast({ title: `第 ${episodeNum} 集已自动开始提取并生成`, variant: 'success' })
+    } catch {
+      toast({ title: `第 ${episodeNum} 集自动提取生成失败`, variant: 'destructive' })
+    } finally {
+      setExtractingEpisodeAssets(null)
+      setGeneratingEpisodeAssets(null)
     }
   }
 
@@ -1670,11 +1694,31 @@ export function ScriptTab({
                         <Button
                           size="sm"
                           variant="ghost"
+                          className="h-6 px-2 text-xs text-violet-600 hover:text-violet-800"
+                          onClick={() => handleAutoStartEpisodeAssets(ep.id, ep.episode_number)}
+                          disabled={extractingEpisodeAssets === ep.id || generatingEpisodeAssets === ep.id}
+                          title="自动执行：先提取本集资源，再开始生成本集资源图"
+                        >
+                          {extractingEpisodeAssets === ep.id || generatingEpisodeAssets === ep.id ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Sparkles className="mr-1 h-3 w-3" />
+                          )}
+                          自动开始提取生成
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
                           className="h-6 px-2 text-xs text-orange-500 hover:text-orange-700"
                           onClick={() => handleExtractEpisodeAssets(ep.id, ep.episode_number)}
+                          disabled={extractingEpisodeAssets === ep.id || generatingEpisodeAssets === ep.id}
                           title="从本集剧本中提取角色、场景等资源"
                         >
-                          <Sparkles className="mr-1 h-3 w-3" />
+                          {extractingEpisodeAssets === ep.id ? (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Sparkles className="mr-1 h-3 w-3" />
+                          )}
                           提取资源
                         </Button>
                         <Button
@@ -1682,7 +1726,7 @@ export function ScriptTab({
                           variant="ghost"
                           className="h-6 px-2 text-xs text-blue-500 hover:text-blue-700"
                           onClick={() => handleGenerateEpisodeAssetsFromScript(ep.id, ep.episode_number)}
-                          disabled={generatingEpisodeAssets === ep.id}
+                          disabled={extractingEpisodeAssets === ep.id || generatingEpisodeAssets === ep.id}
                           title="生成本集所有待处理资源的图片"
                         >
                           {generatingEpisodeAssets === ep.id ? (

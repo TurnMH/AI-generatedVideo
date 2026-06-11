@@ -397,6 +397,14 @@ func (f *FFmpegService) AddSubtitleFromSegmentsWithStyle(ctx context.Context, vi
 	return f.addSubtitleFromSRTContent(ctx, videoPath, srtContent, style)
 }
 
+func (f *FFmpegService) AddSubtitleFromTimelineWithStyle(ctx context.Context, videoPath string, timeline []map[string]any, style SubtitleStyle, referenceText string) (string, error) {
+	segments := buildSubtitleSegmentsFromTimeline(timeline)
+	if len(segments) == 0 {
+		return "", fmt.Errorf("empty subtitle timeline")
+	}
+	return f.AddSubtitleFromSegmentsWithStyle(ctx, videoPath, segments, style, referenceText)
+}
+
 func (f *FFmpegService) AddKaraokeSubtitleFromWordsWithStyle(ctx context.Context, videoPath string, words []whisperClient.Word, style SubtitleStyle, referenceText string) (string, error) {
 	assContent := buildASSKaraokeFromWords(words, style, referenceText)
 	if strings.TrimSpace(assContent) == "" {
@@ -966,6 +974,59 @@ func buildSRTFromSegments(segments []whisperClient.Segment) string {
 		seq = nextSeq
 	}
 	return out.String()
+}
+
+func buildSubtitleSegmentsFromTimeline(timeline []map[string]any) []whisperClient.Segment {
+	segments := make([]whisperClient.Segment, 0, len(timeline))
+	for _, item := range timeline {
+		start := timelineFloat(item, "start", "start_time", "from")
+		end := timelineFloat(item, "end", "end_time", "to")
+		text := strings.TrimSpace(timelineString(item, "text", "subtitle", "content", "line"))
+		if text == "" || end <= start {
+			continue
+		}
+		segments = append(segments, whisperClient.Segment{Start: start, End: end, Text: text})
+	}
+	return segments
+}
+
+func timelineFloat(entry map[string]any, keys ...string) float64 {
+	for _, key := range keys {
+		value, ok := entry[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case float64:
+			return v
+		case float32:
+			return float64(v)
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		case string:
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func timelineString(entry map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := entry[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 func buildSRTFromSegmentsWithReference(segments []whisperClient.Segment, referenceText string) string {

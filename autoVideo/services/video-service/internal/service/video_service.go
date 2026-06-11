@@ -326,6 +326,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	perClipSpatialAnchors := extractStringSlice(task.RenderConfig, "spatial_anchors", len(imageURLs))
 	perClipSubjectPositions := extractStringSlice(task.RenderConfig, "subject_positions", len(imageURLs))
 	perClipTransitionNotes := extractStringSlice(task.RenderConfig, "transition_notes", len(imageURLs))
+	perClipCharacterFocus := extractStringSlice(task.RenderConfig, "character_focus", len(imageURLs))
+	perClipCostumeHints := extractStringSlice(task.RenderConfig, "costume_hints", len(imageURLs))
+	perClipLocationTags := extractStringSlice(task.RenderConfig, "location_tags", len(imageURLs))
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, len(imageURLs))
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", len(imageURLs))
 	sceneGroupKeys := []string(task.SceneGroupKeys)
@@ -426,7 +429,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			c.ClipOrder, len(clips), perClipDescs,
 			resolvedMotionMode, resolvedStylePreset, resolvedModelName,
 			task.RenderConfig, charDescriptions,
-			perClipCameras, perClipMoods,
+			perClipCameras, perClipMoods, perClipTransitionNotes, perClipCharacterFocus, perClipCostumeHints, perClipLocationTags,
 		), clipCharURLs, resolvedModelName), clipRefBindings, resolvedModelName), assetAnchorHint)
 		// 串行模式非首帧：文案基础可用时再额外注入强连续性提示，
 		// 但是否继承上一段尾帧由独立的串行链条件决定，不能被这里卡断。
@@ -1168,6 +1171,16 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 				subtitleError = err.Error()
 				s.logger.Warn("compose: add whisper-timed subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
 			}
+		} else if subtitleTimeline := renderConfigTimeline(task.RenderConfig, "subtitle_timeline"); len(subtitleTimeline) > 0 {
+			if p, err := s.ffmpeg.AddSubtitleFromTimelineWithStyle(ctx, finalPath, subtitleTimeline, subtitleStyle2, subtitleText); err == nil {
+				finalPath = p
+				subtitleApplied = true
+				subtitleStatus = "applied"
+			} else {
+				subtitleStatus = "failed"
+				subtitleError = err.Error()
+				s.logger.Warn("compose: add render-config timeline subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
+			}
 		} else if subtitleURL2 != "" {
 			if p, err := s.ffmpeg.AddSubtitleFromVTTWithStyle(ctx, finalPath, subtitleURL2, subtitleStyle2); err == nil {
 				finalPath = p
@@ -1324,6 +1337,9 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	perClipSpatialAnchors := extractStringSlice(task.RenderConfig, "spatial_anchors", totalClips)
 	perClipSubjectPositions := extractStringSlice(task.RenderConfig, "subject_positions", totalClips)
 	perClipTransitionNotes := extractStringSlice(task.RenderConfig, "transition_notes", totalClips)
+	perClipCharacterFocus := extractStringSlice(task.RenderConfig, "character_focus", totalClips)
+	perClipCostumeHints := extractStringSlice(task.RenderConfig, "costume_hints", totalClips)
+	perClipLocationTags := extractStringSlice(task.RenderConfig, "location_tags", totalClips)
 	perClipSceneChars := extractSceneCharacters(task.RenderConfig, totalClips)
 	perClipAssetIDs := extractInt64Matrix(task.RenderConfig, "scene_asset_ids", totalClips)
 	sceneGroupKeys := []string(task.SceneGroupKeys)
@@ -1359,7 +1375,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 		clip.ClipOrder, totalClips, perClipDescs,
 		task.MotionMode, task.StylePreset, resolvedModelName,
 		task.RenderConfig, charDescriptions,
-		perClipCameras, perClipMoods,
+		perClipCameras, perClipMoods, perClipTransitionNotes, perClipCharacterFocus, perClipCostumeHints, perClipLocationTags,
 	)
 	if strings.TrimSpace(retryPrompt) == "" {
 		retryPrompt = motionPrompt(task.MotionMode, task.StylePreset, task.SceneDescription, task.RenderConfig)
@@ -3482,9 +3498,9 @@ func clipMotionPromptWithHints(
 	motionMode, stylePreset, modelName string,
 	renderConfig model.RenderConfig,
 	charDescriptions string,
-	cameraHints, moodHints []string,
+	cameraHints, moodHints, transitionHints, characterFocusHints, costumeHints, locationTags []string,
 ) string {
-	// Inject camera and mood into the scene description for this clip before building the full prompt.
+	// Inject per-clip shot-planning hints into the scene description for this clip before building the full prompt.
 	descs := make([]string, len(perClipDescs))
 	copy(descs, perClipDescs)
 	if clipIndex < len(descs) {
@@ -3494,6 +3510,18 @@ func clipMotionPromptWithHints(
 		}
 		if clipIndex < len(moodHints) && strings.TrimSpace(moodHints[clipIndex]) != "" {
 			extra = append(extra, moodHints[clipIndex])
+		}
+		if clipIndex < len(transitionHints) && strings.TrimSpace(transitionHints[clipIndex]) != "" {
+			extra = append(extra, "transition cue: "+strings.TrimSpace(transitionHints[clipIndex]))
+		}
+		if clipIndex < len(characterFocusHints) && strings.TrimSpace(characterFocusHints[clipIndex]) != "" {
+			extra = append(extra, "character focus: "+strings.TrimSpace(characterFocusHints[clipIndex]))
+		}
+		if clipIndex < len(costumeHints) && strings.TrimSpace(costumeHints[clipIndex]) != "" {
+			extra = append(extra, "costume continuity: "+strings.TrimSpace(costumeHints[clipIndex]))
+		}
+		if clipIndex < len(locationTags) && strings.TrimSpace(locationTags[clipIndex]) != "" {
+			extra = append(extra, "location tag: "+strings.TrimSpace(locationTags[clipIndex]))
 		}
 		if len(extra) > 0 {
 			if descs[clipIndex] == "" {
@@ -4979,7 +5007,7 @@ func describeRenderConfig(renderConfig model.RenderConfig) string {
 	if len(renderConfig) == 0 {
 		return ""
 	}
-	segments := make([]string, 0, 4)
+	segments := make([]string, 0, 8)
 	switch renderConfigString(renderConfig, "frame_size") {
 	case "portrait-9-16":
 		segments = append(segments, "portrait 9:16 composition, optimized for vertical mobile framing")
@@ -5008,6 +5036,12 @@ func describeRenderConfig(renderConfig model.RenderConfig) string {
 	}
 	if customPrompt := renderConfigString(renderConfig, "custom_prompt"); customPrompt != "" {
 		segments = append(segments, customPrompt)
+	}
+	if costumeHints := renderConfigStringValues(renderConfig, "costume_hints"); len(costumeHints) > 0 {
+		segments = append(segments, "costume continuity: "+strings.Join(costumeHints, "; "))
+	}
+	if locationTags := renderConfigStringValues(renderConfig, "location_tags"); len(locationTags) > 0 {
+		segments = append(segments, "location continuity: "+strings.Join(locationTags, "; "))
 	}
 	return strings.Join(segments, ", ")
 }
@@ -5059,6 +5093,30 @@ func renderConfigStringValues(renderConfig model.RenderConfig, key string) []str
 	default:
 		return nil
 	}
+}
+
+func renderConfigTimeline(renderConfig model.RenderConfig, key string) []map[string]any {
+	if len(renderConfig) == 0 {
+		return nil
+	}
+	value, ok := renderConfig[key]
+	if !ok || value == nil {
+		return nil
+	}
+	rawItems, ok := value.([]interface{})
+	if !ok {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(rawItems))
+	for _, raw := range rawItems {
+		if entry, ok := raw.(map[string]interface{}); ok && len(entry) > 0 {
+			items = append(items, entry)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }
 
 // renderConfigInt reads an integer value (or numeric float) from RenderConfig.
