@@ -1,5 +1,6 @@
 import { FileText, Image, LayoutGrid, Mic, Video } from 'lucide-react'
 import type { Project } from '@/types'
+import { episodeSplitPendingHint, prefersAutoEpisodeSplit } from '@/lib/projects/episode-split'
 
 export const WORKFLOW_STEPS = [
   { key: 'script',     label: '剧本',   Icon: FileText   },
@@ -158,7 +159,7 @@ export function buildProjectOverview({
           key: 'script',
           label: '剧本拆分',
           status: episodeCount > 0 ? 'done' : project.progress?.stage === 'episode_splitting' ? 'current' : 'pending',
-          hint: episodeCount > 0 ? `已生成 ${episodeCount} 集` : project.target_episodes > 0 ? `目标 ${project.target_episodes} 集` : '等待拆分',
+          hint: episodeCount > 0 ? `已生成 ${episodeCount} 集` : episodeSplitPendingHint(project),
         },
         {
           key: 'assets',
@@ -196,7 +197,7 @@ export function buildProjectOverview({
           key: 'script',
           label: '剧本拆分',
           status: episodeCount > 0 ? 'done' : project.progress?.stage === 'episode_splitting' || project.status === 'script_processing' ? 'current' : 'pending',
-          hint: episodeCount > 0 ? `已生成 ${episodeCount} 集` : project.target_episodes > 0 ? `目标 ${project.target_episodes} 集` : '等待拆分',
+          hint: episodeCount > 0 ? `已生成 ${episodeCount} 集` : episodeSplitPendingHint(project),
         },
         {
           key: 'assets',
@@ -405,7 +406,7 @@ export function getDisplayedEpisodeCount(project: Project, episodeCount: number)
   const splitTotal = project.progress?.episode_split?.total ?? 0
   if (project.progress?.stage === 'episode_splitting') {
     if (splitTotal > 0) return splitTotal
-    if (project.target_episodes > 0) return project.target_episodes
+    if (!prefersAutoEpisodeSplit(project) && project.target_episodes > 0) return project.target_episodes
   }
   if (project.progress?.stage === 'scene_splitting' && splitTotal > 0) {
     return splitTotal
@@ -513,11 +514,13 @@ export function buildWorkflowSteps({
               ? '自动润色中'
               : episodeSplitTotal > 0
               ? `${episodeSplitCompleted}/${episodeSplitTotal}`
-              : project.target_episodes > 0
-                ? `0/${project.target_episodes}`
-                : project.script_file_url
-                  ? '拆分中'
-                  : '未上传'
+              : prefersAutoEpisodeSplit(project)
+                ? '自动拆分中'
+                : project.target_episodes > 0
+                  ? `0/${project.target_episodes}`
+                  : project.script_file_url
+                    ? '拆分中'
+                    : '未上传'
             : scriptDone
               ? `${displayedEpisodeCount} 集`
               : project.script_file_url

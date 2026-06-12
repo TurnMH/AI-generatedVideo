@@ -30,6 +30,10 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useToast } from '@/components/ui/toast'
 import { formatBytes } from '@/lib/projects/utils'
 import { ProjectEpisodeFilterContext } from '@/lib/projects/episode-filter'
+import { episodeSplitOverviewBadge, prefersAutoEpisodeSplit } from '@/lib/projects/episode-split'
+import { EpisodeAutoPipelineFooter } from '@/components/projects/detail/EpisodeAutoPipelineFooter'
+import { deriveVideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
+import { useEpisodeAutoPipeline } from '@/lib/projects/use-episode-auto-pipeline'
 import { buildProjectOverview } from '@/lib/projects/workflow'
 import { fetchModelIdentity } from '@/lib/model-selection'
 import { StorageDrawer } from '@/components/projects/detail/StorageDrawer'
@@ -289,31 +293,39 @@ export default function ProjectDetailPage() {
   const projectTargetEpisodes = project?.target_episodes ?? 0
   const structuredPhaseLabel = projectProgress?.phase_label?.trim()
   const structuredNextStep = projectProgress?.next_step?.trim()
-  const projectAutoPrepRunning = selectedEpisodeId === null && episodes.length > 0 && projectProgress?.stage === 'script_prepping'
-  const projectSplitInProgress = selectedEpisodeId === null && episodes.length === 0 && (
-    project?.status === 'script_processing' || projectProgress?.stage === 'episode_splitting'
+  const assetExtractionRunningEarly = stepperAssetsRaw.some(
+    (a: { name?: string; status?: string }) => a?.name === '__extracting__' || a?.status === 'extracting',
   )
+  const pipelineSnapshot = deriveVideoPipelineSnapshot({
+    project: project ?? { status: 'draft', progress: undefined },
+    episodes,
+    assetExtracting: assetExtractionRunningEarly || isExtractingAssets,
+    storyboardGenerating: isExtractingStoryboards,
+  })
+  const projectSplitInProgress = selectedEpisodeId === null && pipelineSnapshot.phase === 'episode_splitting'
   const projectSplitTotal = projectProgress?.episode_split?.total ?? 0
   const projectSplitCompleted = projectProgress?.episode_split?.completed ?? 0
-  const projectAutoPrepTotal = Math.max(projectProgress?.scene_split?.total ?? 0, episodes.length)
-  const projectAutoPrepCompleted = projectProgress?.scene_split?.completed ?? 0
   const projectSplitTitle = structuredPhaseLabel
     || projectProgress?.message?.trim()
     || (projectSplitTotal > 0
       ? `正在生成分集结构（${projectSplitCompleted}/${projectSplitTotal}）`
-      : projectTargetEpisodes > 0
-        ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
-        : '正在拆分剧本并生成分集结构')
-  const projectSplitDescription = projectAutoPrepRunning
-    ? (projectProgress?.message?.trim() || `系统正在逐集润色、整理剧本格式并准备资源提取。当前已完成 ${projectAutoPrepCompleted}/${projectAutoPrepTotal} 集自动准备，后续资源与分镜会自动继续。`)
+      : prefersAutoEpisodeSplit(project)
+        ? '正在按剧本内容自动拆分分集'
+        : projectTargetEpisodes > 0
+          ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
+          : '正在拆分剧本并生成分集结构')
+  const projectSplitDescription = pipelineSnapshot.isActive
+    ? pipelineSnapshot.activeDetail
     : structuredNextStep
       ? `${structuredNextStep}${projectProgress?.current_episode && projectProgress?.total_episodes ? ` 当前进度 ${projectProgress.current_episode}/${projectProgress.total_episodes}。` : ''}`
     : projectSplitTotal > 0
-    ? `系统正在分析剧本、提取关键词并生成分集。当前已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿，完成后左侧分集列表会自动出现。`
-    : '系统正在分析剧本内容并自动生成分集。生成完成后，左侧会自动出现分集列表，下面的剧本区也会刷新出最新结果。'
-  const projectSplitFootnote = projectAutoPrepRunning
-    ? '无需手动介入，系统会继续完成剧本润色、资源准备和后续分镜衔接。'
-    : '无需重复点击开始分集，当前页面会自动轮询刷新。分集完成后再继续资源提取、镜头拆分和出图。'
+      ? `系统正在分析剧本、提取关键词并生成分集。当前已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿，完成后左侧分集列表会自动出现。`
+      : pipelineSnapshot.episodeSplitDone
+        ? pipelineSnapshot.nextStepHint
+        : '系统正在分析剧本内容并自动生成分集。生成完成后，左侧会自动出现分集列表。'
+  const projectSplitFootnote = pipelineSnapshot.phase === 'script_prepping'
+    ? '系统正在润色剧本并自动准备后续流程，无需手动介入。'
+    : '无需重复点击开始分集，当前页面会自动轮询刷新。分集完成后再继续资源提取、分镜拆分和出图。'
   const projectAssetEntries = stepperAssetsRaw.filter(
     (asset: any) => asset?.name !== '__extracting__' && asset?.status !== 'extracting'
   )
@@ -322,78 +334,29 @@ export default function ProjectDetailPage() {
     || stepperAssetsRaw.some((asset: any) => asset?.status === 'extracting')
     || projectAssetEntries.some((asset: any) => ['pending', 'generating', 'paused'].includes(asset?.status))
   const projectAssetDone = projectAssetEntries.length > 0 && !projectAssetActive
-  const projectSceneReadyCount = episodes.filter((ep) => ep.status === 'scene_ready').length
-  const projectSceneFormatTotal = Math.max(projectProgress?.scene_split?.total ?? 0, episodes.length, projectTargetEpisodes)
-  const projectSceneFormatCompleted = Math.max(projectProgress?.scene_split?.completed ?? 0, projectSceneReadyCount)
-  const projectSceneFormatRunning = projectProgress?.stage === 'scene_splitting'
-    || (project?.status === 'script_processing' && episodes.length > 0)
-    || episodes.some((ep) => ep.status === 'scene_splitting')
-  const projectSceneFormatDone = episodes.length > 0 && projectSceneReadyCount >= episodes.length
-  const projectControlStages = [
-    {
-      key: 'split',
-      label: '剧本解析与自动分集',
-      status: projectSplitInProgress || projectAutoPrepRunning ? 'running' : episodes.length > 0 ? 'done' : 'pending',
-      detail: projectAutoPrepRunning
-        ? (projectProgress?.message?.trim() || `已完成 ${projectAutoPrepCompleted}/${projectAutoPrepTotal} 集自动准备，系统仍在继续处理剩余分集`)
-        : structuredNextStep
-          ? `${structuredNextStep}${projectProgress?.current_episode && projectProgress?.total_episodes ? `（${projectProgress.current_episode}/${projectProgress.total_episodes}）` : ''}`
-        : projectSplitInProgress
-        ? (projectProgress?.message?.trim()
-          || (projectSplitTotal > 0
-            ? `已识别 ${projectSplitCompleted}/${projectSplitTotal} 个分集草稿`
-            : '正在分析剧本结构与章节边界'))
-        : episodes.length > 0
-          ? `已生成 ${episodes.length} 集，分集结果已同步到下方列表`
-          : '上传剧本后会自动开始拆分并生成分集结构',
-      progress: projectAutoPrepRunning
-        ? (projectAutoPrepTotal > 0 ? projectAutoPrepCompleted / Math.max(projectAutoPrepTotal, 1) : 0.35)
-        : projectSplitInProgress
-        ? (projectSplitTotal > 0 ? projectSplitCompleted / Math.max(projectSplitTotal, 1) : 0.35)
-        : episodes.length > 0
+  const projectControlStages = pipelineSnapshot.stages.map((stage) => {
+    if (stage.key === 'assets') {
+      return {
+        ...stage,
+        status: projectAssetActive ? 'running' as const : projectAssetDone ? 'done' as const : stage.status,
+        detail: projectAssetActive
+          ? (projectAssetEntries.length > 0
+            ? `已完成 ${projectAssetCompleted}/${projectAssetEntries.length} 项资源，剩余资源仍在处理中`
+            : stage.detail)
+          : projectAssetDone
+            ? `已准备 ${projectAssetEntries.length} 项资源，可继续后续镜头处理`
+            : stage.detail,
+        progress: projectAssetDone
           ? 1
-          : 0,
-    },
-    {
-      key: 'assets',
-      label: '资源提取与准备',
-      status: projectAssetActive ? 'running' : projectAssetDone ? 'done' : 'pending',
-      detail: projectAssetActive
-        ? (projectAssetEntries.length > 0
-          ? `已完成 ${projectAssetCompleted}/${projectAssetEntries.length} 项资源，剩余资源仍在处理中`
-          : '正在识别角色、场景、道具并准备后续素材')
-        : projectAssetDone
-          ? `已准备 ${projectAssetEntries.length} 项资源，可继续后续镜头处理`
-          : '分集完成后，资源提取进度会在这里继续显示',
-      progress: projectAssetDone
-        ? 1
-        : projectAssetEntries.length > 0
-          ? projectAssetCompleted / Math.max(projectAssetEntries.length, 1)
-          : projectAssetActive
-            ? 0.2
-            : 0,
-    },
-    {
-      key: 'scene',
-      label: '分镜序列格式化',
-      status: projectSceneFormatRunning ? 'running' : projectSceneFormatDone ? 'done' : 'pending',
-      detail: projectSceneFormatRunning
-        ? (projectProgress?.message?.trim()
-          || (projectSceneFormatTotal > 0
-            ? `已完成 ${projectSceneFormatCompleted}/${projectSceneFormatTotal} 集格式化`
-            : '正在逐集整理分镜序列'))
-        : projectSceneFormatDone
-          ? `已完成 ${projectSceneReadyCount}/${episodes.length} 集格式化，可进入各集工作台继续制作`
-          : '资源准备完成后，分镜序列格式化状态会在这里更新',
-      progress: projectSceneFormatDone
-        ? 1
-        : projectSceneFormatTotal > 0
-          ? projectSceneFormatCompleted / Math.max(projectSceneFormatTotal, 1)
-          : projectSceneFormatRunning
-            ? 0.2
-            : 0,
-    },
-  ] as const
+          : projectAssetEntries.length > 0
+            ? projectAssetCompleted / Math.max(projectAssetEntries.length, 1)
+            : projectAssetActive
+              ? 0.2
+              : stage.progress,
+      }
+    }
+    return stage
+  })
   const projectControlDoneCount = projectControlStages.filter((stage) => stage.status === 'done').length
   const projectControlOverallProgress = Math.round(
     (projectControlStages.reduce((sum, stage) => sum + Math.min(Math.max(stage.progress, 0), 1), 0) / projectControlStages.length) * 100
@@ -413,6 +376,18 @@ export default function ProjectDetailPage() {
   const selectedEpisodeUpdatedLabel = selectedEpisode?.updated_at
     ? new Date(selectedEpisode.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : '—'
+
+  const firstEpisodeAutoActive = pipelineSnapshot.isActive
+    && (pipelineSnapshot.phase === 'script_prepping' || pipelineSnapshot.phase === 'scene_splitting')
+
+  const { getEpisodeAutoAction, handleEpisodeAutoPipeline } = useEpisodeAutoPipeline({
+    projectId,
+    episodes,
+    episodeWorkspaceMeta,
+    firstEpisodeAutoActive,
+    mutateProject,
+    toast,
+  })
 
   const openEpisodeWorkspace = (
     targetEpisodeId?: number | null,
@@ -656,9 +631,8 @@ export default function ProjectDetailPage() {
         const assetActiveCount = stepperAssetsRaw.filter(
           (a: any) => a?.name !== '__extracting__' && ['pending', 'generating', 'paused'].includes(a?.status)
         ).length
-        const isScriptProcessing = project.status === 'script_processing'
-          || project.progress?.stage === 'episode_splitting'
-          || project.progress?.stage === 'script_prepping'
+        const isScriptProcessing = pipelineSnapshot.phase === 'episode_splitting'
+          || pipelineSnapshot.phase === 'script_prepping'
         const isAssetExtracting = assetExtractionRunning || assetActiveCount > 0 || isExtractingAssets
         const isStoryboardRunning = isExtractingStoryboards || (() => {
           return stepperStoryboardsRaw.some((sb: any) => ['pending', 'generating', 'paused'].includes(sb?.status))
@@ -669,14 +643,12 @@ export default function ProjectDetailPage() {
 
         const banners: Array<{ icon: React.ReactNode; title: string; desc: string; step: string; color: string }> = []
         if (isScriptProcessing) {
-          const postSplitRunning = !projectSplitInProgress && project.progress?.stage === 'script_prepping' && episodes.length > 0
+          const postSplitRunning = pipelineSnapshot.phase === 'script_prepping'
           banners.push({
             icon: <Loader2 className="h-5 w-5 animate-spin text-blue-300" />,
-            title: postSplitRunning ? 'AI 正在润色剧本并自动衔接资源/分镜' : 'AI 正在分析剧本并自动拆分分集',
-            desc: postSplitRunning
-              ? (project.progress?.message?.trim() || '系统正在逐集润色、审查并套用格式化剧本，完成后会自动继续资源提取与分镜流程。')
-              : '系统正在调用大语言模型解析剧本结构、提取分集大纲，完成后分集列表会自动出现。无需重复操作，请耐心等待。',
-            step: postSplitRunning ? '自动链路' : '步骤 1/3',
+            title: postSplitRunning ? '示范剧本润色优化中（仅文本）' : '剧本分集中',
+            desc: pipelineSnapshot.activeDetail,
+            step: postSplitRunning ? '自动准备' : '步骤 1/3',
             color: 'border-blue-400/30 bg-blue-500/10',
           })
         }
@@ -693,11 +665,11 @@ export default function ProjectDetailPage() {
             color: 'border-amber-400/30 bg-amber-500/10',
           })
         }
-        if (isStoryboardRunning) {
+        if (isStoryboardRunning || pipelineSnapshot.phase === 'scene_splitting') {
           banners.push({
             icon: <Loader2 className="h-5 w-5 animate-spin text-violet-300" />,
             title: '分镜拆分进行中',
-            desc: '系统正在为各分集自动拆分镜头序列，完成后可在各集工作台查看分镜并批量生成图片。',
+            desc: pipelineSnapshot.activeDetail || '系统正在为各分集拆分镜头序列，完成后可在各集工作台查看分镜并批量生成图片。',
             step: '步骤 3/3',
             color: 'border-violet-400/30 bg-violet-500/10',
           })
@@ -1063,12 +1035,12 @@ export default function ProjectDetailPage() {
                   }
                   if (assetTotal > 0) {
                     return {
-                      label: '当前阶段：等待自动分镜',
+                      label: '当前阶段：待拆分分镜',
                       className: 'text-primary-600',
                     }
                   }
                   return {
-                    label: '当前阶段：等待资源提取',
+                    label: '当前阶段：待自动处理',
                     className: 'text-surface-400',
                   }
                 })()
@@ -1112,13 +1084,13 @@ export default function ProjectDetailPage() {
                   if (assetTotal > 0) {
                     return (
                       <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                        待自动分镜
+                        待拆分分镜
                       </span>
                     )
                   }
                   return (
                     <span className="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px] font-medium text-surface-500">
-                      分镜待提取
+                      待自动处理
                     </span>
                   )
                 })()
@@ -1159,15 +1131,21 @@ export default function ProjectDetailPage() {
                   )
                 })()
 
+                const autoAction = getEpisodeAutoAction(ep)
+
                 return (
-                  <button
+                  <div
                     key={ep.id}
-                    onClick={() => openEpisodeWorkspace(ep.id, 'assets')}
-                    className={`group flex flex-col w-full cursor-pointer text-left rounded-xl px-3 py-3 text-sm transition-all border ${
+                    className={`group flex flex-col w-full rounded-xl border text-sm transition-all ${
                       selectedEpisodeId === ep.id
                         ? 'bg-primary-50 border-primary-200 text-primary-800 shadow-sm'
                         : 'bg-white border-surface-200 text-surface-700 hover:border-primary-200 hover:bg-primary-50/60 hover:shadow-sm'
                     }`}
+                  >
+                  <button
+                    type="button"
+                    onClick={() => openEpisodeWorkspace(ep.id, 'assets')}
+                    className="flex w-full cursor-pointer flex-col px-3 py-3 text-left"
                   >
                     <div className="flex items-center justify-between font-medium gap-2">
                       <span className="flex items-center gap-2 truncate">
@@ -1193,6 +1171,11 @@ export default function ProjectDetailPage() {
                       {storyboardBadge}
                     </div>
                   </button>
+                  <EpisodeAutoPipelineFooter
+                    action={autoAction}
+                    onAction={(event) => void handleEpisodeAutoPipeline(ep.id, event)}
+                  />
+                  </div>
                 )
               })}
               {episodes.length === 0 && (
@@ -1241,7 +1224,7 @@ export default function ProjectDetailPage() {
                             风格标签 {project.style_tags?.length ?? 0}
                           </span>
                           <span className="inline-flex items-center gap-1 rounded-full border border-surface-200 bg-surface-50 px-2.5 py-1">
-                            <Clock3 className="h-3.5 w-3.5" /> 目标 {project.target_episodes || 0} 集
+                            <Clock3 className="h-3.5 w-3.5" /> {episodeSplitOverviewBadge(project)}
                           </span>
                         </div>
                         <h3 className="mt-3 text-xl font-semibold text-surface-900">剧本大纲与项目总控</h3>
@@ -1253,21 +1236,25 @@ export default function ProjectDetailPage() {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2 text-xs">
                                 <span className="rounded-full border border-primary-200 bg-white px-2.5 py-1 font-medium text-primary-700">
-                                  {projectControlCurrentStage ? `当前进行中 · ${projectControlCurrentStage.label}` : '项目总控进度'}
+                                  {pipelineSnapshot.isActive && projectControlCurrentStage
+                                    ? `当前进行中 · ${projectControlCurrentStage.label}`
+                                    : pipelineSnapshot.episodeSplitDone && !pipelineSnapshot.isActive
+                                      ? '分集已完成'
+                                      : '项目总控进度'}
                                 </span>
                                 <span className="rounded-full border border-surface-200 bg-white px-2.5 py-1 text-surface-500">
                                   已完成 {projectControlDoneCount}/3 阶段
                                 </span>
                               </div>
                               <p className="mt-2 text-sm font-medium text-surface-900">
-                                {projectControlCurrentStage
-                                  ? projectControlCurrentStage.detail
-                                  : projectControlDoneCount === projectControlStages.length
-                                    ? '前置准备已全部完成，可以直接进入分集工作台继续资源、分镜和成片流程。'
-                                    : '当前暂无进行中的自动处理任务，后续状态会统一展示在这里。'}
+                                {pipelineSnapshot.isActive
+                                  ? pipelineSnapshot.activeDetail
+                                  : pipelineSnapshot.episodeSplitDone
+                                    ? pipelineSnapshot.nextStepHint
+                                    : '上传剧本后，分集、资源提取与分镜拆分会在这里显示进度。'}
                               </p>
                               <p className="mt-1 text-xs leading-5 text-surface-500">
-                                分集、资源提取、分镜序列格式化等自动处理状态会同步汇总在这里，无需来回切换模块确认进度。
+                                三个阶段：剧本分集 → 资源提取 → 分镜拆分。只有后台真的在跑时才会显示「处理中」。
                               </p>
                             </div>
                             <div className="min-w-[112px] rounded-2xl border border-primary-100 bg-white px-3 py-2 text-right shadow-sm">

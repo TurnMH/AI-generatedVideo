@@ -37,7 +37,7 @@ export const PROJECT_MEDIA_META: Record<
     createHref: '/projects/new?media=video',
     createLabel: '新建视频项目',
     createTitle: '新建视频项目',
-    createDescription: '创建一个新的 AI 视频项目',
+    createDescription: '2 步完成：选类型、上传剧本、确认设置',
     emptyTitle: '还没有视频项目',
     emptyDescription: '点击「新建视频项目」开始创建您的第一个 AI 视频项目',
     selectLabel: '选择视频项目',

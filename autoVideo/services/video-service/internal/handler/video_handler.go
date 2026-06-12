@@ -53,6 +53,46 @@ func validateSerialScenePayload(imageURLs []string, sceneGroupKeys []string, ser
 	return nil
 }
 
+func sanitizeSpeechDialogues(dialogues []string) []string {
+	if len(dialogues) == 0 {
+		return dialogues
+	}
+	out := make([]string, len(dialogues))
+	for i, dialogue := range dialogues {
+		out[i] = strings.TrimSpace(service.CleanScriptForSpeech(dialogue))
+	}
+	return out
+}
+
+func sanitizeSpeechText(text string) string {
+	return strings.TrimSpace(service.CleanScriptForSpeech(text))
+}
+
+func applySpeechSanitization(dialogues *[]string, subtitleText *string) {
+	if dialogues != nil && len(*dialogues) > 0 {
+		*dialogues = sanitizeSpeechDialogues(*dialogues)
+	}
+	if subtitleText != nil {
+		if cleaned := sanitizeSpeechText(*subtitleText); cleaned != "" {
+			*subtitleText = cleaned
+			return
+		}
+		if dialogues != nil && len(*dialogues) > 0 {
+			*subtitleText = joinSpeechDialogues(*dialogues)
+		}
+	}
+}
+
+func joinSpeechDialogues(dialogues []string) string {
+	var parts []string
+	for _, dialogue := range dialogues {
+		if cleaned := strings.TrimSpace(dialogue); cleaned != "" {
+			parts = append(parts, cleaned)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func normalizeRenderConfig(rc model.RenderConfig) model.RenderConfig {
 	if rc == nil {
 		rc = model.RenderConfig{}
@@ -580,11 +620,9 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 			}
 		}
 	}
+	applySpeechSanitization(&req.Dialogues, &req.SubtitleText)
 	if len(req.Dialogues) > 0 {
 		req.RenderConfig["dialogues"] = req.Dialogues
-		if strings.TrimSpace(req.SubtitleText) == "" {
-			req.SubtitleText = strings.Join(req.Dialogues, "\n")
-		}
 	}
 	if len(req.SubtitleTimeline) > 0 {
 		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
@@ -1038,11 +1076,9 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 	if len(req.SceneDescriptions) > 0 {
 		req.RenderConfig["scene_descriptions"] = req.SceneDescriptions
 	}
+	applySpeechSanitization(&req.Dialogues, &req.SubtitleText)
 	if len(req.Dialogues) > 0 {
 		req.RenderConfig["dialogues"] = req.Dialogues
-		if strings.TrimSpace(req.SubtitleText) == "" {
-			req.SubtitleText = strings.Join(req.Dialogues, "\n")
-		}
 	}
 	if len(req.SubtitleTimeline) > 0 {
 		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
@@ -1298,6 +1334,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		if len(ep.SceneDescriptions) > 0 {
 			rc["scene_descriptions"] = ep.SceneDescriptions
 		}
+		applySpeechSanitization(&ep.Dialogues, nil)
 		if len(ep.Dialogues) > 0 {
 			rc["dialogues"] = ep.Dialogues
 		}
@@ -1334,7 +1371,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 			UserID:           userID,
 			ImageURLs:        model.StringArray(ep.ImageURLs),
 			AudioURL:         ep.AudioURL,
-			SubtitleText:     strings.Join(ep.Dialogues, "\n"),
+			SubtitleText:     joinSpeechDialogues(ep.Dialogues),
 			StylePreset:      setDefault(req.StylePreset, "anime-2d"),
 			MotionMode:       setDefault(req.MotionMode, "gentle"),
 			ModelName:        setDefault(req.ModelName, "kling"),

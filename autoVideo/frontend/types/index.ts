@@ -100,16 +100,21 @@ export interface ProjectProgress {
   video?: StageProgress
 }
 
+export type VideoProductionMode = 'script_drama' | 'commentary_comic'
+
 export interface StoryboardConfig {
   aspect_ratio: string
   resolution: string
   duration: number
+  production_mode?: VideoProductionMode
   camera_movement: string
   video_mode: string
   style_preset?: string
   motion_mode?: string
   generate_audio?: boolean
   auto_split_after_optimization?: boolean
+  auto_generate_video?: boolean
+  auto_video_triggered?: boolean
   video_model?: string  // runtime model key (e.g. "kling", "vidu", "wan") for director duration guidance
   speech_pace?: 'normal' | 'slightly_fast' | 'with_pauses' | 'very_fast' | 'medium_fast' | 'medium_steady'
   ad_copy_optimization_prompt?: string

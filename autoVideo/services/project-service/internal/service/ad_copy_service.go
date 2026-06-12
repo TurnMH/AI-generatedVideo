@@ -15,6 +15,7 @@ import (
 	"gorm.io/datatypes"
 
 	"github.com/autovideo/project-service/internal/model"
+	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/stylepreset"
 )
 
@@ -143,7 +144,7 @@ func (s *EpisodeService) updateAdCopyProgress(project *model.Project, originalSc
 	}
 
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	meta := buildAutoSplitMeta(trimmedOptimized, runtimeCfg)
+	meta := buildAutoSplitMeta(trimmedOptimized, runtimeCfg, productionmode.ResolveProfile(project))
 	meta.Enabled = runtimeCfg.AutoSplitAfterOptimization
 	meta.VideoModel = runtimeCfg.VideoModel
 	meta.StylePreset = stylepreset.Canonical(runtimeCfg.StylePreset)
@@ -185,7 +186,7 @@ func (s *EpisodeService) saveAdCopyDraft(project *model.Project, originalScript,
 	}
 
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	meta := buildAutoSplitMeta(trimmedOptimized, runtimeCfg)
+	meta := buildAutoSplitMeta(trimmedOptimized, runtimeCfg, productionmode.ResolveProfile(project))
 	meta.Enabled = runtimeCfg.AutoSplitAfterOptimization
 	meta.VideoModel = runtimeCfg.VideoModel
 	meta.StylePreset = stylepreset.Canonical(runtimeCfg.StylePreset)

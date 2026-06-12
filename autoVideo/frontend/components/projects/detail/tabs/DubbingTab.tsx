@@ -214,7 +214,6 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     if (!q) return true
     return option.label.toLowerCase().includes(q) || option.value.toLowerCase().includes(q)
   })
-  const activeVoicePickerEpisode = voicePickerEpisodeId ? displayedEpisodes.find((ep) => ep.id === voicePickerEpisodeId) ?? null : null
   const VOICE_RATE_OPTIONS = [
     { value: '-30%', label: '慢 -30%' },
     { value: '-15%', label: '慢 -15%' },
@@ -250,6 +249,9 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const displayedEpisodes = isSingleEpisodeMode
     ? episodes.filter(ep => ep.id === episodeId)
     : episodes
+  const activeVoicePickerEpisode = voicePickerEpisodeId
+    ? displayedEpisodes.find((ep) => ep.id === voicePickerEpisodeId) ?? null
+    : null
 
   // Poll dubbing tasks from a single shared source
   const { data: tasksData, mutate: mutateTasks } = useSWR(
@@ -302,13 +304,16 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const dubbingProcessingTasks = processingTasks.filter((t) => t.task_type === 'dubbing')
   const subtitleProcessingTasks = processingTasks.filter((t) => t.task_type === 'subtitle')
 
+  const isCommentaryProject = useMemo(() => {
+    const configured = project.storyboard_config?.production_mode
+    if (configured === 'commentary_comic') return true
+    return (project.style_tags ?? []).includes('解说漫')
+  }, [project.storyboard_config?.production_mode, project.style_tags])
+
   const pickEpisodeTextSource = (ep: Episode) => {
-    const candidates = [
-      ep.script_excerpt,
-      ep.optimized_text,
-      ep.summary,
-      ep.title,
-    ]
+    const candidates = isCommentaryProject
+      ? [ep.optimized_text, ep.script_excerpt, ep.original_excerpt, ep.summary, ep.title]
+      : [ep.script_excerpt, ep.optimized_text, ep.summary, ep.title]
     return candidates.find((value) => value?.trim())?.trim() ?? ''
   }
 
@@ -330,7 +335,40 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
     return /^(旁白|主持人|主播|解说|老师|嘉宾|男声|女声|人物|角色|画外音|OS|VO)(?:\s*(?:[：:｜|丨-].*?|（[^）]*）|\([^)]*\)))?$/u.test(trimmed)
   }
 
+  const extractCommentaryNarration = (text: string) => {
+    const subtitleMatches = [...text.matchAll(/\[字幕[:：]\s*([^\]]+?)\s*\]/gu)]
+      .map((match) => match[1]?.trim())
+      .filter(Boolean)
+    if (subtitleMatches.length > 0) {
+      return subtitleMatches.join('\n')
+    }
+
+    const quotedMatches = [...text.matchAll(/[“「『"]([^”」』"]+)[”」』"]/gu)]
+      .map((match) => match[1]?.trim())
+      .filter(Boolean)
+    if (quotedMatches.length > 0) {
+      return quotedMatches.join('\n')
+    }
+
+    const narrationLines = text
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !/^(?:【\s*)?(?:内景|外景|内外景)/u.test(line))
+      .map((line) => line.replace(/^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z·]{1,8}[（(][^)）]{0,24}[）)]\s*/, '').trim())
+      .filter((line) => line.length >= 10 && !isDirectionOnlyLine(line))
+    if (narrationLines.length > 0) {
+      return narrationLines.join('\n')
+    }
+    return ''
+  }
+
   const extractSpokenText = (text: string) => {
+    if (isCommentaryProject) {
+      const commentary = extractCommentaryNarration(text)
+      if (commentary) return commentary
+    }
+
     const lines = text
       .replace(/\r\n?/g, '\n')
       .split('\n')
@@ -437,7 +475,14 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
         toast({ title: '当前集暂无分镜台词，请先生成分镜', variant: 'destructive' })
         return
       }
-      const aggregated = dialogues.join('\n')
+      const aggregated = dialogues
+        .map((dialogue) => extractSpokenText(dialogue))
+        .filter(Boolean)
+        .join('\n')
+      if (!aggregated) {
+        toast({ title: '分镜台词清洗后为空，请检查分镜对白字段', variant: 'destructive' })
+        return
+      }
       setDubbingDrafts((prev) => ({ ...prev, [episodeId]: aggregated }))
       setSubtitleDrafts((prev) => ({ ...prev, [episodeId]: aggregated }))
       toast({ title: `已从 ${dialogues.length} 个分镜提取台词`, variant: 'success' })

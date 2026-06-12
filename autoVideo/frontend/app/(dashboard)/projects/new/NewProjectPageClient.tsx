@@ -55,6 +55,23 @@ import { mapVideoModelToRuntimeKey, findPreferredVideoModelId } from '@/lib/proj
 import { StepIndicator } from '@/components/projects/new/StepIndicator'
 import { ModelSelector } from '@/components/projects/new/ModelSelector'
 import { CostEstimation } from '@/components/projects/new/CostEstimation'
+import { ProductionModeSelector } from '@/components/projects/new/ProductionModeSelector'
+import { VideoGenrePicker } from '@/components/projects/new/VideoGenrePicker'
+import { VideoCreateOptions } from '@/components/projects/new/VideoCreateOptions'
+import {
+  ensureProductionStyleTags,
+  filterPresetsForProductionMode,
+  getProductionModeOption,
+  type VideoProductionMode,
+} from '@/lib/projects/new/production-mode'
+import {
+  nearestConsistencyPreset,
+  resolutionForAspect,
+  SCRIPT_AUTO_SPLIT_NOTE,
+  VIDEO_CREATE_STEP_COUNT,
+  VIDEO_CREATE_STEPS,
+  VIDEO_QUICK_GENRES,
+} from '@/lib/projects/new/video-create-ui'
 
 
 // ─── Page ────────────────────────────────────────────────────
@@ -73,10 +90,17 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
   const [form, setForm] = useState<FormData>(initialFormData)
   const [selectedPresetTemplate, setSelectedPresetTemplate] = useState<string>('custom')
   const [submitting, setSubmitting] = useState(false)
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const logoInputRef = useRef<HTMLInputElement>(null)
   const scriptInputRef = useRef<HTMLInputElement>(null)
+  const isVideoCreateFlow = mediaKind === 'video'
+  const maxStep = isVideoCreateFlow ? VIDEO_CREATE_STEP_COUNT : 3
+  const wizardSteps = isVideoCreateFlow ? [...VIDEO_CREATE_STEPS] : display.stepLabels
+  const storyboardConfigInStep3 = !isVideoCreateFlow
+  const productionModeOption = getProductionModeOption(form.production_mode)
   const presetDrivenKeys: (keyof FormData)[] = [
+    'production_mode',
     'style_tags',
     'video_model_id',
     'video_style_preset',
@@ -202,6 +226,10 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
   const visibleModelSelectors = display.modelSelectorKeys.map((key) => ({ key, ...modelSelectorDefs[key] }))
   const mediaStarterTemplates = MEDIA_STARTER_TEMPLATES[mediaKind]
   const showGenericPresetTemplates = display.showPresetTemplates
+  const visiblePresetTemplates = useMemo(
+    () => (showGenericPresetTemplates ? filterPresetsForProductionMode(PROJECT_PRESET_TEMPLATES, form.production_mode) : []),
+    [form.production_mode, showGenericPresetTemplates],
+  )
   const visibleStyleTags = stripProjectMediaTags(form.style_tags)
   const mediaStyleOptions = useMemo(() => {
     const base = MEDIA_STYLE_OPTIONS[mediaKind]
@@ -258,7 +286,40 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     }
   }
 
+  const applyProductionMode = (mode: VideoProductionMode) => {
+    const option = getProductionModeOption(mode)
+    setForm((prev) => {
+      const nextTags = ensureProductionStyleTags(stripProjectMediaTags(prev.style_tags), mode)
+      const next: FormData = {
+        ...prev,
+        production_mode: mode,
+        style_tags: ensureProjectMediaTag(nextTags, mediaKind),
+      }
+      if (mode === 'commentary_comic') {
+        next.storyboard_aspect_ratio = '9:16'
+        next.storyboard_resolution = '1080x1920'
+        next.storyboard_duration = 4
+        next.enable_dubbing = true
+        next.enable_subtitle = true
+        next.video_style_preset = normalizeVideoStylePreset('comic-dynamic')
+        next.video_motion_mode = 'gentle'
+      }
+      if (!isVideoCreateFlow && prev.target_episodes === initialFormData.target_episodes) {
+        next.target_episodes = option.defaultTargetEpisodes
+      }
+      return next
+    })
+    if (mode === 'commentary_comic') {
+      setSelectedPresetTemplate('explainer-comic')
+    } else if (selectedPresetTemplate === 'explainer-comic') {
+      setSelectedPresetTemplate('custom')
+    }
+  }
+
   const applyMediaStarterTemplate = (template: MediaStarterTemplate) => {
+    if (isVideoCreateFlow) {
+      applyProductionMode('commentary_comic')
+    }
     setForm((prev) => {
       const mergedTags = Array.from(new Set([...template.styleTags, ...stripProjectMediaTags(prev.style_tags)]))
       return {
@@ -266,7 +327,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         title: prev.title.trim() ? prev.title : template.title,
         description: prev.description.trim() ? prev.description : template.description,
         style_tags: ensureProjectMediaTag(mergedTags, mediaKind),
-        target_episodes: template.targetEpisodes && display.showTargetEpisodes && prev.target_episodes === initialFormData.target_episodes
+        target_episodes: template.targetEpisodes && display.showTargetEpisodes
           ? template.targetEpisodes
           : prev.target_episodes,
         storyboard_aspect_ratio: template.storyboardAspectRatio ?? prev.storyboard_aspect_ratio,
@@ -277,26 +338,49 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     toast({ title: `已应用${template.label}创建建议`, description: template.desc, variant: 'success' })
   }
 
-  const applyPresetTemplate = (presetKey: string) => {
+  const applyPresetTemplate = (
+    presetKey: string,
+    options?: { lockProductionMode?: boolean; productionMode?: VideoProductionMode },
+  ) => {
     const preset = PROJECT_PRESET_TEMPLATES.find((item) => item.key === presetKey)
     if (!preset) return
+    if (!options?.lockProductionMode) {
+      if (preset.key === 'explainer-comic') {
+        applyProductionMode('commentary_comic')
+      } else if (isVideoCreateFlow && form.production_mode === 'commentary_comic') {
+        applyProductionMode('script_drama')
+      }
+    }
     const preferredVideoModelId = findPreferredVideoModelId(videoModels, preset.preferredVideoRuntimeKeys)
-    setForm((prev) => ({
-      ...prev,
-      style_tags: Array.from(preset.styleTags),
-      video_model_id: preferredVideoModelId ?? prev.video_model_id,
-      video_style_preset: normalizeVideoStylePreset(preset.videoStylePreset),
-      video_motion_mode: preset.videoMotionMode,
-      storyboard_aspect_ratio: preset.storyboardAspectRatio,
-      storyboard_resolution: preset.storyboardResolution,
-      storyboard_duration: preset.storyboardDuration,
-      consistency_strength: preset.consistencyStrength,
-      enable_dubbing: preset.enableDubbing,
-      enable_subtitle: preset.enableSubtitle,
-      video_mode: preset.videoMode,
-    }))
+    setForm((prev) => {
+      const modeForTags = options?.productionMode
+        ?? (options?.lockProductionMode
+          ? prev.production_mode
+          : preset.key === 'explainer-comic'
+            ? 'commentary_comic'
+            : 'script_drama')
+      return {
+        ...prev,
+        style_tags: ensureProjectMediaTag(
+          ensureProductionStyleTags(Array.from(preset.styleTags), modeForTags),
+          mediaKind,
+        ),
+        video_model_id: preferredVideoModelId ?? prev.video_model_id,
+        video_style_preset: normalizeVideoStylePreset(preset.videoStylePreset),
+        video_motion_mode: preset.videoMotionMode,
+        storyboard_aspect_ratio: preset.storyboardAspectRatio,
+        storyboard_resolution: preset.storyboardResolution,
+        storyboard_duration: preset.storyboardDuration,
+        consistency_strength: preset.consistencyStrength,
+        enable_dubbing: preset.enableDubbing,
+        enable_subtitle: preset.enableSubtitle,
+        video_mode: preset.videoMode,
+      }
+    })
     setSelectedPresetTemplate(preset.key)
-    toast({ title: `已应用模板：${preset.label}`, description: preset.desc, variant: 'success' })
+    if (!options?.lockProductionMode) {
+      toast({ title: `已应用模板：${preset.label}`, description: preset.desc, variant: 'success' })
+    }
   }
 
   useEffect(() => {
@@ -417,8 +501,65 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
   }
 
   const goNext = () => {
-    if (validateStep(step)) setStep((s) => Math.min(s + 1, 3))
+    if (validateStep(step)) setStep((s) => Math.min(s + 1, maxStep))
   }
+
+  const handleFriendlyAspectChange = (value: string) => {
+    update('storyboard_aspect_ratio', value)
+    update('storyboard_resolution', resolutionForAspect(value))
+  }
+
+  const renderScriptUpload = () => (
+    <div className="space-y-2">
+      <Label>{display.scriptLabel}</Label>
+      <input
+        ref={scriptInputRef}
+        type="file"
+        accept=".txt,.md,.docx"
+        className="hidden"
+        onChange={handleScriptSelect}
+      />
+      {form.scriptFile ? (
+        <div className="rounded-2xl border border-primary-200 bg-primary-50/50 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="h-5 w-5 text-primary-500" />
+              <div>
+                <p className="text-sm font-medium text-surface-900">{form.scriptFile.name}</p>
+                <p className="text-xs text-surface-500">
+                  {(form.scriptFile.size / 1024).toFixed(1)} KB · 创建后会自动分集
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-surface-400 hover:text-red-500"
+              onClick={() => {
+                update('scriptFile', null)
+                update('scriptPreview', '')
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => scriptInputRef.current?.click()}
+          className="flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-primary-200 bg-primary-50/30 py-10 text-primary-700 hover:border-primary-300 hover:bg-primary-50/60"
+        >
+          <Upload className="h-8 w-8" />
+          <span className="text-sm font-medium">{display.scriptUploadTitle}</span>
+          <span className="text-xs text-surface-500">{display.scriptUploadHint}</span>
+        </button>
+      )}
+      {isVideoCreateFlow ? (
+        <p className="text-xs leading-5 text-surface-500">{SCRIPT_AUTO_SPLIT_NOTE}</p>
+      ) : null}
+    </div>
+  )
   const goBack = () => setStep((s) => Math.max(s - 1, 1))
 
   // Submit
@@ -426,15 +567,20 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     if (!validateStep(step)) return
     setSubmitting(true)
     try {
+      const normalizedStyleTags = isVideoCreateFlow
+        ? ensureProductionStyleTags(stripProjectMediaTags(form.style_tags), form.production_mode)
+        : stripProjectMediaTags(form.style_tags)
       const payload: Record<string, unknown> = {
         title: form.title.trim(),
         description: form.description.trim(),
         project_type: mediaKind,
-        style_tags: ensureProjectMediaTag(stripProjectMediaTags(form.style_tags), mediaKind),
+        style_tags: ensureProjectMediaTag(normalizedStyleTags, mediaKind),
       }
 
       if (display.showTargetEpisodes) {
         payload.target_episodes = form.target_episodes
+      } else if (isVideoCreateFlow) {
+        payload.target_episodes = 0
       }
       if (display.modelSelectorKeys.includes('text')) {
         payload.text_model_id = form.text_model_id
@@ -474,6 +620,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           ...(display.showVideoMode ? { video_mode: form.video_mode } : {}),
           ...(display.showVideoStyle ? { style_preset: form.video_style_preset } : {}),
           ...(display.showVideoMotion ? { motion_mode: form.video_motion_mode } : {}),
+          ...(isVideoCreateFlow ? { production_mode: form.production_mode } : {}),
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_region ? { region: form.liveaction_region.trim() } : {}),
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_era ? { era: form.liveaction_era.trim() } : {}),
           ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_ethnicity ? { ethnicity: form.liveaction_ethnicity.trim() } : {}),
@@ -520,6 +667,95 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     }
   }
 
+  const renderStoryboardConfigSection = () => {
+    if (!display.showStoryboardConfig) return null
+    return (
+      <div className="space-y-4">
+        <h4 className="text-sm font-medium text-surface-700">{display.storyboardSectionTitle}</h4>
+        {isVideoCreateFlow ? (
+          <p className="text-xs leading-5 text-surface-500">{productionModeOption.storyboardHint}</p>
+        ) : null}
+        <div className={storyboardGridClassName}>
+          <div className="space-y-2">
+            <Label className="text-xs">画面比例</Label>
+            <Select
+              value={form.storyboard_aspect_ratio}
+              onValueChange={(v) => update('storyboard_aspect_ratio', v)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ASPECT_RATIOS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs">分辨率</Label>
+            <Select
+              value={form.storyboard_resolution}
+              onValueChange={(v) => update('storyboard_resolution', v)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RESOLUTIONS.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {display.showStoryboardDuration && (
+            <div className="space-y-2">
+              <Label className="text-xs">默认时长（秒）</Label>
+              <Input
+                type="number"
+                min={1}
+                max={60}
+                value={form.storyboard_duration}
+                onChange={(e) =>
+                  update('storyboard_duration', Math.max(1, Number(e.target.value)))
+                }
+              />
+            </div>
+          )}
+        </div>
+
+        {display.showConsistency && (
+          <div className="rounded-lg border p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-medium">{display.consistencyLabel}</Label>
+                <p className="mt-1 text-xs text-surface-500">
+                  {display.consistencyHint}
+                </p>
+              </div>
+              <span className="text-sm font-medium text-primary-600">{form.consistency_strength}%</span>
+            </div>
+            <div className="mt-4">
+              <Slider
+                value={[form.consistency_strength]}
+                onValueChange={(v) => update('consistency_strength', v[0])}
+                min={0}
+                max={100}
+                step={5}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-12">
       {/* Header */}
@@ -547,23 +783,27 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.2em] text-surface-300">流程</p>
-              <p className="mt-2 text-lg font-semibold text-white">3 步完成</p>
-              <p className="mt-1 text-xs text-surface-400">{display.flowHint}</p>
+          {isVideoCreateFlow ? (
+            <p className="text-sm text-surface-300">{display.afterCreateHint}</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
+                <p className="text-xs uppercase tracking-[0.2em] text-surface-300">流程</p>
+                <p className="mt-2 text-lg font-semibold text-white">{maxStep} 步完成</p>
+                <p className="mt-1 text-xs text-surface-400">{display.flowHint}</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
+                <p className="text-xs uppercase tracking-[0.2em] text-surface-300">当前介质</p>
+                <p className="mt-2 text-lg font-semibold text-white">{mediaMeta.label}</p>
+                <p className="mt-1 text-xs text-surface-400">会自动写入对应项目类型</p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
+                <p className="text-xs uppercase tracking-[0.2em] text-surface-300">创建后</p>
+                <p className="mt-2 text-lg font-semibold text-white">{display.afterCreateTitle}</p>
+                <p className="mt-1 text-xs text-surface-400">{display.afterCreateHint}</p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.2em] text-surface-300">当前介质</p>
-              <p className="mt-2 text-lg font-semibold text-white">{mediaMeta.label}</p>
-              <p className="mt-1 text-xs text-surface-400">会自动写入对应项目类型</p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur">
-              <p className="text-xs uppercase tracking-[0.2em] text-surface-300">创建后</p>
-              <p className="mt-2 text-lg font-semibold text-white">{display.afterCreateTitle}</p>
-              <p className="mt-1 text-xs text-surface-400">{display.afterCreateHint}</p>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -573,21 +813,60 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           <div>
             <p className="text-sm font-medium text-surface-900">创建向导</p>
             <p className="text-xs text-surface-500">
-              第 {step} 步 / 3：{display.stepDescriptions[step - 1]}
+              第 {step} 步 / {maxStep}：{display.stepDescriptions[step - 1]}
             </p>
           </div>
-          <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
-            {mediaMeta.label} 项目
-          </Badge>
+          {!isVideoCreateFlow ? (
+            <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+              {mediaMeta.label} 项目
+            </Badge>
+          ) : null}
         </div>
-        <StepIndicator current={step} steps={display.stepLabels} />
+        <StepIndicator current={step} steps={wizardSteps} />
       </div>
 
       {/* Step Content */}
       <Card className="overflow-hidden rounded-[28px] border-surface-200 shadow-sm">
         <CardContent className="space-y-6 bg-gradient-to-b from-white to-surface-50/60 pt-6">
-          {/* ─── Step 1: Basic Info ────────────────────────── */}
-          {step === 1 && (
+          {/* ─── Step 1 ────────────────────────── */}
+          {step === 1 && isVideoCreateFlow && (
+            <>
+              <ProductionModeSelector
+                value={form.production_mode}
+                onChange={(mode) => {
+                  applyProductionMode(mode)
+                  const firstGenre = VIDEO_QUICK_GENRES[mode][0]
+                  if (firstGenre) {
+                    applyPresetTemplate(firstGenre.presetKey, { lockProductionMode: true, productionMode: mode })
+                  }
+                }}
+              />
+
+              <div className="space-y-2">
+                <Label htmlFor="title">
+                  项目叫什么 <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="title"
+                  placeholder={display.titlePlaceholder}
+                  value={form.title}
+                  onChange={(e) => update('title', e.target.value)}
+                  className={errors.title ? 'border-red-500' : ''}
+                />
+                {errors.title && <p className="text-xs text-red-500">{errors.title}</p>}
+              </div>
+
+              {renderScriptUpload()}
+
+              <VideoGenrePicker
+                options={VIDEO_QUICK_GENRES[form.production_mode]}
+                selectedKey={selectedPresetTemplate}
+                onSelect={(presetKey) => applyPresetTemplate(presetKey, { lockProductionMode: true })}
+              />
+            </>
+          )}
+
+          {step === 1 && !isVideoCreateFlow && (
             <>
               <div className="space-y-2">
                 <Label htmlFor="title">
@@ -614,7 +893,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 />
               </div>
 
-              {showGenericPresetTemplates && recommendedPreset ? (
+              {showGenericPresetTemplates && recommendedPreset && visiblePresetTemplates.some((preset) => preset.key === recommendedPreset.preset.key) ? (
                 <div className="rounded-xl border border-primary-200 bg-primary-50 p-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -655,7 +934,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                         题材预设模板
                       </Label>
                       <p className="mt-1 text-xs text-surface-500">
-                        一键带出整套项目默认参数，包括视觉基调、推荐模型、画幅、运镜和默认时长，后续步骤仍可继续微调。
+                        仅展示与当前「{productionModeOption.shortLabel}」匹配的题材模板，一键带出画幅、模型、运镜和默认时长。
                       </p>
                     </div>
                     <Badge variant="outline" className="w-fit">
@@ -665,7 +944,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                     </Badge>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {PROJECT_PRESET_TEMPLATES.map((preset) => {
+                    {visiblePresetTemplates.map((preset) => {
                       const active = preset.key === selectedPresetTemplate
                       return (
                         <button
@@ -720,12 +999,12 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 </div>
               )}
 
-              {mediaStarterTemplates.length > 0 ? (
+              {mediaStarterTemplates.length > 0 && form.production_mode === 'commentary_comic' ? (
                 <div className="space-y-3 rounded-xl border border-surface-200 bg-white p-4">
                   <div className="flex flex-col gap-1">
-                    <Label className="text-sm font-medium">快速创建建议</Label>
+                    <Label className="text-sm font-medium">解说漫快速起步</Label>
                     <p className="text-xs text-surface-500">
-                      针对 {mediaMeta.label} 项目提供更贴近当前工作台的起步模板，自动补齐标题、描述和推荐标签。
+                      一键填充解说漫示例标题、竖屏参数和推荐标签，适合剧情盘点、角色解析类内容。
                     </p>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2">
@@ -833,8 +1112,10 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                     onChange={(e) => update('target_episodes', Math.max(1, Number(e.target.value)))}
                     className={`w-32 ${errors.target_episodes ? 'border-red-500' : ''}`}
                   />
-                  {display.targetEpisodesHint ? (
-                    <p className="text-xs text-surface-500">{display.targetEpisodesHint}</p>
+                  {(isVideoCreateFlow ? productionModeOption.targetEpisodesHint : display.targetEpisodesHint) ? (
+                    <p className="text-xs text-surface-500">
+                      {isVideoCreateFlow ? productionModeOption.targetEpisodesHint : display.targetEpisodesHint}
+                    </p>
                   ) : null}
                   {errors.target_episodes && (
                     <p className="text-xs text-red-500">{errors.target_episodes}</p>
@@ -845,8 +1126,94 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
             </>
           )}
 
+          {/* ─── Step 2 (video simplified) ─────────── */}
+          {step === 2 && isVideoCreateFlow && (
+            <>
+              <div className="rounded-2xl border border-surface-200 bg-surface-50/80 p-4">
+                <p className="text-sm font-medium text-surface-900">{form.title.trim() || '未命名项目'}</p>
+                <p className="mt-1 text-xs text-surface-500">
+                  {productionModeOption.shortLabel}
+                  {form.scriptFile ? ' · 已上传剧本' : ' · 创建后可再上传剧本'}
+                  {' · '}
+                  按剧本自动分集
+                </p>
+              </div>
+
+              <VideoCreateOptions
+                aspectRatio={form.storyboard_aspect_ratio}
+                duration={form.storyboard_duration}
+                consistencyStrength={nearestConsistencyPreset(form.consistency_strength)}
+                enableDubbing={form.enable_dubbing}
+                enableSubtitle={form.enable_subtitle}
+                onAspectRatioChange={handleFriendlyAspectChange}
+                onDurationChange={(value) => update('storyboard_duration', value)}
+                onConsistencyChange={(value) => update('consistency_strength', value)}
+                onDubbingChange={(value) => update('enable_dubbing', value)}
+                onSubtitleChange={(value) => update('enable_subtitle', value)}
+              />
+
+              <div className="rounded-2xl border border-surface-200">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-surface-800"
+                  onClick={() => setShowAdvancedSettings((open) => !open)}
+                >
+                  更多设置（模型、画风、水印等）
+                  <span className="text-xs text-surface-500">{showAdvancedSettings ? '收起' : '展开'}</span>
+                </button>
+                {showAdvancedSettings ? (
+                  <div className="space-y-4 border-t border-surface-200 px-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="description">项目描述（选填）</Label>
+                      <Textarea
+                        id="description"
+                        placeholder={display.descriptionPlaceholder}
+                        value={form.description}
+                        onChange={(e) => update('description', e.target.value)}
+                        rows={2}
+                      />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {visibleModelSelectors.map((selector) => (
+                        <ModelSelector
+                          key={selector.key}
+                          label={selector.label}
+                          icon={selector.icon}
+                          models={selector.models}
+                          isLoading={selector.isLoading}
+                          value={selector.value}
+                          onChange={selector.onChange}
+                        />
+                      ))}
+                    </div>
+                    {display.showVideoStyle && (
+                      <div className="space-y-2">
+                        <Label>画面画风</Label>
+                        <Select
+                          value={form.video_style_preset}
+                          onValueChange={(v) => update('video_style_preset', v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择画风" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {VIDEO_STYLE_PRESETS.map((style) => (
+                              <SelectItem key={style.key} value={style.key}>
+                                {style.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          )}
+
           {/* ─── Step 2: Model & Feature Selection ─────────── */}
-          {step === 2 && (
+          {step === 2 && !isVideoCreateFlow && (
             <>
               <div className="rounded-xl border border-surface-200 bg-surface-50/70 p-4">
                 <p className="text-sm font-medium text-surface-800">当前为 {mediaMeta.label} 专属模型布局</p>
@@ -1120,94 +1487,34 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 </div>
               )}
             
-              {display.showStoryboardConfig && (
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium text-surface-700">{display.storyboardSectionTitle}</h4>
-                  <div className={storyboardGridClassName}>
-                    <div className="space-y-2">
-                      <Label className="text-xs">画面比例</Label>
-                      <Select
-                        value={form.storyboard_aspect_ratio}
-                        onValueChange={(v) => update('storyboard_aspect_ratio', v)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ASPECT_RATIOS.map((r) => (
-                            <SelectItem key={r} value={r}>
-                              {r}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label className="text-xs">分辨率</Label>
-                      <Select
-                        value={form.storyboard_resolution}
-                        onValueChange={(v) => update('storyboard_resolution', v)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {RESOLUTIONS.map((r) => (
-                            <SelectItem key={r} value={r}>
-                              {r}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {display.showStoryboardDuration && (
-                      <div className="space-y-2">
-                        <Label className="text-xs">默认时长（秒）</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={60}
-                          value={form.storyboard_duration}
-                          onChange={(e) =>
-                            update('storyboard_duration', Math.max(1, Number(e.target.value)))
-                          }
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  {display.showConsistency && (
-                    <div className="rounded-lg border p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <Label className="text-sm font-medium">{display.consistencyLabel}</Label>
-                          <p className="mt-1 text-xs text-surface-500">
-                            {display.consistencyHint}
-                          </p>
-                        </div>
-                        <span className="text-sm font-medium text-primary-600">{form.consistency_strength}%</span>
-                      </div>
-                      <div className="mt-4">
-                        <Slider
-                          value={[form.consistency_strength]}
-                          onValueChange={(v) => update('consistency_strength', v[0])}
-                          min={0}
-                          max={100}
-                          step={5}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              {display.showStoryboardConfig && !storyboardConfigInStep3 ? renderStoryboardConfigSection() : null}
             </>
           )}
 
           {/* ─── Step 3: Script & Config ───────────────────── */}
-          {step === 3 && (
+          {step === 3 && !isVideoCreateFlow && (
             <>
+              {isVideoCreateFlow ? (
+                <div className="rounded-xl border border-primary-200 bg-primary-50/70 p-4">
+                  <p className="text-sm font-medium text-primary-800">
+                    当前制作模式：{productionModeOption.label}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-primary-700">
+                    {productionModeOption.scriptHint}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {productionModeOption.pipeline.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full bg-white px-2 py-0.5 text-[10px] text-primary-700 ring-1 ring-primary-200"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="space-y-2">
                 <Label>{display.scriptLabel}</Label>
                 <input
@@ -1261,6 +1568,8 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 )}
               </div>
 
+              {storyboardConfigInStep3 ? renderStoryboardConfigSection() : null}
+
               {display.showCostEstimation && (
                 <CostEstimation
                   form={form}
@@ -1287,7 +1596,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           {step === 1 ? '取消' : '上一步'}
         </Button>
 
-        {step < 3 ? (
+        {step < maxStep ? (
           <Button onClick={goNext} title="进入下一步">
             下一步
             <ArrowRight className="ml-2 h-4 w-4" />

@@ -164,6 +164,8 @@ export const projectAPI = {
     api.post(`/api/v1/projects/${id}/episodes/${eid}/extract-storyboards`, {}, {
       ...(skipAssetRefresh ? { headers: { 'X-Autovideo-Skip-Asset-Refresh': 'true' } } : {}),
     }),
+  autoPrepareEpisode: (id: number, eid: number) =>
+    api.post(`/api/v1/projects/${id}/episodes/${eid}/auto-pipeline`),
   deleteEpisode: (id: number, eid: number) =>
     api.delete(`/api/v1/projects/${id}/episodes/${eid}`),
   // Script optimization & AI review

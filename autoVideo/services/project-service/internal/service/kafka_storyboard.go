@@ -477,6 +477,15 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message) {
 		result.ImageURL = imageURL
 		// Save the full built English prompt so the UI EN toggle shows the actual generation prompt.
 		_ = c.storyboardSvc.UpdateGenerationResult(req.StoryboardID, req.VersionID, imageURL, "completed", "", prompt)
+		go func(projectID uint64) {
+			triggerCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if err := c.storyboardSvc.TriggerAutoVideoIfReady(triggerCtx, projectID); err != nil && c.logger != nil {
+				c.logger.Warn("auto video trigger check failed",
+					zap.Uint64("project_id", projectID),
+					zap.Error(err))
+			}
+		}(req.ProjectID)
 	}
 
 	c.publishResult(ctx, result)

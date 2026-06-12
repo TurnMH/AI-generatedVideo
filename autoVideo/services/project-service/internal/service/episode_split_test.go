@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/autovideo/project-service/internal/productionmode"
 )
 
 func TestSplitAdSemanticUnits_PreservesAdBoundaries(t *testing.T) {
@@ -45,7 +47,7 @@ func TestSimpleSplit_UsesSemanticChunksBeforeLengthFallback(t *testing.T) {
 
 CTA：现在就点击领取试用资格。`
 
-	episodes := svc.simpleSplit(text, 3)
+	episodes := svc.simpleSplit(text, 3, productionmode.Profile{Mode: productionmode.ModeAd})
 	if len(episodes) != 3 {
 		t.Fatalf("expected 3 episodes, got %d", len(episodes))
 	}

@@ -596,10 +596,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		// 2. 各场景组之间并行，组内串行
 		// 用信号量限制同时进行 API 调用的场景组数，与并行模式的 maxClips/localMaxClips 保持一致，
 		// 避免场景组数量很多时同时打出过多请求导致限速或 OOM。
-		groupSlots := s.maxClips
-		if gen.Name() == "comfyui-video" {
-			groupSlots = s.localMaxClips
-		}
+		groupSlots := s.clipConcurrencySlots(gen, resolvedModelName)
 		groupSem := make(chan struct{}, groupSlots)
 		var wg sync.WaitGroup
 		for _, grp := range groups {
@@ -755,10 +752,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		}
 		// Generate clips concurrently.
 		// Local GPU models (comfyui-video) use a tighter limit to avoid VRAM exhaustion.
-		clipSlots := s.maxClips
-		if gen.Name() == "comfyui-video" {
-			clipSlots = s.localMaxClips
-		}
+		clipSlots := s.clipConcurrencySlots(gen, resolvedModelName)
 		sem := make(chan struct{}, clipSlots)
 		var wg sync.WaitGroup
 
@@ -787,6 +781,128 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		}
 		wg.Wait()
 	} // end else (concurrent mode)
+
+	// Auto-retry failed clips once before deciding compose eligibility.
+	if retryFailed := collectFailedClips(clips); len(retryFailed) > 0 {
+		s.logger.Info("auto-retrying failed clips once",
+			zap.Int64("task_id", taskID),
+			zap.Int("failed_count", len(retryFailed)),
+		)
+		if task.SerialScene && serialChainEnabled && len(sceneGroupKeys) == len(clips) {
+			type sceneGroup struct {
+				key   string
+				clips []*model.VideoClip
+			}
+			var groups []sceneGroup
+			keyToIdx := map[string]int{}
+			for _, c := range clips {
+				k := c.SceneGroupKey
+				if k == "" {
+					groups = append(groups, sceneGroup{key: fmt.Sprintf("__solo_%d__", c.ClipOrder), clips: []*model.VideoClip{c}})
+				} else if idx, ok := keyToIdx[k]; ok {
+					groups[idx].clips = append(groups[idx].clips, c)
+				} else {
+					keyToIdx[k] = len(groups)
+					groups = append(groups, sceneGroup{key: k, clips: []*model.VideoClip{c}})
+				}
+			}
+			groupSlots := s.clipConcurrencySlots(gen, resolvedModelName)
+			groupSem := make(chan struct{}, groupSlots)
+			var retryWg sync.WaitGroup
+			for _, grp := range groups {
+				hasFailed := false
+				for _, c := range grp.clips {
+					if c.Status == model.StatusFailed {
+						hasFailed = true
+						break
+					}
+				}
+				if !hasFailed {
+					continue
+				}
+				retryWg.Add(1)
+				go func(g sceneGroup) {
+					defer retryWg.Done()
+					groupSem <- struct{}{}
+					defer func() { <-groupSem }()
+					var prevEndFrameURL string
+					for _, c := range g.clips {
+						if c.Status == model.StatusSucceeded && c.ClipURL != "" {
+							if c.EndFrameImageURL != "" {
+								prevEndFrameURL = c.EndFrameImageURL
+							} else if c.SourceImageURL != "" {
+								prevEndFrameURL = c.SourceImageURL
+							}
+							continue
+						}
+						chainEnabled := false
+						if c.ClipOrder >= 0 && c.ClipOrder < len(serialChainByClip) {
+							chainEnabled = serialChainByClip[c.ClipOrder]
+						}
+						if chainEnabled && prevEndFrameURL != "" {
+							c.SourceImageURL = prevEndFrameURL
+						}
+						c.Status = model.StatusPending
+						c.ErrorMsg = ""
+						c.ClipURL = ""
+						if genErr := buildAndGenClip(c, "", 3); genErr != nil {
+							s.logger.Warn("serial clip auto-retry failed",
+								zap.Int64("clip_id", c.ID),
+								zap.Error(genErr))
+							saveCtx, saveCancel := context.WithTimeout(context.Background(), 15*time.Second)
+							_ = s.repo.UpdateClip(saveCtx, c)
+							saveCancel()
+							return
+						}
+						saveCtx, saveCancel := context.WithTimeout(context.Background(), 15*time.Second)
+						_ = s.repo.UpdateClip(saveCtx, c)
+						saveCancel()
+						if s.frameExtractorURL != "" && c.ClipURL != "" {
+							if frameURL, err := callFrameExtractor(ctx, c.ClipURL, task.ProjectID, task.UserID, s.frameExtractorURL); err == nil {
+								prevEndFrameURL = frameURL
+								c.EndFrameImageURL = frameURL
+								saveCtx2, saveCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+								_ = s.repo.UpdateClip(saveCtx2, c)
+								saveCancel2()
+							} else if c.SourceImageURL != "" {
+								prevEndFrameURL = c.SourceImageURL
+							}
+						} else if c.SourceImageURL != "" {
+							prevEndFrameURL = c.SourceImageURL
+						}
+					}
+				}(grp)
+			}
+			retryWg.Wait()
+		} else {
+			retrySlots := s.clipConcurrencySlots(gen, resolvedModelName)
+			retrySem := make(chan struct{}, retrySlots)
+			var retryWg sync.WaitGroup
+			for _, c := range retryFailed {
+				retryWg.Add(1)
+				go func(clip *model.VideoClip) {
+					defer retryWg.Done()
+					retrySem <- struct{}{}
+					defer func() { <-retrySem }()
+					clip.Status = model.StatusPending
+					clip.ErrorMsg = ""
+					clip.ClipURL = ""
+					_ = buildAndGenClip(clip, "", 3)
+					saveCtx, saveCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					_ = s.repo.UpdateClip(saveCtx, clip)
+					saveCancel()
+				}(c)
+			}
+			retryWg.Wait()
+		}
+	}
+
+	failCount = 0
+	for _, c := range clips {
+		if c.Status != model.StatusSucceeded || c.ClipURL == "" {
+			failCount++
+		}
+	}
 
 	if failCount == len(clips) {
 		s.markFailed(ctx, taskID, summarizeAllClipsFailure(clips))
@@ -817,16 +933,34 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		s.markFailed(ctx, taskID, "no succeeded clips")
 		return fmt.Errorf("task %d: no succeeded clips", taskID)
 	}
+	allowIncompleteCompose := renderConfigBool(task.RenderConfig, "allow_incomplete_compose")
+	if !task.SerialScene && !allowIncompleteCompose {
+		// Parallel mode defaults to partial compose so one bad clip does not waste the whole task.
+		allowIncompleteCompose = true
+	}
 	if len(clipURLs) != len(clips) {
 		msg := fmt.Sprintf("incomplete clip generation: %d/%d clips succeeded", len(clipURLs), len(clips))
-		_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
-		s.markFailed(ctx, taskID, msg)
-		s.logger.Warn("refusing to compose incomplete multi-clip task",
+		if !allowIncompleteCompose || len(clipURLs) == 0 {
+			_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
+			s.markFailed(ctx, taskID, msg)
+			s.logger.Warn("refusing to compose incomplete multi-clip task",
+				zap.Int64("task_id", taskID),
+				zap.Int("succeeded", len(clipURLs)),
+				zap.Int("failed", failCount),
+				zap.Int("total", len(clips)))
+			return fmt.Errorf("task %d: %s", taskID, msg)
+		}
+		if task.RenderConfig == nil {
+			task.RenderConfig = model.RenderConfig{}
+		}
+		task.RenderConfig["partial_compose"] = true
+		task.RenderConfig["failed_clip_count"] = failCount
+		_ = s.repo.UpdateTask(ctx, task)
+		s.logger.Warn("composing partial clip set",
 			zap.Int64("task_id", taskID),
 			zap.Int("succeeded", len(clipURLs)),
 			zap.Int("failed", failCount),
 			zap.Int("total", len(clips)))
-		return fmt.Errorf("task %d: %s", taskID, msg)
 	}
 
 	s.logger.Info("clips generation done",
@@ -878,7 +1012,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 
 	// Attach dubbing audio — skip when the video model already embeds native audio.
 	audioURL := task.AudioURL
-	subtitleText := task.SubtitleText
+	subtitleText := strings.TrimSpace(cleanScriptForSpeech(task.SubtitleText))
 	// If no explicit subtitle text, build from per-clip dialogues.
 	if subtitleText == "" {
 		subtitleText = joinDialogues(composedDialogues)
@@ -1067,7 +1201,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 
 	// Attach dubbing audio — skip when the video model already embeds native audio.
 	audioURL := task.AudioURL
-	subtitleText := task.SubtitleText
+	subtitleText := strings.TrimSpace(cleanScriptForSpeech(task.SubtitleText))
 	// If no explicit subtitle text, build from per-clip dialogues stored in render_config.
 	if subtitleText == "" {
 		subtitleText = joinDialogues(composedDialogues)
@@ -1858,6 +1992,15 @@ func (s *VideoService) recoverStaleTasks(threshold time.Duration) {
 	}
 }
 
+func taskHasInFlightClips(clips []model.VideoClip) bool {
+	for _, clip := range clips {
+		if clip.Status == model.StatusPending || clip.Status == model.StatusProcessing {
+			return true
+		}
+	}
+	return false
+}
+
 // ResumeOrphanedTasks —— 将重启前处于 processing 状态的任务重置为 pending
 // ResumeOrphanedTasks resets "processing" tasks to "pending" so they get
 // picked up by ResumePendingTasks (called next at startup).
@@ -1872,6 +2015,13 @@ func (s *VideoService) ResumeOrphanedTasks(ctx context.Context) {
 	}
 	s.logger.Info("resuming orphaned video tasks", zap.Int("count", len(tasks)))
 	for _, t := range tasks {
+		clips, clipErr := s.repo.GetClipsByTaskID(ctx, t.ID)
+		if clipErr == nil && taskHasInFlightClips(clips) {
+			s.logger.Info("keeping orphaned video task in processing; clips still in flight",
+				zap.Int64("task_id", t.ID),
+				zap.Int("clip_count", len(clips)))
+			continue
+		}
 		if err := s.repo.UpdateTaskStatus(ctx, t.ID, model.StatusPending, "", "", 0); err != nil {
 			s.logger.Error("reset orphan", zap.Int64("id", t.ID), zap.Error(err))
 		}
@@ -1891,6 +2041,17 @@ func (s *VideoService) ResumePendingTasks(ctx context.Context) {
 	}
 	s.logger.Info("dispatching pending video tasks", zap.Int("count", len(tasks)))
 	for _, t := range tasks {
+		clips, clipErr := s.repo.GetClipsByTaskID(ctx, t.ID)
+		if clipErr == nil && len(clips) > 0 && taskHasInFlightClips(clips) {
+			if err := s.repo.UpdateTaskStatus(ctx, t.ID, model.StatusProcessing, "", "", 0); err != nil {
+				s.logger.Warn("sync in-flight pending task to processing failed", zap.Int64("id", t.ID), zap.Error(err))
+			} else {
+				s.logger.Info("skip re-dispatch; pending task already has in-flight clips",
+					zap.Int64("task_id", t.ID),
+					zap.Int("clip_count", len(clips)))
+			}
+			continue
+		}
 		if err := s.DispatchTask(ctx, &t); err != nil {
 			s.logger.Warn("dispatch pending failed", zap.Int64("id", t.ID), zap.Error(err))
 		}
@@ -2960,12 +3121,12 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 	switch v := raw.(type) {
 	case []string:
 		for i := 0; i < n && i < len(v); i++ {
-			result[i] = v[i]
+			result[i] = strings.TrimSpace(cleanScriptForSpeech(v[i]))
 		}
 	case []interface{}:
 		for i := 0; i < n && i < len(v); i++ {
 			if s, ok := v[i].(string); ok {
-				result[i] = s
+				result[i] = strings.TrimSpace(cleanScriptForSpeech(s))
 			}
 		}
 	}
@@ -2976,8 +3137,9 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 func joinDialogues(dialogues []string) string {
 	var parts []string
 	for _, d := range dialogues {
-		if strings.TrimSpace(d) != "" {
-			parts = append(parts, d)
+		cleaned := strings.TrimSpace(cleanScriptForSpeech(d))
+		if cleaned != "" {
+			parts = append(parts, cleaned)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -4922,6 +5084,40 @@ func buildGlobalStyleAnchorEN(stylePreset, charDescriptions string) string {
 //
 // English-optimised models: Sora 2, Veo 3 — trained by OpenAI/Google with
 // English as the primary prompt language.
+func collectFailedClips(clips []*model.VideoClip) []*model.VideoClip {
+	var failed []*model.VideoClip
+	for _, c := range clips {
+		if c.Status == model.StatusFailed {
+			failed = append(failed, c)
+		}
+	}
+	return failed
+}
+
+// clipConcurrencySlots returns per-model clip concurrency limits.
+func (s *VideoService) clipConcurrencySlots(gen generators.VideoGenerator, modelName string) int {
+	if gen != nil && gen.Name() == "comfyui-video" {
+		return s.localMaxClips
+	}
+	if gen != nil {
+		switch gen.Name() {
+		case "tencent-vclm":
+			return 1
+		case "runninghub":
+			if s.maxClips > 2 {
+				return 2
+			}
+		}
+	}
+	if videoModelFamily(modelName) == "minmax" && s.maxClips > 4 {
+		return 4
+	}
+	if slots := s.maxClips; slots > 0 {
+		return slots
+	}
+	return 3
+}
+
 func videoModelFamily(modelName string) string {
 	lower := strings.ToLower(modelName)
 	switch {

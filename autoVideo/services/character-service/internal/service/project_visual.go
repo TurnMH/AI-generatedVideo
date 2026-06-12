@@ -21,6 +21,23 @@ type projectVisualProfile struct {
 	ProjectDesciption string
 }
 
+type projectPipelineState struct {
+	Status string
+	Stage  string
+}
+
+func (s projectPipelineState) blocksProjectWideExtraction() bool {
+	if s.Status == "script_processing" {
+		return true
+	}
+	switch s.Stage {
+	case "episode_splitting", "script_prepping", "scene_splitting":
+		return true
+	default:
+		return false
+	}
+}
+
 func fetchProjectVisualProfile(ctx context.Context, projectServiceURL string, projectID uint64, authToken string) (*projectVisualProfile, error) {
 	url := fmt.Sprintf("%s/api/v1/projects/%d", strings.TrimRight(projectServiceURL, "/"), projectID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -63,6 +80,48 @@ func fetchProjectVisualProfile(ctx context.Context, projectServiceURL string, pr
 		ProjectTitle:      result.Data.Title,
 		ProjectDesciption: result.Data.Description,
 	}, nil
+}
+
+func fetchProjectPipelineState(ctx context.Context, projectServiceURL string, projectID uint64, authToken string) (*projectPipelineState, error) {
+	url := fmt.Sprintf("%s/api/v1/projects/%d", strings.TrimRight(projectServiceURL, "/"), projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call project-service: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("project-service %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Status   string          `json:"status"`
+			Progress json.RawMessage `json:"progress"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse project response: %w", err)
+	}
+
+	state := &projectPipelineState{Status: result.Data.Status}
+	if len(result.Data.Progress) > 0 {
+		var progress struct {
+			Stage string `json:"stage"`
+		}
+		if err := json.Unmarshal(result.Data.Progress, &progress); err == nil {
+			state.Stage = progress.Stage
+		}
+	}
+	return state, nil
 }
 
 func buildProjectVisualHint(profile *projectVisualProfile) string {

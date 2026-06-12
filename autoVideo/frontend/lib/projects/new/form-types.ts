@@ -1,6 +1,9 @@
+import type { VideoProductionMode } from '@/lib/projects/new/production-mode'
+
 export interface FormData {
   title: string
   description: string
+  production_mode: VideoProductionMode
   logoFile: File | null
   logoPreview: string
   style_tags: string[]
@@ -33,10 +36,11 @@ export interface FormData {
 export const initialFormData: FormData = {
   title: '',
   description: '',
+  production_mode: 'script_drama',
   logoFile: null,
   logoPreview: '',
   style_tags: [],
-  target_episodes: 1,
+  target_episodes: 10,
   text_model_id: undefined,
   image_model_id: undefined,
   video_model_id: undefined,
@@ -58,6 +62,6 @@ export const initialFormData: FormData = {
   storyboard_aspect_ratio: '16:9',
   storyboard_resolution: '1920x1080',
   storyboard_duration: 5,
-  consistency_strength: 75,
+  consistency_strength: 82,
   video_motion_mode: 'gentle',
 }

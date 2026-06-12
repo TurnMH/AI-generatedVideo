@@ -46,8 +46,11 @@ type StoryboardService struct {
 	continuityAuditor   *SceneContinuityAuditor
 	modelServiceBaseURL string
 	authServiceBaseURL  string
+	videoBaseURL        string
 	jwtSecret           string
 	httpClient          *http.Client
+	autoVideoMu         sync.Mutex
+	autoVideoInflight   map[uint64]time.Time
 }
 
 // NewStoryboardService —— 创建分镜服务实例

@@ -70,6 +70,33 @@ var linePrefixStripPattern = regexp.MustCompile(`^(?:摄影|镜头|画面|景别
 // chapterTitlePattern matches chapter/episode/scene title lines.
 var chapterTitlePattern = regexp.MustCompile(`^第[一二三四五六七八九十百千零〇两0-9\d]+[章集场幕回部卷节篇]`)
 
+// sceneSluglinePattern matches screenplay scene headings, e.g. "内景 · 厨房 · 夜" or "【内景 · 厨房 · 夜】".
+var sceneSluglinePattern = regexp.MustCompile(`^(?:【\s*)?(?:内景|外景|内外景|INT\.?|EXT\.?)(?:\s*[·．.、，,/\|｜\-—–]\s*|\s+).+(?:\s*】)?$`)
+
+// screenplayActionLine matches action/staging lines like "刘师傅（沉稳）将手放在案板上" without speakable dialogue.
+var screenplayActionLine = regexp.MustCompile(`^[\p{Han}A-Za-z0-9·\s]{1,16}[（(][^)）]{0,30}[）)]\s*[\p{Han}A-Za-z]`)
+
+// speakerCueOnlyPattern matches speaker label lines with no dialogue content (e.g. "旁白" or "角色（画外）").
+var speakerCueOnlyPattern = regexp.MustCompile(`^(?:旁白|主持人|主播|解说|老师|嘉宾|男声|女声|人物|角色|画外音|OS|VO)(?:\s*(?:[（(][^)）]{0,30}[）)]|\([^)]{0,30}\)))?\s*$`)
+
+// speakerWithEmotionLine extracts "角色（情绪）：台词" into speakable dialogue.
+var speakerWithEmotionLine = regexp.MustCompile(`^(.+?)[（(][^)）]{0,24}[）)]\s*[:：]\s*(.+)$`)
+
+// nameOnlyLinePattern matches speaker cue lines without dialogue, e.g. "刘师傅。".
+var nameOnlyLinePattern = regexp.MustCompile(`^[\p{Han}A-Za-z·]{1,8}[。！?？]?$`)
+
+// sceneSettingLinePattern matches scene/time setup narration, e.g. "德聚楼后厨，傍晚，…".
+var sceneSettingLinePattern = regexp.MustCompile(`^(?:[\p{Han}A-Za-z0-9·]{2,30}[，,]\s*)?(?:清晨|早晨|早上|上午|中午|午后|傍晚|黄昏|夜里|夜晚|夜间|深夜|凌晨|日间|日出|日落)[，,]`)
+
+// locationLeadLinePattern matches location-led descriptive lines, e.g. "德聚楼后厨，…".
+var locationLeadLinePattern = regexp.MustCompile(`^[\p{Han}]{2,}(?:楼|堂|馆|店|院|房|室|厨|厅|街|巷|路|园|场|殿|宫|城|村|镇|山|河|湖|海|门|间|内|外|里|中)[，,]`)
+
+// actionOnlyLinePattern matches pure action/staging lines without speakable dialogue.
+var actionOnlyLinePattern = regexp.MustCompile(`^[\p{Han}]{1,8}(?:缓缓|慢慢|轻轻|忽然|猛然|转身|抬头|低头|走|跑|拿|放|推|拉|看|望|站|坐|蹲|靠|握|举|切|揉|炒|煮|递|接|挥|指|叹|笑|哭|愣|震|顿|沉默|专注).+[。！]?$`)
+
+// timeTransitionLinePattern matches temporal transition cards, e.g. "三个月前。".
+var timeTransitionLinePattern = regexp.MustCompile(`^(?:\d+年[前后]?|\d+个?月[前后]?|三天后|翌日|次日|同时|此时|那一刻|三个月前|一年前|数日后|片刻后)[。！]?$`)
+
 // cleanScriptForSpeech strips production-direction annotations and stage directions
 // from screenplay/script text so only speakable dialogue reaches TTS/subtitle generation.
 // Rules:
@@ -103,11 +130,36 @@ func cleanScriptForSpeech(text string) string {
 		if line == "" {
 			continue
 		}
-		// Drop pure stage-direction parentheticals.
+		// Drop pure stage-direction parentheticals / bracket-only lines.
 		if (strings.HasPrefix(line, "(") && strings.HasSuffix(line, ")")) ||
 			(strings.HasPrefix(line, "（") && strings.HasSuffix(line, "）")) ||
-			(strings.HasPrefix(line, "【") && strings.HasSuffix(line, "】")) {
+			(strings.HasPrefix(line, "【") && strings.HasSuffix(line, "】")) ||
+			(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
 			continue
+		}
+		// Drop scene sluglines and screenplay action lines.
+		if sceneSluglinePattern.MatchString(line) {
+			continue
+		}
+		if strings.HasPrefix(line, "△") {
+			continue
+		}
+		if speakerCueOnlyPattern.MatchString(line) {
+			continue
+		}
+		if screenplayActionLine.MatchString(line) && !speakerLinePattern.MatchString(line) {
+			continue
+		}
+		if nameOnlyLinePattern.MatchString(line) ||
+			sceneSettingLinePattern.MatchString(line) ||
+			locationLeadLinePattern.MatchString(line) ||
+			actionOnlyLinePattern.MatchString(line) ||
+			timeTransitionLinePattern.MatchString(line) {
+			continue
+		}
+		// Normalize "角色（情绪）：台词" → "角色：台词".
+		if m := speakerWithEmotionLine.FindStringSubmatch(line); len(m) == 3 {
+			line = strings.TrimSpace(m[1]) + "：" + strings.TrimSpace(m[2])
 		}
 		// Drop markdown headings and horizontal rules.
 		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "===") || strings.HasPrefix(line, "***") {
@@ -124,6 +176,11 @@ func cleanScriptForSpeech(text string) string {
 		out = append(out, line)
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// CleanScriptForSpeech is the exported wrapper used by handlers and other packages.
+func CleanScriptForSpeech(text string) string {
+	return cleanScriptForSpeech(text)
 }
 
 var autoVoiceStagePrefixes = []string{
@@ -385,9 +442,6 @@ func (s *DubbingService) SetWhisperURL(url string) {
 // When task.CustomAudioURL is non-empty, TTS is skipped and the audio is used directly.
 func (s *DubbingService) CreateTask(ctx context.Context, task *model.DubbingTask, text string) error {
 	cleanedText := strings.TrimSpace(cleanScriptForSpeech(text))
-	if cleanedText == "" {
-		cleanedText = strings.TrimSpace(text)
-	}
 
 	// If custom audio is provided, mark complete immediately — no TTS needed.
 	if strings.TrimSpace(task.CustomAudioURL) != "" {
@@ -488,9 +542,6 @@ func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.D
 	}
 
 	cleanedText := strings.TrimSpace(cleanScriptForSpeech(text))
-	if cleanedText == "" {
-		cleanedText = strings.TrimSpace(text)
-	}
 	if cleanedText == "" {
 		return fmt.Errorf("spoken text is empty after cleanup")
 	}

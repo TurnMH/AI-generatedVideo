@@ -36,6 +36,10 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useToast } from '@/components/ui/toast'
 import { formatBytes } from '@/lib/projects/utils'
 import { ProjectEpisodeFilterContext } from '@/lib/projects/episode-filter'
+import { episodeSplitOverviewBadge, prefersAutoEpisodeSplit } from '@/lib/projects/episode-split'
+import { EpisodeAutoPipelineFooter } from '@/components/projects/detail/EpisodeAutoPipelineFooter'
+import { deriveVideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
+import { useEpisodeAutoPipeline } from '@/lib/projects/use-episode-auto-pipeline'
 import { buildProjectOverview } from '@/lib/projects/workflow'
 import { fetchModelIdentity } from '@/lib/model-selection'
 import { StorageDrawer } from '@/components/projects/detail/StorageDrawer'
@@ -285,9 +289,11 @@ export default function SerialProjectDetailPage() {
     || projectProgress?.message?.trim()
     || (projectSplitTotal > 0
       ? `正在生成分集结构（${projectSplitCompleted}/${projectSplitTotal}）`
-      : projectTargetEpisodes > 0
-        ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
-        : '正在拆分剧本并生成分集结构')
+      : prefersAutoEpisodeSplit(project)
+        ? '正在按剧本内容自动拆分分集'
+        : projectTargetEpisodes > 0
+          ? `正在按目标 ${projectTargetEpisodes} 集拆分剧本`
+          : '正在拆分剧本并生成分集结构')
   const projectSplitDescription = structuredNextStep
     ? `${structuredNextStep}${projectProgress?.current_episode && projectProgress?.total_episodes ? ` 当前进度 ${projectProgress.current_episode}/${projectProgress.total_episodes}。` : ''}`
     : projectSplitTotal > 0
@@ -301,6 +307,23 @@ export default function SerialProjectDetailPage() {
   const selectedEpisodeUpdatedLabel = selectedEpisode?.updated_at
     ? new Date(selectedEpisode.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : '—'
+
+  const pipelineSnapshot = deriveVideoPipelineSnapshot({
+    project: project ?? { status: 'draft', progress: undefined },
+    episodes,
+    storyboardGenerating: isExtractingStoryboards,
+  })
+  const firstEpisodeAutoActive = pipelineSnapshot.isActive
+    && (pipelineSnapshot.phase === 'script_prepping' || pipelineSnapshot.phase === 'scene_splitting')
+
+  const { getEpisodeAutoAction, handleEpisodeAutoPipeline } = useEpisodeAutoPipeline({
+    projectId,
+    episodes,
+    episodeWorkspaceMeta,
+    firstEpisodeAutoActive,
+    mutateProject,
+    toast,
+  })
 
   const openEpisodeWorkspace = (targetEpisodeId?: number | null, tab: 'assets' | 'storyboard' | 'dubbing' | 'video' = 'assets') => {
     if (!targetEpisodeId) {
@@ -484,7 +507,7 @@ export default function SerialProjectDetailPage() {
           const postSplitRunning = !projectSplitInProgress && episodes.length > 0
           banners.push({
             icon: <Loader2 className="h-5 w-5 animate-spin text-blue-300" />,
-            title: postSplitRunning ? 'AI 正在润色剧本并自动衔接资源/分镜' : projectSplitTitle,
+            title: postSplitRunning ? 'AI 正在润色优化示范剧本（仅文本处理）' : projectSplitTitle,
             desc: postSplitRunning
               ? (project.progress?.message?.trim() || '系统正在逐集润色、审查与套用格式化剧本，完成后会自动继续资源提取与分镜流程。')
               : projectSplitDescription,
@@ -742,19 +765,25 @@ export default function SerialProjectDetailPage() {
                   if (storyboardTotal > 0) return { label: '当前阶段：分镜已就绪', className: 'text-indigo-600' }
                   if (isAssetExtracting) return { label: '当前阶段：资源提取中', className: 'text-amber-600' }
                   if (isAssetGenerating) return { label: '当前阶段：资源生成中', className: 'text-blue-600' }
-                  if (assetTotal > 0) return { label: '当前阶段：等待自动分镜', className: 'text-indigo-600' }
-                  return { label: '当前阶段：等待资源提取', className: 'text-surface-400' }
+                  if (assetTotal > 0) return { label: '当前阶段：待拆分分镜', className: 'text-indigo-600' }
+                  return { label: '当前阶段：待自动处理', className: 'text-surface-400' }
                 })()
 
+                const autoAction = getEpisodeAutoAction(ep)
+
                 return (
-                  <button
+                  <div
                     key={ep.id}
-                    onClick={() => openEpisodeWorkspace(ep.id, 'assets')}
-                    className={`group flex flex-col w-full cursor-pointer text-left rounded-xl px-3 py-3 text-sm transition-all border ${
+                    className={`group flex flex-col w-full rounded-xl border text-sm transition-all ${
                       selectedEpisodeId === ep.id
                         ? 'bg-indigo-50 border-indigo-200 text-indigo-800 shadow-sm'
                         : 'bg-white border-surface-200 text-surface-700 hover:border-indigo-200 hover:bg-indigo-50/60 hover:shadow-sm'
                     }`}
+                  >
+                  <button
+                    type="button"
+                    onClick={() => openEpisodeWorkspace(ep.id, 'assets')}
+                    className="flex w-full cursor-pointer flex-col px-3 py-3 text-left"
                   >
                     <div className="flex items-center justify-between font-medium gap-2">
                       <span className="flex items-center gap-2 truncate">
@@ -786,10 +815,16 @@ export default function SerialProjectDetailPage() {
                       ) : storyboardTotal > 0 ? (
                         <span className="inline-flex items-center gap-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">分镜就绪 {storyboardCompleted}/{storyboardTotal}</span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px] font-medium text-surface-500">分镜待提取</span>
+                        <span className="inline-flex items-center gap-1 rounded bg-surface-100 px-1.5 py-0.5 text-[10px] font-medium text-surface-500">待自动处理</span>
                       )}
                     </div>
                   </button>
+                  <EpisodeAutoPipelineFooter
+                    action={autoAction}
+                    tone="indigo"
+                    onAction={(event) => void handleEpisodeAutoPipeline(ep.id, event)}
+                  />
+                  </div>
                 )
               })}
               {episodes.length === 0 && (
@@ -812,7 +847,7 @@ export default function SerialProjectDetailPage() {
                         <div className="flex flex-wrap items-center gap-2 text-xs text-surface-500">
                           <span className="rounded-full border border-surface-200 bg-surface-50 px-2.5 py-1">串行项目总览</span>
                           <span className="rounded-full border border-surface-200 bg-surface-50 px-2.5 py-1">剧集 {episodes.length}</span>
-                          <span className="inline-flex items-center gap-1 rounded-full border border-surface-200 bg-surface-50 px-2.5 py-1"><Clock3 className="h-3.5 w-3.5" /> 目标 {project.target_episodes || 0} 集</span>
+                          <span className="inline-flex items-center gap-1 rounded-full border border-surface-200 bg-surface-50 px-2.5 py-1"><Clock3 className="h-3.5 w-3.5" /> {episodeSplitOverviewBadge(project)}</span>
                         </div>
                         <h3 className="mt-3 text-xl font-semibold text-surface-900">剧本大纲与项目总控</h3>
                         <p className="mt-2 text-sm leading-6 text-surface-600">统览整个串行项目的剧本拆分、场景分组配置、分镜制作与后续成片进度。</p>

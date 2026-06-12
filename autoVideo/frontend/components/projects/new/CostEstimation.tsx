@@ -3,6 +3,7 @@
 import { Sparkles } from 'lucide-react'
 import type { Model } from '@/types'
 import { Card, CardContent } from '@/components/ui/card'
+import { recommendEpisodeCount } from '@/lib/projects/comic'
 import type { FormData } from '@/lib/projects/new/form-types'
 
 export function CostEstimation({
@@ -24,7 +25,8 @@ export function CostEstimation({
   const videoModel = findModel(videoModels, form.video_model_id)
   const ttsModel = findModel(ttsModels, form.tts_model_id)
 
-  const episodeCount = form.target_episodes || 1
+  const recommendedCount = recommendEpisodeCount(form.scriptPreview)?.count
+  const episodeCount = form.target_episodes > 0 ? form.target_episodes : (recommendedCount || 8)
   const estimatedScenes = episodeCount * 15
 
   const costs = [

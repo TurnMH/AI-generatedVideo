@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/autovideo/project-service/internal/model"
+	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/repository"
 	"github.com/autovideo/project-service/internal/stylepreset"
 )
@@ -91,6 +92,7 @@ type episodeContextKey string
 const (
 	skipEpisodeAssetRefreshContextKey      episodeContextKey = "skipEpisodeAssetRefresh"
 	skipEpisodeStoryboardTriggerContextKey episodeContextKey = "skipEpisodeStoryboardTrigger"
+	skipEpisodeAssetExtractionContextKey   episodeContextKey = "skipEpisodeAssetExtraction"
 )
 
 func WithSkipEpisodeAssetRefresh(ctx context.Context) context.Context {
@@ -108,6 +110,15 @@ func WithSkipEpisodeStoryboardTrigger(ctx context.Context) context.Context {
 
 func shouldSkipEpisodeStoryboardTrigger(ctx context.Context) bool {
 	skip, _ := ctx.Value(skipEpisodeStoryboardTriggerContextKey).(bool)
+	return skip
+}
+
+func WithSkipEpisodeAssetExtraction(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipEpisodeAssetExtractionContextKey, true)
+}
+
+func shouldSkipEpisodeAssetExtraction(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipEpisodeAssetExtractionContextKey).(bool)
 	return skip
 }
 
@@ -495,6 +506,127 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 	return nil
 }
 
+type episodeAssetSnapshot struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func (s *EpisodeService) listEpisodeAssetSnapshots(ctx context.Context, projectID, episodeID uint64) ([]episodeAssetSnapshot, error) {
+	if !s.autoAssetPipelineReady() {
+		return nil, nil
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets?page=1&page_size=500&episode_id=%d", s.characterBaseURL, projectID, episodeID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("list episode assets failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var paged struct {
+		Data struct {
+			Items []episodeAssetSnapshot `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &paged); err == nil && len(paged.Data.Items) > 0 {
+		return paged.Data.Items, nil
+	}
+	var legacy struct {
+		Data []episodeAssetSnapshot `json:"data"`
+	}
+	if err := json.Unmarshal(body, &legacy); err == nil {
+		return legacy.Data, nil
+	}
+	return nil, nil
+}
+
+func episodeAssetExtractionInFlight(assets []episodeAssetSnapshot) bool {
+	for _, asset := range assets {
+		if asset.Name == "__extracting__" || asset.Status == "extracting" {
+			return true
+		}
+	}
+	return false
+}
+
+func countSettledEpisodeAssets(assets []episodeAssetSnapshot) int {
+	count := 0
+	for _, asset := range assets {
+		if asset.Name == "__extracting__" || asset.Status == "extracting" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// waitForEpisodeAssetExtraction blocks until async episode extraction finishes or the context expires.
+// When expectDispatch is true, tolerate a short window where character-service has accepted the
+// extract request (202) but not yet created the __extracting__ sentinel.
+func (s *EpisodeService) waitForEpisodeAssetExtraction(ctx context.Context, projectID, episodeID uint64, expectDispatch bool) error {
+	if !s.autoAssetPipelineReady() {
+		return nil
+	}
+	const dispatchGrace = 30 * time.Second
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	started := time.Now()
+
+	for {
+		assets, err := s.listEpisodeAssetSnapshots(ctx, projectID, episodeID)
+		if err != nil {
+			return err
+		}
+		if episodeAssetExtractionInFlight(assets) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+		if !expectDispatch || countSettledEpisodeAssets(assets) > 0 {
+			if s.logger != nil {
+				s.logger.Info("episode asset extraction settled before storyboard split",
+					zap.Uint64("project_id", projectID),
+					zap.Uint64("episode_id", episodeID),
+					zap.Int("asset_count", len(assets)),
+					zap.Bool("expect_dispatch", expectDispatch),
+				)
+			}
+			return nil
+		}
+		if time.Since(started) < dispatchGrace {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+		if s.logger != nil {
+			s.logger.Warn("episode asset extraction sentinel did not appear within grace window; continuing storyboard split",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("episode_id", episodeID),
+				zap.Duration("grace", dispatchGrace),
+			)
+		}
+		return nil
+	}
+}
+
 func (s *EpisodeService) fetchAssetReferences(ctx context.Context, projectID uint64, episodeID *uint64) []assetReference {
 	if !s.autoAssetPipelineReady() {
 		return nil
@@ -775,92 +907,36 @@ func parseStoryboardRuntimeConfig(project *model.Project) storyboardRuntimeConfi
 	return cfg
 }
 
-func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig) AutoSplitMeta {
-	scriptLength := utf8.RuneCountInString(strings.TrimSpace(scriptText))
-	meta := AutoSplitMeta{
-		Enabled:      true,
-		Duration:     runtimeCfg.Duration,
-		VideoModel:   strings.TrimSpace(runtimeCfg.VideoModel),
-		StylePreset:  stylepreset.Canonical(runtimeCfg.StylePreset),
-		ScriptLength: scriptLength,
+func toProductionRuntimeConfig(runtimeCfg storyboardRuntimeConfig) productionmode.RuntimeConfig {
+	return productionmode.RuntimeConfig{
+		Duration:                   runtimeCfg.Duration,
+		VideoModel:                 runtimeCfg.VideoModel,
+		StylePreset:                runtimeCfg.StylePreset,
+		AutoSplitAfterOptimization: runtimeCfg.AutoSplitAfterOptimization,
 	}
-	if meta.Duration <= 0 {
-		meta.Duration = 10
-	}
-	if meta.StylePreset == "" {
-		meta.StylePreset = stylepreset.Default
-	}
-
-	clipDuration := meta.Duration
-	if clipDuration < 3 {
-		clipDuration = 3
-	}
-	if clipDuration > 180 {
-		clipDuration = 180
-	}
-
-	charsPerSecond := 7
-	switch meta.StylePreset {
-	case stylepreset.LiveActionFilm:
-		charsPerSecond = 6
-	case stylepreset.LiveActionShort:
-		charsPerSecond = 7
-	case stylepreset.Anime3D:
-		charsPerSecond = 8
-	default:
-		charsPerSecond = 8
-	}
-
-	modelKey := strings.ToLower(meta.VideoModel)
-	switch {
-	case strings.Contains(modelKey, "seedance"), strings.Contains(modelKey, "doubao"):
-		charsPerSecond -= 1
-	case strings.Contains(modelKey, "gaga"):
-		charsPerSecond += 1
-	}
-	if charsPerSecond < 4 {
-		charsPerSecond = 4
-	}
-
-	baseTargetChars := clipDuration * charsPerSecond
-	if baseTargetChars < 80 {
-		baseTargetChars = 80
-	}
-	if isAdWorkbenchRuntimeConfig(runtimeCfg) {
-		adMinChars := clipDuration * 14
-		if adMinChars < 140 {
-			adMinChars = 140
-		}
-		if baseTargetChars < adMinChars {
-			baseTargetChars = adMinChars
-		}
-	}
-	if baseTargetChars > 4000 {
-		baseTargetChars = 4000
-	}
-	meta.TargetCharsPerEpisode = baseTargetChars
-
-	if scriptLength <= 0 {
-		meta.EstimatedEpisodes = 1
-		return meta
-	}
-
-	meta.EstimatedEpisodes = (scriptLength + meta.TargetCharsPerEpisode - 1) / meta.TargetCharsPerEpisode
-	if meta.EstimatedEpisodes < 1 {
-		meta.EstimatedEpisodes = 1
-	}
-	if meta.EstimatedEpisodes > 200 {
-		meta.EstimatedEpisodes = 200
-	}
-	return meta
 }
 
-func isAdWorkbenchRuntimeConfig(runtimeCfg storyboardRuntimeConfig) bool {
-	return runtimeCfg.AutoSplitAfterOptimization
+func fromProductionAutoSplitMeta(meta productionmode.AutoSplitMeta) AutoSplitMeta {
+	return AutoSplitMeta{
+		Enabled:               meta.Enabled,
+		Duration:              meta.Duration,
+		VideoModel:            meta.VideoModel,
+		StylePreset:           meta.StylePreset,
+		ScriptLength:          meta.ScriptLength,
+		TargetCharsPerEpisode: meta.TargetCharsPerEpisode,
+		EstimatedEpisodes:     meta.EstimatedEpisodes,
+		OriginalScript:        meta.OriginalScript,
+		OptimizedScript:       meta.OptimizedScript,
+		ConsistencyPremise:    meta.ConsistencyPremise,
+	}
 }
 
-func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig) int {
-	return buildAutoSplitMeta(scriptText, runtimeCfg).EstimatedEpisodes
+func buildAutoSplitMeta(scriptText string, runtimeCfg storyboardRuntimeConfig, profile productionmode.Profile) AutoSplitMeta {
+	return fromProductionAutoSplitMeta(productionmode.BuildAutoSplitMeta(scriptText, toProductionRuntimeConfig(runtimeCfg), profile))
+}
+
+func estimateAutoSplitTargetEpisodes(scriptText string, runtimeCfg storyboardRuntimeConfig, profile productionmode.Profile) int {
+	return buildAutoSplitMeta(scriptText, runtimeCfg, profile).EstimatedEpisodes
 }
 
 type optimizedAdScriptResult struct {
@@ -896,30 +972,13 @@ func (s *EpisodeService) buildDefaultAdCopyUserPrompt(project *model.Project, tr
 }
 
 func isAdWorkbenchProject(project *model.Project) bool {
-	if project == nil {
-		return false
-	}
-	for _, tag := range project.StyleTags {
-		if strings.EqualFold(strings.TrimSpace(tag), "ad-workbench") {
-			return true
-		}
-	}
-	return false
+	return productionmode.IsAd(project)
 }
 
 func adWorkbenchPromptDirective() string {
-	return strings.TrimSpace(`- 面向广告转化，不写成长剧情拖沓节奏；每个片段都要快速建立场景、动作、卖点与 CTA 关系。
-- 镜头节奏优先“开场钩子 → 痛点/场景 → 解决方案/产品展示 → 证据/细节 → CTA 收束”。
-- 广告拆分的最高优先级是“先按台词 / 口播承载量满足当前目标单分镜时长，再决定是否继续拆分”；如果同一段口播/卖点在当前时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜，禁止为了追求最小动作单位而过度拆镜。
-- 只有在以下情况才允许继续拆分：1）明确切换到新空间/新场景；2）明确进入新卖点/新产品信息；3）说话主体发生变化；4）当前段内容明显超过当前单分镜时长可承载的信息量；5）确实需要一个极短强调镜头，但数量必须严格受限。
-- 广告口播项目中，大多数分镜都应承载明确的 dialogue / 字幕 / 卖点信息；无 dialogue 镜头只能作为极短辅助镜头，不能连续出现，也不能成为主体。
-- 轻微的表情变化、手部动作变化、视线变化、镜头轻推拉，不足以单独拆成新分镜；若不引入新的信息点，应继续留在当前分镜内完成表达。
-- 广告优化、文案拆分、分镜预处理、Prompt 生成时，必须明确以下 14 个维度：1）世界观/故事发生的视觉宇宙；2）空间（在哪里）；3）时间（几点/白天夜晚/时序）；4）人物（谁）；5）服装（穿什么）；6）动作（做什么）；7）核心物件/镜头重点；8）光线（怎么打光）；9）色彩（什么色调）；10）材质（表面质感）；11）镜头运动（怎么拍）；12）情绪（传达什么感觉）；13）转场（怎么切）；14）字幕/屏幕文字、配音/口播内容，以及最终给 AI 的生成 Prompt 描述。
-- 场景描述必须明确时间、空间、人物位置关系、关键道具和镜头焦点，避免后续素材生成漂移。
-- 台词、字幕、口播、屏幕文字必须各司其职：台词/配音负责说什么，字幕负责屏幕上显示什么，Prompt 负责给生成模型什么视觉/镜头描述，不要互相混写。
-- 光线、色彩、材质必须可视化，不要只写抽象情绪词；例如要明确暖金逆光、冷白顶光、哑光塑料、拉丝金属、玻璃反光、柔雾肤感等。
-- 同一个广告项目内，人物外观、服饰、场景主色调、道具、品牌表达、口播身份和语气必须稳定延续。`)
+	return productionmode.AdWorkbenchDirective()
 }
+
 
 func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, project *model.Project, scriptText string, customPrompt string) (*optimizedAdScriptResult, error) {
 	llmCfg := s.resolveProjectLLMConfig(ctx, project)
@@ -1286,6 +1345,18 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 			s.extractAssetsAfterSplit(WithSkipEpisodeStoryboardTrigger(ctx), projectID, episodes)
 		}
 	}
+	if episodeID != nil && s.characterBaseURL != "" {
+		// Single-episode path either just dispatched extraction above or relies on a prior dispatch.
+		if err := s.waitForEpisodeAssetExtraction(ctx, projectID, *episodeID, true); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("episode asset extraction did not settle before storyboard split; continuing",
+					zap.Uint64("project_id", projectID),
+					zap.Uint64("episode_id", *episodeID),
+					zap.Error(err),
+				)
+			}
+		}
+	}
 
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
 	created := s.generateStoryboardsParallelWithOffset(ctx, projectID, project.UserID, episodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, runtimeCfg.SpeechPace, project.ProjectType, startSequence)
@@ -1324,8 +1395,6 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 				zap.Uint64("episode_id", *episodeID),
 			)
 		}
-	} else if s.characterBaseURL != "" {
-		s.extractAssetsAfterSplit(ctx, projectID, episodes)
 	}
 	s.updateProgress(projectID, ProgressInfo{
 		Stage: "idle",
@@ -1563,12 +1632,12 @@ func (s *EpisodeService) fetchScriptPrepSkillHints(ctx context.Context, projectI
 	return s.fetchSkillHintsByUseCase(ctx, projectID, "storyboard_prep")
 }
 
-func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project *model.Project, content string, episodeNum int, kwLib *KeywordLibrary, projectType string, prepSkillHints string, adDirective string) string {
+func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project *model.Project, content string, episodeNum int, kwLib *KeywordLibrary, profile productionmode.Profile, prepSkillHints string) string {
 	llmCfg := s.resolveProjectLLMConfig(ctx, project)
 	if strings.TrimSpace(content) == "" {
 		return content
 	}
-	if projectType == "comics" {
+	if profile.ShouldSkipScriptPrep() {
 		return content
 	}
 
@@ -1578,48 +1647,13 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project
 		content = string(runes[:maxRunes])
 	}
 
-	systemPrompt := `你是一位专业的分镜统筹导演，同时兼任影视文学编辑与现场执行导演，拥有丰富的短剧视频制作经验。
-
-你的任务是对给定的分集剧本进行分镜预处理优化，将其转化为结构清晰、镜头可执行、空间关系明确、人物动作衔接细腻的分镜脚本，为后续 AI 自动拆分分镜和视频生成做铺垫。
-
-优化目标：
-1. 保持原有故事情节、对白和人物关系完整不变
-2. 将隐含的视觉信息显式化，加入影视专业标注
-3. 优化节奏结构，突出视觉高潮和情感转折点
-4. 使每个场景的视觉元素、空间结构、人物关系清晰可读
-5. 让相邻镜头之间的动作、视线、站位、空间方向自然承接，避免跳切
-
-必须添加的内联标注（紧跟相关文字，不单独成行）：
-- [场景:地点描述/时间/天气/空间锚点]
-- [人物:姓名/动作/情绪/语气/表情/站位/朝向]
-- [摄影:景别/角度/运镜]
-- [构图:方式/主体位置/前后景关系]
-- [氛围:描述]
-- [道具:物品名称/位置/持有状态]
-- [情绪:氛围词]
-- [节奏:快切/慢镜/停顿]
-- [调度:人物位移/视线关系/前后景变化]
-- [长镜头:秒数/动作说明]
-- [字幕:对白原文]
-
-连续性硬规则：
-- 同一场景内，人物服装、发型、持有物、伤势、站位朝向不能无缘由变化
-- 同一角色连续说话时，必须交代动作延续和视线方向
-- 新场景第一次出现时，优先给出清晰地点与空间锚点
-- 如果角色从画面左侧移动到右侧，必须明确写出移动过程
-- 重要道具一旦出现在角色手中，直到放下或转场前都要持续标注
-- 每个段落只保留一个核心视觉动作，避免互相冲突的镜头意图
-
-输出要求：
-- 返回纯文本格式，不要 JSON
-- 直接输出优化后的分集脚本内容
-- 保持原有文字风格，只在视觉关键节点加入标注`
+	systemPrompt := productionmode.ScriptPrepSystemPrompt(profile.Mode)
+	if systemPrompt == "" {
+		return content
+	}
 
 	if prepSkillHints != "" {
 		systemPrompt += "\n\n本项目专属分镜预处理指引：\n" + prepSkillHints
-	}
-	if strings.TrimSpace(adDirective) != "" {
-		systemPrompt += "\n\n广告工作台分镜节奏规则（必须同步体现在场景拆分结果里）：\n" + strings.TrimSpace(adDirective)
 	}
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n" + bible + "\n所有标注中的人物姓名和场景描述必须与以上一致性词库保持一致。"
@@ -1765,33 +1799,11 @@ type polishedEpisode struct {
 
 // callLLMPolish sends the episode to the LLM for professional rewriting.
 func (s *EpisodeService) callLLMPolish(ctx context.Context, project *model.Project, ep *model.Episode, writingHints string, productionHints string, kwLib *KeywordLibrary) (*polishedEpisode, error) {
-	systemPrompt := `你是专业的短剧编剧顾问，同时兼任导演组的剧本统筹。请对给定的分集内容进行专业优化润色，返回严格JSON格式（不要markdown代码块），字段如下：
-{
-  "title": "优化后的集标题（简洁有力，20字以内）",
-  "summary": "优化后的分集简介（100-200字，突出核心冲突和看点）",
-  "script_excerpt": "优化后的分集内容（保留原有故事情节，提升可读性、戏剧张力和镜头衔接质量）"
-}
-
-**优化原则：**
-- 保留原有故事情节和人物关系，不要改变核心情节
-- 提升语言表现力，增强戏剧张力
-- 每集结构清晰：开头钩子 → 情节发展 → 结尾悬念/情感落点
-- title 简洁有吸引力，可以是疑问句或关键词组合
-- summary 像平台简介文案，吸引观众点击
-- script_excerpt 保持原长度，重点提升场景描写、人物动作连续性、空间关系和对话质量
-
-**导演/镜头友好要求（必须做到）：**
-- 场景之间的衔接要细腻，不要一句话跨越多个镜头状态
-- 对人物动作采用连续链式表达，例如“抬眼→停顿→转身→走近→开口”，避免状态硬切
-- 关键场景要明确人物相对位置、朝向、视线对象和道具位置，便于后续分镜与视频生成继承
-- 对新空间首次出现时，要自然交代环境结构与空间锚点（门窗、桌椅、楼梯、床、车、柜台、路口等）
-- 对话不能只剩台词，必须让说话时的动作、神态、语气和场面调度同步成立
-- 避免空泛词汇，如“气氛很紧张”“两人对峙”而没有可见画面支撑；要改成可拍摄、可视化的具体画面
-- 同一段不要让人物、空间、镜头意图互相打架；一个自然段只承载一组清晰的视觉动作`
-
-	if isAdWorkbenchProject(project) {
-		systemPrompt += "\n\n**广告工作台节奏规则（分集润色时强制遵守）：**\n" + adWorkbenchPromptDirective()
+	mode := productionmode.ModeScriptDrama
+	if project != nil {
+		mode = productionmode.Resolve(project)
 	}
+	systemPrompt := productionmode.EpisodePolishSystemPrompt(mode)
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属优化指引（请务必遵守）：**\n" + writingHints
 	}
@@ -2018,25 +2030,58 @@ func (s *EpisodeService) countPreparedEpisodes(eps []model.Episode) int {
 	return count
 }
 
-func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEpisodes, processedEpisodes int, timedOut, resumed bool) {
+func firstEpisodeByNumber(eps []model.Episode) model.Episode {
+	if len(eps) == 0 {
+		return model.Episode{}
+	}
+	first := eps[0]
+	for _, ep := range eps[1:] {
+		if ep.EpisodeNumber > 0 && (first.EpisodeNumber <= 0 || ep.EpisodeNumber < first.EpisodeNumber) {
+			first = ep
+		}
+	}
+	return first
+}
+
+func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEpisodes, processedEpisodes int, timedOut, resumed, textOnly bool) {
 	finalStatus := "script_ready"
-	sceneStatus := "done"
-	message := "自动剧本处理已完成"
-	phaseLabel := "剧本自动处理完成"
-	nextStep := "可以继续资源提取、分镜拆分或进入后续制作"
-	completed := totalEpisodes
-	if timedOut {
+	sceneStatus := "pending"
+	if processedEpisodes > 0 && !textOnly {
+		sceneStatus = "done"
+	}
+	message := "第 1 集自动处理已完成"
+	phaseLabel := "示范集自动处理完成"
+	nextStep := "请在左侧单集列表为其他分集点击「自动处理」"
+	completed := processedEpisodes
+	if textOnly && processedEpisodes > 0 && !timedOut {
+		if totalEpisodes <= 1 {
+			message = "分集与第 1 集剧本润色优化已完成"
+			phaseLabel = "剧本文本处理完成"
+			nextStep = "可在单集列表点击「自动处理」衔接资源提取与分镜拆分"
+		} else {
+			message = fmt.Sprintf("分集完成，第 1 集剧本润色优化已完成（项目共 %d 集）", totalEpisodes)
+			phaseLabel = "示范集文本处理完成"
+			nextStep = "请为各分集点击「自动处理」以衔接资源提取与分镜拆分"
+		}
+	} else if totalEpisodes <= 1 {
+		message = "自动剧本处理已完成"
+		phaseLabel = "剧本自动处理完成"
+		nextStep = "可以继续资源提取、分镜拆分或进入后续制作"
+		if !textOnly {
+			sceneStatus = "done"
+		}
+		completed = totalEpisodes
+	} else if timedOut {
 		finalStatus = "failed"
 		sceneStatus = "failed"
-		completed = processedEpisodes
 		message = fmt.Sprintf("自动处理提前结束（%d/%d 集），可手动继续资源与分镜", processedEpisodes, totalEpisodes)
 		phaseLabel = "自动处理已中断"
-		nextStep = "建议继续资源提取或从可用分集开始手动推进分镜"
-	} else if s.autoAssetPipelineReady() {
+		nextStep = "建议在单集工作区为未完成的分集点击「自动处理」"
+	} else if !textOnly && s.autoAssetPipelineReady() {
 		finalStatus = "asset_generating"
-		message = fmt.Sprintf("剧本优化完成（%d/%d 集），资源与分镜正在后台继续", totalEpisodes, totalEpisodes)
-		phaseLabel = "资源与分镜正在后台继续"
-		nextStep = "系统会自动继续资源提取，并在准备好后进入分镜拆分"
+		message = fmt.Sprintf("第 1 集已自动处理（项目共 %d 集），资源与分镜正在后台继续", totalEpisodes)
+		phaseLabel = "示范集资源与分镜处理中"
+		nextStep = "其余分集请在左侧单集列表点击「自动处理」"
 	}
 	if resumed {
 		switch {
@@ -2044,10 +2089,14 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 			message = fmt.Sprintf("服务重启后已尝试恢复，但自动处理仍提前结束（%d/%d 集）", processedEpisodes, totalEpisodes)
 			phaseLabel = "恢复后处理已中断"
 		case finalStatus == "asset_generating":
-			message = fmt.Sprintf("服务重启后已自动恢复，剧本优化完成（%d/%d 集），资源与分镜继续处理中", totalEpisodes, totalEpisodes)
-			phaseLabel = "已自动恢复资源与分镜流程"
+			message = fmt.Sprintf("服务重启后已自动恢复，第 1 集资源与分镜继续处理中（项目共 %d 集）", totalEpisodes)
+			phaseLabel = "已自动恢复示范集流程"
 		case finalStatus == "script_ready":
-			message = fmt.Sprintf("服务重启后已自动恢复并完成剧本处理（%d/%d 集）", totalEpisodes, totalEpisodes)
+			if totalEpisodes > 1 {
+				message = fmt.Sprintf("服务重启后已自动恢复，第 1 集处理完成（项目共 %d 集）", totalEpisodes)
+			} else {
+				message = fmt.Sprintf("服务重启后已自动恢复并完成剧本处理（%d/%d 集）", totalEpisodes, totalEpisodes)
+			}
 			phaseLabel = "已自动恢复剧本处理"
 		}
 	}
@@ -2068,41 +2117,143 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 	_ = s.projectRepo.UpdateStatus(projectID, userID, finalStatus)
 }
 
-func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, eps []model.Episode, resumed bool) {
-	if len(eps) == 0 {
-		return
+func (s *EpisodeService) runEpisodeAutoPipeline(ctx context.Context, project model.Project, ep model.Episode, totalEpisodes int, resumed, isFirstAutoEpisode, triggerAssets bool) bool {
+	if s.episodeAutoPrepared(ep) {
+		return true
 	}
-	go func(project model.Project, eps []model.Episode, resumed bool) {
-		autoCtx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+
+	autoWritingHints := s.fetchWritingSkillHints(ctx, project.ID)
+	autoProductionHints := s.fetchProductionSkillHints(ctx, project.ID)
+	var autoKwLib *KeywordLibrary
+	if proj, pErr := s.projectRepo.FindByIDNoAuth(project.ID); pErr == nil {
+		var lib KeywordLibrary
+		if len(proj.KeywordLibrary) > 0 {
+			if jsonErr := json.Unmarshal(proj.KeywordLibrary, &lib); jsonErr == nil {
+				autoKwLib = &lib
+			}
+		}
+	}
+
+	message := fmt.Sprintf("正在润色并优化第 %d 集剧本…", ep.EpisodeNumber)
+	phaseLabel := "单集剧本处理中"
+	nextStep := "文本处理完成后可点击「自动处理」衔接资源与分镜"
+	if triggerAssets {
+		message = fmt.Sprintf("正在润色并准备第 %d 集，随后自动提取资源并拆分分镜…", ep.EpisodeNumber)
+		phaseLabel = "单集自动处理中"
+		nextStep = "当前集处理完成后可进入工作台继续出图或成片"
+	}
+	if resumed {
+		message = fmt.Sprintf("服务重启后已自动恢复，正在准备第 %d 集…", ep.EpisodeNumber)
+		phaseLabel = "已自动恢复单集处理"
+	}
+	if totalEpisodes > 1 && isFirstAutoEpisode {
+		if triggerAssets {
+			message = fmt.Sprintf("正在自动处理第 %d 集（示范集），其余 %d 集请在单集列表手动启动", ep.EpisodeNumber, max(totalEpisodes-1, 0))
+			nextStep = "示范集完成后，请为其他分集点击「自动处理」"
+		} else {
+			message = fmt.Sprintf("正在润色优化第 %d 集示范剧本（项目共 %d 集）…", ep.EpisodeNumber, totalEpisodes)
+			nextStep = "示范集文本完成后，请为各分集点击「自动处理」衔接资源与分镜"
+		}
+	}
+	sceneSplitStatus := "pending"
+	if triggerAssets {
+		sceneSplitStatus = "running"
+	}
+	s.updateProgress(project.ID, ProgressInfo{
+		Stage: "script_prepping",
+		EpisodeSplit: &StageProgress{
+			Total: totalEpisodes, Completed: totalEpisodes, Status: "done",
+		},
+		SceneSplit: &StageProgress{
+			Total: totalEpisodes, Completed: 0, Status: sceneSplitStatus,
+		},
+		Message:        message,
+		PhaseLabel:     phaseLabel,
+		NextStep:       nextStep,
+		CurrentEpisode: ep.EpisodeNumber,
+		TotalEpisodes:  totalEpisodes,
+	})
+
+	if _, err := s.polishEpisodeInternal(ctx, ep.ID, project.ID, autoWritingHints, autoProductionHints, autoKwLib); err != nil && s.logger != nil {
+		s.logger.Warn("auto-polish episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
+	}
+	updated, err := s.autoOptimizeReviewInternal(ctx, ep.ID, project.ID, autoWritingHints, autoKwLib)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("auto optimize-review episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
+		}
+		if triggerAssets && s.characterBaseURL != "" {
+			if extractErr := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(ctx), project.ID, ep.ID); extractErr != nil && s.logger != nil {
+				s.logger.Warn("fallback asset extraction after optimize-review failure", zap.Uint64("episode_id", ep.ID), zap.Error(extractErr))
+			}
+		}
+		return false
+	}
+
+	if updated.OptimizedText == "" {
+		return false
+	}
+	applyCtx := WithSkipEpisodeStoryboardTrigger(ctx)
+	if !triggerAssets {
+		applyCtx = WithSkipEpisodeAssetExtraction(applyCtx)
+	}
+	if _, applyErr := s.ApplyOptimizedText(applyCtx, ep.ID, project.ID); applyErr != nil {
+		if s.logger != nil {
+			s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
+		}
+		return false
+	}
+	return true
+}
+
+type episodeAutoPipelineJobOptions struct {
+	TriggerStoryboards bool
+	TriggerAssets      bool
+	TextOnly           bool
+	Resumed            bool
+	IsFirstAutoEpisode bool
+	OnComplete         func()
+	Timeout            time.Duration
+}
+
+func (s *EpisodeService) launchEpisodeAutoPipelineJob(project model.Project, episode model.Episode, totalEpisodes int, opts episodeAutoPipelineJobOptions) {
+	go func(project model.Project, episode model.Episode, totalEpisodes int, opts episodeAutoPipelineJobOptions) {
+		timeout := opts.Timeout
+		if timeout <= 0 {
+			timeout = 45 * time.Minute
+		}
+		autoCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		processedEpisodes := s.countPreparedEpisodes(eps)
+		if opts.OnComplete != nil {
+			defer opts.OnComplete()
+		}
+
+		processedEpisodes := 0
+		if s.episodeAutoPrepared(episode) {
+			processedEpisodes = 1
+		}
 		timedOut := false
 		storyboardsTriggered := false
 		defer func() {
-			if !timedOut && processedEpisodes >= len(eps) && s.storyboardSvc != nil {
-				firstEpisodeID := eps[0].ID
-				firstEpisodeNumber := eps[0].EpisodeNumber
-				for i := range eps {
-					if eps[i].EpisodeNumber > 0 && eps[i].EpisodeNumber < firstEpisodeNumber {
-						firstEpisodeID = eps[i].ID
-						firstEpisodeNumber = eps[i].EpisodeNumber
-					}
-				}
+			if opts.TriggerStoryboards && !timedOut && processedEpisodes >= 1 && s.storyboardSvc != nil {
+				epID := episode.ID
 				if s.logger != nil {
-					s.logger.Info("auto preparation finished; triggering storyboard extraction for first episode only",
+					s.logger.Info("auto pipeline finished; triggering storyboard extraction",
 						zap.Uint64("project_id", project.ID),
-						zap.Uint64("episode_id", firstEpisodeID),
-						zap.Int("episode_number", firstEpisodeNumber),
-						zap.Int("episode_count", len(eps)),
-						zap.Bool("resumed", resumed),
+						zap.Uint64("episode_id", epID),
+						zap.Int("episode_number", episode.EpisodeNumber),
+						zap.Int("episode_count", totalEpisodes),
+						zap.Bool("resumed", opts.Resumed),
+						zap.Bool("first_auto_episode", opts.IsFirstAutoEpisode),
 					)
 				}
-				if _, err := s.ExtractStoryboards(autoCtx, project.ID, &firstEpisodeID); err != nil {
+				storyboardCtx := WithSkipEpisodeAssetRefresh(autoCtx)
+				if _, err := s.ExtractStoryboards(storyboardCtx, project.ID, &epID); err != nil {
 					if s.logger != nil {
-						s.logger.Warn("auto storyboard extraction after preparation failed",
+						s.logger.Warn("auto pipeline storyboard extraction failed",
 							zap.Uint64("project_id", project.ID),
-							zap.Uint64("episode_id", firstEpisodeID),
-							zap.Bool("resumed", resumed),
+							zap.Uint64("episode_id", epID),
+							zap.Bool("resumed", opts.Resumed),
 							zap.Error(err),
 						)
 					}
@@ -2111,124 +2262,81 @@ func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, ep
 				}
 			}
 			if !storyboardsTriggered {
-				s.finishAutoPreparation(project.ID, project.UserID, len(eps), processedEpisodes, timedOut, resumed)
+				s.finishAutoPreparation(project.ID, project.UserID, totalEpisodes, processedEpisodes, timedOut, opts.Resumed, opts.TextOnly)
 			}
 		}()
 
-		if processedEpisodes >= len(eps) {
+		if processedEpisodes >= 1 {
 			return
 		}
 
-		// Pre-fetch project-level data once for all episodes to avoid N×HTTP redundancy.
-		autoWritingHints := s.fetchWritingSkillHints(autoCtx, project.ID)
-		autoProductionHints := s.fetchProductionSkillHints(autoCtx, project.ID)
-		var autoKwLib *KeywordLibrary
-		if proj, pErr := s.projectRepo.FindByIDNoAuth(project.ID); pErr == nil {
-			var lib KeywordLibrary
-			if len(proj.KeywordLibrary) > 0 {
-				if jsonErr := json.Unmarshal(proj.KeywordLibrary, &lib); jsonErr == nil {
-					autoKwLib = &lib
-				}
+		select {
+		case <-autoCtx.Done():
+			timedOut = true
+			if s.logger != nil {
+				s.logger.Warn("episode auto pipeline stopped before completion",
+					zap.Uint64("project_id", project.ID),
+					zap.Uint64("episode_id", episode.ID),
+					zap.Int("episode_number", episode.EpisodeNumber),
+					zap.Int("total_episodes", totalEpisodes),
+					zap.Bool("resumed", opts.Resumed),
+					zap.Error(autoCtx.Err()),
+				)
 			}
+			return
+		default:
 		}
 
-		for _, ep := range eps {
-			if s.episodeAutoPrepared(ep) {
-				continue
-			}
-			select {
-			case <-autoCtx.Done():
-				timedOut = true
-				if s.logger != nil {
-					s.logger.Warn("post-split auto pipeline stopped before completion",
-						zap.Uint64("project_id", project.ID),
-						zap.Int("completed_episodes", processedEpisodes),
-						zap.Int("total_episodes", len(eps)),
-						zap.Bool("resumed", resumed),
-						zap.Error(autoCtx.Err()),
-					)
-				}
-				return
-			default:
-			}
-
-			message := fmt.Sprintf("正在润色并准备第 %d/%d 集，随后自动继续资源与分镜…", processedEpisodes+1, len(eps))
-			phaseLabel := "剧本优化与资源准备中"
-			nextStep := "当前集准备完成后会自动开始资源提取，并衔接分镜拆分"
-			if resumed {
-				message = fmt.Sprintf("服务重启后已自动恢复，正在准备第 %d/%d 集…", processedEpisodes+1, len(eps))
-				phaseLabel = "已自动恢复剧本优化与资源准备"
-				nextStep = "当前集恢复完成后会继续资源提取，并自动衔接分镜拆分"
-			}
-			s.updateProgress(project.ID, ProgressInfo{
-				Stage: "script_prepping",
-				EpisodeSplit: &StageProgress{
-					Total: len(eps), Completed: len(eps), Status: "done",
-				},
-				SceneSplit: &StageProgress{
-					Total: len(eps), Completed: processedEpisodes, Status: "running",
-				},
-				Message:        message,
-				PhaseLabel:     phaseLabel,
-				NextStep:       nextStep,
-				CurrentEpisode: processedEpisodes + 1,
-				TotalEpisodes:  len(eps),
-			})
-
-			if _, err := s.polishEpisodeInternal(autoCtx, ep.ID, project.ID, autoWritingHints, autoProductionHints, autoKwLib); err != nil && s.logger != nil {
-				s.logger.Warn("auto-polish episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
-			}
-			updated, err := s.autoOptimizeReviewInternal(autoCtx, ep.ID, project.ID, autoWritingHints, autoKwLib)
-			if err != nil {
-				if s.logger != nil {
-					s.logger.Warn("auto optimize-review episode failed", zap.Uint64("episode_id", ep.ID), zap.Error(err))
-				}
-				if s.characterBaseURL != "" {
-					if extractErr := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(autoCtx), project.ID, ep.ID); extractErr != nil && s.logger != nil {
-						s.logger.Warn("fallback asset extraction after optimize-review failure", zap.Uint64("episode_id", ep.ID), zap.Error(extractErr))
-					}
-				}
-				continue
-			}
-
-			autoPrepared := false
-			if updated.OptimizedText != "" {
-				if _, applyErr := s.ApplyOptimizedText(WithSkipEpisodeStoryboardTrigger(autoCtx), ep.ID, project.ID); applyErr != nil {
-					if s.logger != nil {
-						s.logger.Warn("auto apply optimized text failed", zap.Uint64("episode_id", ep.ID), zap.Error(applyErr))
-					}
-				} else {
-					autoPrepared = true
-				}
-			}
-			if !autoPrepared {
-				continue
-			}
-
-			processedEpisodes++
-			nextStep = "资源与分镜会在后台继续推进"
-			if processedEpisodes < len(eps) {
-				nextStep = "系统将继续处理下一集，并自动衔接资源与分镜"
-			}
-			if resumed {
-				nextStep = "系统会继续恢复后续分集，并自动衔接资源与分镜"
-			}
-			s.updateProgress(project.ID, ProgressInfo{
-				Stage: "script_prepping",
-				EpisodeSplit: &StageProgress{
-					Total: len(eps), Completed: len(eps), Status: "done",
-				},
-				SceneSplit: &StageProgress{
-					Total: len(eps), Completed: processedEpisodes, Status: "running",
-				},
-				Message:        fmt.Sprintf("已完成 %d/%d 集自动准备，剩余集数会继续处理中…", processedEpisodes, len(eps)),
-				PhaseLabel:     phaseLabel,
-				NextStep:       nextStep,
-				CurrentEpisode: processedEpisodes,
-				TotalEpisodes:  len(eps),
-			})
+		if s.runEpisodeAutoPipeline(autoCtx, project, episode, totalEpisodes, opts.Resumed, opts.IsFirstAutoEpisode, opts.TriggerAssets) {
+			processedEpisodes = 1
 		}
-	}(*project, eps, resumed)
+	}(project, episode, totalEpisodes, opts)
+}
+
+// StartEpisodeAutoPipeline runs polish → optimize → assets → storyboards for one episode.
+func (s *EpisodeService) StartEpisodeAutoPipeline(projectID, episodeID uint64, onComplete func()) error {
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		return fmt.Errorf("project not found: %w", err)
+	}
+	ep, err := s.episodeRepo.FindByID(episodeID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("episode not found")
+		}
+		return err
+	}
+	if ep.ProjectID != projectID {
+		return errors.New("episode not found")
+	}
+
+	allEpisodes, err := s.episodeRepo.FindByProjectID(projectID)
+	if err != nil {
+		return err
+	}
+
+	s.launchEpisodeAutoPipelineJob(*project, *ep, len(allEpisodes), episodeAutoPipelineJobOptions{
+		TriggerStoryboards: true,
+		TriggerAssets:      true,
+		OnComplete:         onComplete,
+		Timeout:            45 * time.Minute,
+	})
+	return nil
+}
+
+func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, eps []model.Episode, resumed bool, autoTextPrep bool) {
+	if len(eps) == 0 || !autoTextPrep {
+		return
+	}
+	firstEp := firstEpisodeByNumber(eps)
+	s.launchEpisodeAutoPipelineJob(*project, firstEp, len(eps), episodeAutoPipelineJobOptions{
+		TriggerStoryboards: false,
+		TriggerAssets:      false,
+		TextOnly:           true,
+		Resumed:            resumed,
+		IsFirstAutoEpisode: true,
+		Timeout:            90 * time.Minute,
+	})
 }
 
 // ResumeInterruptedAutoPreparation restarts projects that were left in
@@ -2260,7 +2368,7 @@ func (s *EpisodeService) ResumeInterruptedAutoPreparation(limit int) (int, error
 				zap.Int("already_prepared", s.countPreparedEpisodes(episodes)),
 			)
 		}
-		s.startAutoPreparationPipeline(&projects[i], episodes, true)
+		s.startAutoPreparationPipeline(&projects[i], episodes, true, true)
 		resumed++
 	}
 	return resumed, nil
@@ -2331,6 +2439,16 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			return nil, fmt.Errorf("delete old storyboards before scene split: %w", err)
 		}
 	}
+	// Clear stale project-wide assets/sentinels so a re-split does not resume
+	// interrupted full-project extraction against the new episode set.
+	if err := s.deleteExistingAssets(ctx, projectID); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("delete old assets before episode re-split failed; continuing",
+				zap.Uint64("project_id", projectID),
+				zap.Error(err),
+			)
+		}
+	}
 	// Episodes will be atomically replaced later via ReplaceAllForProject
 
 	// ══════════════════════════════════════════════════════════════════════════
@@ -2399,7 +2517,8 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		cancelSkills()
 	}
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	autoSplitAfterOptimization := runtimeCfg.AutoSplitAfterOptimization || strings.EqualFold(project.Mode, "script")
+	productionProfile := productionmode.ResolveProfile(project)
+	autoSplitAfterOptimization := productionProfile.ShouldOptimizeScriptBeforeSplit(runtimeCfg.AutoSplitAfterOptimization)
 	optimizedScriptText := strings.TrimSpace(scriptText)
 	autoSplitProgress := AutoSplitMeta{
 		Enabled:        autoSplitAfterOptimization,
@@ -2411,7 +2530,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	if autoSplitAfterOptimization {
 		s.updateProgress(projectID, ProgressInfo{
 			Stage:        "episode_splitting",
-			Message:      "正在按所选风格优化广告文案，为自动切分做准备…",
+			Message:      productionmode.OptimizeBeforeSplitMessage(productionProfile.Mode),
 			EpisodeSplit: &StageProgress{Status: "running"},
 			AutoSplit:    &autoSplitProgress,
 		})
@@ -2429,7 +2548,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			autoSplitProgress.ScriptLength = utf8.RuneCountInString(optimizedScriptText)
 			s.updateProgress(projectID, ProgressInfo{
 				Stage:        "episode_splitting",
-				Message:      "广告文案优化完成，正在根据时长自动计算分集数…",
+				Message:      productionmode.OptimizeAfterSplitMessage(productionProfile.Mode),
 				EpisodeSplit: &StageProgress{Status: "running"},
 				AutoSplit:    &autoSplitProgress,
 			})
@@ -2471,7 +2590,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		)
 	}
 
-	autoSplitMeta := buildAutoSplitMeta(optimizedScriptText, runtimeCfg)
+	autoSplitMeta := buildAutoSplitMeta(optimizedScriptText, runtimeCfg, productionProfile)
 	autoSplitMeta.OriginalScript = strings.TrimSpace(scriptText)
 	autoSplitMeta.OptimizedScript = strings.TrimSpace(optimizedScriptText)
 	if !chapterSplit {
@@ -2481,15 +2600,15 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			autoSplitMeta.EstimatedEpisodes = project.TargetEpisodes
 		}
 		if targetEpisodes <= 1 {
-			episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
+			episodes = s.simpleSplit(optimizedScriptText, targetEpisodes, productionProfile)
 		} else {
 			splitCtx, cancelSplit := context.WithTimeout(ctx, episodeSplitTimeout)
 			var err error
 			writingHints := s.fetchWritingSkillHints(splitCtx, projectID)
-			episodes, err = s.callLLMSplit(splitCtx, project, optimizedScriptText, targetEpisodes, &kwLib, writingHints)
+			episodes, err = s.callLLMSplit(splitCtx, project, optimizedScriptText, targetEpisodes, &kwLib, writingHints, productionProfile)
 			cancelSplit()
 			if err != nil {
-				episodes = s.simpleSplit(optimizedScriptText, targetEpisodes)
+				episodes = s.simpleSplit(optimizedScriptText, targetEpisodes, productionProfile)
 			}
 		}
 	}
@@ -2541,65 +2660,53 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 
 	// Report episode split done
 	autoSplitMeta.EstimatedEpisodes = len(dbEpisodes)
-	s.updateProgress(projectID, ProgressInfo{
-		Stage: "script_prepping",
-		EpisodeSplit: &StageProgress{
-			Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
-		},
-		SceneSplit: &StageProgress{
-			Total: len(dbEpisodes), Completed: 0, Status: "pending",
-		},
-		Message:   fmt.Sprintf("分集完成（%d 集），开始润色、格式化并串联资源与分镜…", len(dbEpisodes)),
-		AutoSplit: &autoSplitMeta,
-	})
-	s.startAutoPreparationPipeline(project, dbEpisodes, false)
-
-	// ══════════════════════════════════════════════════════════════════════════
-	// Phase 3: Scene splitting per episode (storyboard generation)
-	// ══════════════════════════════════════════════════════════════════════════
-	/* [重构] 停止项目级自动分镜拆分
-	if s.storyboardSvc != nil {
+	if autoStoryboard {
+		s.updateProgress(projectID, ProgressInfo{
+			Stage: "script_prepping",
+			EpisodeSplit: &StageProgress{
+				Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
+			},
+			SceneSplit: &StageProgress{
+				Total: len(dbEpisodes), Completed: 0, Status: "pending",
+			},
+			Message: func() string {
+				if len(dbEpisodes) <= 1 {
+					return fmt.Sprintf("分集完成（%d 集），开始润色优化剧本（仅文本处理）…", len(dbEpisodes))
+				}
+				return fmt.Sprintf("分集完成（%d 集），将自动润色优化第 1 集示范剧本（仅文本），资源与分镜请手动启动", len(dbEpisodes))
+			}(),
+			PhaseLabel: "分集已完成",
+			NextStep:   "示范集文本处理完成后，请在单集列表点击「自动处理」衔接资源与分镜",
+			AutoSplit: &autoSplitMeta,
+		})
+		s.startAutoPreparationPipeline(project, dbEpisodes, false, true)
+	} else {
+		s.updateProgress(projectID, ProgressInfo{
+			Stage: "idle",
+			EpisodeSplit: &StageProgress{
+				Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
+			},
+			SceneSplit: &StageProgress{
+				Total: len(dbEpisodes), Completed: 0, Status: "pending",
+			},
+			Message: func() string {
+				if len(dbEpisodes) <= 1 {
+					return fmt.Sprintf("分集完成（%d 集），请手动推进润色、资源提取或分镜流程", len(dbEpisodes))
+				}
+				return fmt.Sprintf("分集完成（%d 集），请逐集手动优化或使用「自动处理」", len(dbEpisodes))
+			}(),
+			PhaseLabel: "分集已完成",
+			NextStep:   "可在单集列表中逐集优化剧本，或点击「自动处理」衔接资源与分镜",
+			AutoSplit:  &autoSplitMeta,
+		})
+		_ = s.projectRepo.UpdateStatus(projectID, project.UserID, "script_ready")
 		if s.logger != nil {
-			s.logger.Info("starting storyboard scene breakdown",
+			s.logger.Info("episode split finished without auto storyboard pipeline",
 				zap.Uint64("project_id", projectID),
 				zap.Int("episode_count", len(dbEpisodes)),
 			)
 		}
-
-		totalSb := func() int {
-			// Extract clip duration and video model from project's storyboard config.
-			clipDuration := 5
-			videoModel := ""
-			if len(project.StoryboardConfig) > 0 {
-				var cfg struct {
-					Duration   int    `json:"duration"`
-					VideoModel string `json:"video_model"`
-				}
-				if err := json.Unmarshal(project.StoryboardConfig, &cfg); err == nil {
-					if cfg.Duration > 0 {
-						clipDuration = cfg.Duration
-					}
-					videoModel = cfg.VideoModel
-				}
-			}
-			return s.generateStoryboardsParallel(ctx, projectID, project.UserID, dbEpisodes, &kwLib, clipDuration, videoModel, runtimeCfg.AspectRatio, runtimeCfg.Resolution, project.ProjectType)
-		}()
-
-		if s.logger != nil {
-			s.logger.Info("storyboard generation complete",
-				zap.Uint64("project_id", projectID),
-				zap.Int("total_storyboards", totalSb),
-			)
-		}
-
-		if autoStoryboard && totalSb > 0 && s.logger != nil {
-			s.logger.Info("skip immediate storyboard image generation until assets are complete",
-				zap.Uint64("project_id", projectID),
-				zap.Int("storyboards_pending", totalSb),
-			)
-		}
 	}
-	*/
 
 	return dbEpisodes, nil
 }
@@ -2739,15 +2846,16 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 	// The template is used to produce PromptUsed for each storyboard at creation time.
 	var storyboardPromptTemplate string
 	projectVisualEra := ""
-	adDirective := ""
+	productionProfile := productionmode.Profile{Mode: productionmode.ModeScriptDrama}
 	serialSceneEnabled := strings.TrimSpace(projectType) == "video_serial"
 	assetRefs := s.fetchAssetReferences(ctx, projectID, nil)
 	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil {
+		productionProfile = productionmode.ResolveProfile(project)
 		serialSceneEnabled = shouldEnableSceneSerial(projectType)
 		sk := storyboardStyleKey(storyboardStylePreset(project))
 		storyboardPromptTemplate = s.fetchStoryboardPromptTemplate(ctx, sk)
-		if isAdWorkbenchProject(project) {
-			adDirective = adWorkbenchPromptDirective()
+		if productionProfile.IsAd() {
+			adDirective := productionmode.AdWorkbenchDirective()
 			if strings.TrimSpace(storyboardPromptTemplate) != "" {
 				storyboardPromptTemplate = strings.TrimSpace(storyboardPromptTemplate) + "\n\n广告工作台追加约束：\n" + adDirective
 			}
@@ -2801,17 +2909,18 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 		wg.Add(1)
 		sem <- struct{}{}
 
-		go func(idx int, epID uint64, epNum int, epContent string) {
+		optimizeStatus := ep.OptimizeStatus
+		reviewStatus := ep.ReviewStatus
+		contentSource := "summary"
+		switch {
+		case strings.TrimSpace(ep.OptimizedText) != "":
+			contentSource = "optimized_text"
+		case strings.TrimSpace(ep.ScriptExcerpt) != "":
+			contentSource = "script_excerpt"
+		}
+		go func(idx int, epID uint64, epNum int, epContent, optimizeStatus, reviewStatus, contentSource string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-
-			contentSource := "summary"
-			switch {
-			case strings.TrimSpace(ep.OptimizedText) != "":
-				contentSource = "optimized_text"
-			case strings.TrimSpace(ep.ScriptExcerpt) != "":
-				contentSource = "script_excerpt"
-			}
 
 			if s.logger != nil {
 				s.logger.Info("breaking episode into scenes",
@@ -2821,20 +2930,30 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				)
 			}
 
-			// Pre-optimization: run a professional storyboard-prep pass before scene splitting
-			// to add explicit visual markers, camera suggestions and pacing cues.
-			_ = s.episodeRepo.UpdateStatus(epID, "script_prepping")
-			optimized := s.prepareScriptForStoryboard(ctx, nil, epContent, epNum, kwLib, projectType, prepSkillHints, adDirective)
-			if s.logger != nil && optimized != epContent {
-				s.logger.Info("script prep optimization applied",
-					zap.Int("episode", epNum),
-					zap.Int("original_len", utf8.RuneCountInString(epContent)),
-					zap.Int("optimized_len", utf8.RuneCountInString(optimized)),
-				)
+			optimized := epContent
+			if productionmode.ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, epContent) {
+				if s.logger != nil {
+					s.logger.Info("skip script prep because auto-optimize output already annotated",
+						zap.Int("episode", epNum),
+						zap.Uint64("episode_id", epID),
+					)
+				}
+			} else {
+				// Pre-optimization: run a professional storyboard-prep pass before scene splitting
+				// to add explicit visual markers, camera suggestions and pacing cues.
+				_ = s.episodeRepo.UpdateStatus(epID, "script_prepping")
+				optimized = s.prepareScriptForStoryboard(ctx, projectRef, epContent, epNum, kwLib, productionProfile, prepSkillHints)
+				if s.logger != nil && optimized != epContent {
+					s.logger.Info("script prep optimization applied",
+						zap.Int("episode", epNum),
+						zap.Int("original_len", utf8.RuneCountInString(epContent)),
+						zap.Int("optimized_len", utf8.RuneCountInString(optimized)),
+					)
+				}
 			}
 
 			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, productionProfile, customStoryboardSplitPrompt)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -2873,7 +2992,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				Message:   fmt.Sprintf("正在拆分分镜 %d/%d（第%d集）", completed, len(dbEpisodes), epNum),
 				AutoSplit: progressSnapshot.AutoSplit,
 			})
-		}(i, uint64(ep.ID), ep.EpisodeNumber, content)
+		}(i, uint64(ep.ID), ep.EpisodeNumber, content, optimizeStatus, reviewStatus, contentSource)
 	}
 	wg.Wait()
 
@@ -3046,9 +3165,13 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
+	}
+
+	fallback := func() []llmScene {
+		return s.postProcessScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration, profile)
 	}
 
 	// Try LLM-based scene splitting with retries
@@ -3061,14 +3184,14 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 				if s.logger != nil {
 					s.logger.Warn("scene split cancelled", zap.Int("episode", episodeNum))
 				}
-				return s.postProcessAdScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration)
+				return fallback()
 			case <-time.After(2 * time.Second):
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
-			return s.postProcessAdScenes(scenes, clipDuration)
+			return s.postProcessScenes(scenes, clipDuration, profile)
 		}
 	}
 
@@ -3076,13 +3199,13 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 		s.logger.Warn("LLM scene split failed after retries, using paragraph fallback",
 			zap.Int("episode", episodeNum))
 	}
-	return s.postProcessAdScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration)
+	return fallback()
 }
 
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -3091,15 +3214,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -3138,7 +3261,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, projectType, customStoryboardSplitPrompt)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -3154,7 +3277,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, projectType string, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
 	// clipDuration is the user-selected target clip length for ad storyboards.
 	// Scene splitting should follow that fixed per-clip duration instead of
 	// letting each storyboard land on a different saved duration.
@@ -3167,118 +3290,17 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 	visualHint := visualConstraintHint(aspectRatio, resolution, refDuration)
 	speechHint := speechPaceHint(speechPace, refDuration)
 
-	var prompt string
-	if projectType == "comics" {
-		// Comics panel split: static composition, no camera motion, no duration.
-		prompt = fmt.Sprintf(`你是一位专业的漫画分镜师（漫画分格助手）。请将以下第 %d 集的内容拆分为最细粒度的漫画格（panel）。
-
-**核心原则：最小化漫画格**
-每一格应当是一个不可再拆分的叙事单元——即一个关键动作、一句对白、一个情绪节点或一个场景切换。
-
-**拆分规则：**
-- 每次人物动作变化、场景切换、对白转换、情绪转折都应独立为一格
-- 不限制格数，根据内容自然拆分，宁多勿少
-- description 用中文描述画面内容（50-150字），包含：
-  ① 画面主体：人物姿态、表情、手势、位置
-  ② 构图类型：如特写、半身、全身、广角、俯瞰
-  ③ 背景与环境：场景细节、光线氛围、时间（日/夜）
-  ④ 道具与服装细节
-- shot_type 使用漫画构图类型：face-closeup / bust / full-body / wide / establishing / insert / reaction
-- characters 列出该格中出现的角色名
-- character_states 每个角色的姿态和情绪（name/action/emotion）
-- mood：tense / romantic / comedic / sad / epic / mysterious / action / calm / dramatic
-- location：场景地点（2-20字）
-- duration 固定为 0（漫画格无时长）
-- dialogue：该格中的对白或心理独白（保持原文；如无则留空）。原文中引号内容、冒号引用句、[字幕:]标注均必须提取到此字段，禁止遗漏
-
-**内联标注识别（优先级最高）：**
-内容中可能包含影视标注：
-- [摄影:xxx] → 映射到构图类型（shot_type），融入 description 的视角描述
-- [美术:xxx] → 融入 description 的背景/环境细节
-- [道具:xxx] → 在 description 中明确提及该道具
-- [服化:xxx] → 在人物描述中体现服装细节
-- [字幕:对白内容] → 对白内容【必须】直接填入 dialogue 字段，这是 TTS 配音的唯一数据来源
-
-请严格按以下 JSON 格式返回：
-{"scenes": [
-  {"description": "中文画面描述：角色1站在窗边，表情凝重，手持宝剑。中景，侧逆光，夜晚室内。", "shot_type": "bust", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "grips sword", "emotion": "determined"}], "mood": "tense", "location": "地点", "duration": 0, "dialogue": "对白"}
-]}
-
-第 %d 集内容：
-%s`, episodeNum, episodeNum, content)
-	} else {
-		prompt = fmt.Sprintf(`你是一位专业的分镜师和摄影指导。请将以下第 %d 集的内容按“台词 / 口播为主、画面辅助承载”的原则拆分为适合广告成片的分镜。
-
-**核心原则：以台词 / 口播拆分为主，时长优先。**
-当前目标是优先按单分镜时长判断一段台词 / 口播能否在一个镜头内完整承载，而不是追求“最小视觉单位”。如果同一段口播、同一段卖点说明在当前目标时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜，不要过度拆镜。
-
-**拆分规则（按优先级从高到低）：**
-- 第一优先级：先判断当前这段台词 / 口播是否可以在目标单分镜时长内完整表达；如果可以，优先保持在同一个分镜内完成
-- 只有在以下情况才拆成新分镜：
-  1. 明确切换到新空间 / 新场景
-  2. 明确进入新卖点 / 新产品信息 / 新展示重点
-  3. 说话主体发生变化
-  4. 当前段内容明显超过目标单分镜时长可承载的信息量
-  5. 确实需要一个极短强调镜头，但必须严格控制数量
-- 轻微的表情变化、手部动作变化、视线变化、镜头轻推拉，不足以单独拆成新分镜；如果没有新的信息点，继续留在当前分镜内
-- 广告口播项目中，分镜默认必须承载明确的 dialogue / 字幕 / 卖点信息；如果当前分镜没有台词，或者台词长度明显不足以支撑当前目标时长，就必须继续合并、重写或调整拆分，不能直接保留为空白镜头
-- 只有最后一个分镜允许在确有必要时作为收束镜头例外，但即便如此也应尽量带有一句完整收尾口播、CTA 或字幕，不要轻易留空
-- 若同一段文字主要是口播内容，应尽量让口播在一个完整分镜内说完；拆分时优先依据台词句群与口播停顿点判断，而不是先按动作碎片切分
-- description 用中文描述画面内容（50-150字），包含以下内容：
-  ① 画面主体：人物位置、动作、表情、肢体语言
-  ② 景别与构图：如特写、中景、全景，镜头角度
-  ③ 光线与氛围：光线方向、色温、情绪基调
-  ④ 环境细节：背景、道具、天气、时间（日/夜）等视觉元素
-- shot_type 推荐景别：close-up / medium / full / wide / overhead / low-angle / tracking / handheld
-- characters 列出该场景中出现的角色名（保持原文名称）
-- character_states 列出每个角色的行为状态，每项包含 name/action/emotion（简短中英文均可）
-- items 列出该场景中可见的关键道具或物品（如 ["书桌","蜡烛","宝剑"]；无则留空数组）
-- mood 该场景的情绪基调，从以下选取：tense / romantic / comedic / sad / epic / mysterious / action / calm / dramatic
-- location 描述场景发生的地点环境（2-20字）
-- duration 该分镜的视频时长（秒数，整数），必须严格等于当前目标单分镜时长，不允许同一轮拆分里忽长忽短：
-%s
-- 构图/画面约束（必须同步遵守）：
-%s
-- 语速/口播承载约束（必须同步遵守）：
-%s
-- dialogue 该场景中的对白（保持原文语言；如无则留空字符串）
-
-**内联标注识别（优先级最高）：**
-内容中可能包含影视标注，请按以下规则映射到对应字段：
-- [摄影:xxx] → 直接决定 shot_type，并将摄影指令融入 description 的构图描述中
-- [灯光:xxx] → 融入 description 的光线与氛围部分（如 "warm yellow 3200K backlight"）
-- [美术:xxx] → 融入 description 的环境细节部分（如 "classical study with wooden shelves"）
-- [字幕:对白内容] → 对白内容【必须】直接填入 dialogue 字段，这是 TTS 配音的唯一数据来源，绝对不能遗漏或放入 description
-- [道具:xxx] → 在 description 和 items 中明确提及该道具
-- [服化:xxx] → 在 description 的人物描述中体现对应服装细节
-- [场记:xxx] → 在 character_states 的 action 中体现连贯性要求
-- [剪辑:xxx] → 影响 shot_type 或 mood（如"情绪高潮切"对应 dramatic）
-
-**对白提取强制规则（TTS 配音关键）：**
-原文中以下形式的内容必须提取到 dialogue 字段，禁止遗漏：
-① [字幕:…] 标注内的全部文字 ② 引号内容（"…" 「…」'…'）③ 冒号引用句（角色名：内容）④ 角色的心理独白
-若一个分镜含多句对白，全部用 \n 拼接放入 dialogue，不截断不省略
-- dialogue 只能放“真的会被念出来/打上字幕的文字”，不能把摄影说明、灯光、美术、转场说明、动作说明混入 dialogue
-- 如果某段只有动作/镜头说明、没有可念文本，优先继续调整拆分，让它并回前后有台词的分镜；除最后一个分镜外，默认不允许保留无台词分镜
-- 若当前分镜 dialogue 少于约 8 个汉字/字符，且没有明确新增场景切换、主体切换或卖点切换，也必须继续并回相邻分镜；禁止把“好”“是的”“现在”“加入我们”等过短句子单独拆成一镜
-
-**镜头连续性规则（必须遵守）：**
-- 如果相邻分镜 location 相同，默认视为同一空间连续动作，人物站位、朝向、手中道具、受伤状态、服装层次必须延续，除非原文明确发生变化
-- 新 location 第一个分镜，优先使用 establishing / wide / full 等能交代空间关系的景别，不要直接跳进无背景特写
-- 当人物动作是连续链条时，拆分后的分镜必须保持动作前后逻辑，例如“起身→转头→走近→开口”，不能无缘由跳到结果态
-- description 中必须明确画面主次和空间层次，避免同一分镜同时承载两个互相竞争的动作焦点
-- 同一场景的光线方向和时间感要稳定，不允许上一镜夜色冷光、下一镜无说明变成日景暖光
-
-请严格按以下 JSON 格式返回：
-{"scenes": [
-  {"description": "中文画面描述：角色1在产品展示台前稳定讲解卖点，手势配合口播，画面焦点集中在人物与产品。中景，正面机位。", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "presenting product", "emotion": "confident"}], "items": ["产品"], "mood": "dramatic", "location": "展示区", "duration": %d, "dialogue": "对白"}
-]}
-
-第 %d 集内容：
-%s`, episodeNum, modelDurationHint, visualHint, speechHint, refDuration, episodeNum, content)
+	splitParams := productionmode.SceneSplitParams{
+		EpisodeNum:    episodeNum,
+		Content:       content,
+		RefDuration:   refDuration,
+		ModelDuration: modelDurationHint,
+		VisualHint:    visualHint,
+		SpeechHint:    speechHint,
 	}
+	prompt := productionmode.SceneSplitUserPrompt(profile.Mode, splitParams)
+	sceneSystemPrompt := productionmode.SceneSplitSystemPrompt(profile.Mode)
 
-	sceneSystemPrompt := "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。你必须只写观众能看见的画面，不要写剧情解释、主题总结或抽象心理分析。广告项目中，分镜拆分必须优先按当前目标单分镜时长判断台词 / 口播承载量，再考虑是否继续细拆；如果同一段口播或卖点在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue / 字幕；若当前分镜没有台词，或台词长度明显不足以支撑该时长，就必须继续合并、重写或调整拆分，不能直接保留。这里的“台词长度明显不足”指 dialogue 少于约 8 个汉字/字符且没有承载新的信息点、主体变化或场景变化，此类分镜必须并回相邻分镜，不能作为独立镜头输出。广告工作台当前轮次的分镜 duration 必须统一服从用户所选时长，不能因为镜头复杂度或合并动作把 duration 改成不同秒数；若内容超载，应改为多拆一个分镜，而不是拉长单镜时长。相邻同场景分镜必须保持人物站位、朝向、服化道、光线方向和空间结构连续；新场景首镜必须优先建立空间锚点。每条 scene_description 都必须尽量回答以下问题中的至少六项：谁在画面中、人物位于左/中/右哪里、人物面朝哪个方向、人物当前的姿态和手部行为、人物穿着和造型是否延续、人物与关键道具/门窗/背景的相对位置、当前动作是上一镜如何延续而来、镜头此刻更适合什么景别/构图。若角色或镜头发生位移，必须明确写出过渡过程，不能直接跳到新位置；若服装/发型/妆容没有变化，也要让 scene_description 默认体现“延续上一镜造型”的可见事实，而不是留白。"
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -3428,7 +3450,7 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 			Characters:  nil,
 			Location:    "",
 			Duration:    dur,
-			Dialogue:    strings.TrimSpace(p),
+			Dialogue:    sanitizeStoryboardDialogue(p),
 		})
 	}
 
@@ -3511,7 +3533,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 		return false
 	}
 	for idx, scene := range scenes {
-		scene.Dialogue = strings.TrimSpace(scene.Dialogue)
+		scene.Dialogue = sanitizeStoryboardDialogue(scene.Dialogue)
 		scene.Description = strings.TrimSpace(scene.Description)
 		if scene.Duration <= 0 {
 			scene.Duration = normalizeAdSceneDuration(scene.Duration, clipDuration)
@@ -4154,10 +4176,10 @@ func mergeIntoGroups(paragraphs []string, n int) [][]string {
 }
 
 // callLLMSplit —— 调用 LLM 将剧本拆分为指定集数的剧集
-func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
+func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string, profile productionmode.Profile) ([]llmEpisode, error) {
 	// For very large episode counts, split via multiple LLM calls in batches
 	if targetEpisodes > 30 {
-		return s.callLLMSplitBatched(ctx, project, scriptText, targetEpisodes, kwLib, writingHints)
+		return s.callLLMSplitBatched(ctx, project, scriptText, targetEpisodes, kwLib, writingHints, profile)
 	}
 
 	// Truncate very long scripts for the prompt
@@ -4199,8 +4221,8 @@ func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Projec
 %s`, targetEpisodes, kwContext, targetEpisodes, truncated)
 
 	systemPrompt := "你是剧本分析助手，只输出JSON，不要输出其他内容。"
-	if isAdWorkbenchProject(project) {
-		systemPrompt += "\n\n**广告工作台节奏规则（分集时强制遵守）：**\n" + adWorkbenchPromptDirective()
+	if directive := productionmode.EpisodeSplitDirective(profile.Mode); directive != "" {
+		systemPrompt += "\n\n**分集模式规则（强制遵守）：**\n" + directive
 	}
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属写作指引（分集时请遵守）：**\n" + writingHints
@@ -4285,14 +4307,14 @@ func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Projec
 // callLLMSplitBatched handles large episode counts (>30) by first using simpleSplit
 // to create text segments, then enriching each segment with an LLM-generated
 // title, summary and keywords in parallel batches.
-func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string) ([]llmEpisode, error) {
+func (s *EpisodeService) callLLMSplitBatched(ctx context.Context, project *model.Project, scriptText string, targetEpisodes int, kwLib *KeywordLibrary, writingHints string, profile productionmode.Profile) ([]llmEpisode, error) {
 	if s.logger != nil {
 		s.logger.Info("using batched split for large episode count",
 			zap.Int("target", targetEpisodes))
 	}
 
 	// Start with a simple proportional split to get text segments
-	segments := s.simpleSplit(scriptText, targetEpisodes)
+	segments := s.simpleSplit(scriptText, targetEpisodes, profile)
 
 	// Enrich each segment with LLM-generated title+summary+keywords in batches
 	const batchSize = 10
@@ -4438,8 +4460,8 @@ func (s *EpisodeService) enrichEpisodeWithLLM(ctx context.Context, project *mode
 		"messages": []map[string]string{
 			{"role": "system", "content": func() string {
 				sys := "你是影视剧本分析专家，只输出JSON，不要输出其他内容。"
-				if isAdWorkbenchProject(project) {
-					sys += "\n\n**广告工作台节奏规则（标题/摘要生成时强制遵守）：**\n" + adWorkbenchPromptDirective()
+				if directive := productionmode.EpisodeEnrichDirective(productionmode.Resolve(project)); directive != "" {
+					sys += "\n\n**分集摘要模式规则（强制遵守）：**\n" + directive
 				}
 				if writingHints != "" {
 					sys += "\n\n**本项目专属写作指引（生成摘要时请遵守）：**\n" + writingHints
@@ -5333,7 +5355,14 @@ type adSemanticUnit struct {
 
 // simpleSplit —— 降级方案：优先按广告语义段切分，再按目标集数合并。
 // 避免在广告文案里生硬按字数均分，尽量贴合卖点段、转场句、CTA、口播句群。
-func (s *EpisodeService) simpleSplit(scriptText string, n int) []llmEpisode {
+func (s *EpisodeService) simpleSplit(scriptText string, n int, profile productionmode.Profile) []llmEpisode {
+	if !profile.UseAdSimpleSplit() {
+		return simpleSplitByLength(scriptText, n)
+	}
+	return s.simpleSplitAd(scriptText, n)
+}
+
+func (s *EpisodeService) simpleSplitAd(scriptText string, n int) []llmEpisode {
 	trimmed := strings.TrimSpace(scriptText)
 	if trimmed == "" {
 		return nil
@@ -5799,7 +5828,8 @@ func (s *EpisodeService) OptimizeEpisode(ctx context.Context, id, projectID uint
 	}
 
 	writingHints := s.fetchWritingSkillHints(ctx, projectID)
-	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib)
+	productionMode := s.resolveProductionMode(projectID)
+	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib, productionMode)
 	if err != nil {
 		episode.OptimizeStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -5818,6 +5848,8 @@ func (s *EpisodeService) OptimizeEpisode(ctx context.Context, id, projectID uint
 	if result.Summary != "" {
 		episode.Summary = result.Summary
 	}
+
+	s.ensureCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib)
 
 	if err := s.episodeRepo.Update(episode); err != nil {
 		return nil, fmt.Errorf("save optimized episode: %w", err)
@@ -5842,11 +5874,18 @@ func (s *EpisodeService) ApplyOptimizedText(ctx context.Context, id, projectID u
 	if err := s.episodeRepo.Update(episode); err != nil {
 		return nil, fmt.Errorf("apply optimized text: %w", err)
 	}
-	if err := s.extractAssetsForEpisode(ctx, projectID, id); err != nil {
-		return nil, fmt.Errorf("apply optimized text trigger assets: %w", err)
-	}
-	if s.logger != nil {
-		s.logger.Info("applied optimized text and triggered asset extraction",
+	if !shouldSkipEpisodeAssetExtraction(ctx) {
+		if err := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(ctx), projectID, id); err != nil {
+			return nil, fmt.Errorf("apply optimized text trigger assets: %w", err)
+		}
+		if s.logger != nil {
+			s.logger.Info("applied optimized text and triggered asset extraction",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("episode_id", id),
+			)
+		}
+	} else if s.logger != nil {
+		s.logger.Info("applied optimized text without asset extraction",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("episode_id", id),
 		)
@@ -5854,37 +5893,16 @@ func (s *EpisodeService) ApplyOptimizedText(ctx context.Context, id, projectID u
 	return episode, nil
 }
 
-func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode, writingHints string, kwLib *KeywordLibrary) (*OptimizedEpisode, error) {
-	systemPrompt := `你是专业的短剧剧本改编专家，同时兼任导演组剧本医生与分镜前置顾问。请将给定的小说/故事文本改编为标准剧本格式，返回严格 JSON（不要 markdown 代码块）：
-{
-  "title": "集标题（简洁有力，20字以内）",
-  "summary": "分集简介（100-200字，突出核心冲突和看点）",
-  "optimized_text": "标准剧本格式正文"
+func (s *EpisodeService) resolveProductionMode(projectID uint64) productionmode.Mode {
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil || project == nil {
+		return productionmode.ModeScriptDrama
+	}
+	return productionmode.Resolve(project)
 }
 
-**剧本格式规范：**
-场景用【场景标题】开头，格式：【内景/外景 · 地点 · 时间段】
-动作描述：简洁描述人物动作与环境，不超过3行，但必须具体、可拍、可视化
-台词格式：
-角色名（表情/情绪/状态）
-　　台词内容
-
-**改编要求：**
-- 保留原有故事情节和人物关系，不得改变核心情节
-- 每个场景清晰标注内外景、地点、时间
-- 台词自然流畅，符合角色性格
-- 场景间衔接顺畅，有明确的镜头感
-- 每集结构：开头钩子 → 情节发展 → 结尾悬念/情感落点
-- 人物名称、外貌、性格前后严格一致
-
-**导演级连续性要求（必须遵守）：**
-- 动作必须写成连续链，避免只给结果不给过程；优先写“看见→反应→移动→停顿→说话/出手”
-- 重要场景必须明确空间方位：谁在左/中/右，谁靠近门/窗/桌/床/车，谁面对谁，视线落点在哪里
-- 同场景连续对白中，人物站位、朝向、手中道具、身体姿态不得无缘由跳变
-- 如果角色位移或镜头关系变化，必须在动作描述中自然过渡，例如“她从窗边离开，绕过桌角停在他面前”
-- 新场景第一次出现时，先建立空间与气氛，再推进人物动作；不要上来只写抽象情绪
-- 避免写成只有情绪没有画面的空话；每个动作段都应让后续分镜师能直接看见画面
-- 尽量减少“突然、一下子、转眼间”式粗暴跳接，改为细腻、可连续生成的视频动作描述`
+func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode, writingHints string, kwLib *KeywordLibrary, mode productionmode.Mode) (*OptimizedEpisode, error) {
+	systemPrompt := productionmode.EpisodeOptimizeSystemPrompt(mode)
 
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属指引（务必遵守）：**\n" + writingHints
@@ -5901,7 +5919,7 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 		"model": s.llmModel,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": "请将以下分集改编为标准剧本格式：\n\n" + userContent},
+			{"role": "user", "content": productionmode.EpisodeOptimizeUserAction(mode) + "\n\n" + userContent},
 		},
 		"temperature":     0.65,
 		"max_tokens":      8192,
@@ -6013,7 +6031,8 @@ func (s *EpisodeService) ReviewEpisode(ctx context.Context, id, projectID uint64
 		}
 	}
 
-	result, err := s.callLLMReview(ctx, episode, textToReview, kwLib)
+	productionMode := s.resolveProductionMode(projectID)
+	result, err := s.callLLMReview(ctx, episode, textToReview, kwLib, productionMode)
 	if err != nil {
 		episode.ReviewStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -6032,46 +6051,8 @@ func (s *EpisodeService) ReviewEpisode(ctx context.Context, id, projectID uint64
 	return episode, nil
 }
 
-func (s *EpisodeService) callLLMReview(ctx context.Context, ep *model.Episode, text string, kwLib *KeywordLibrary) (*ReviewResult, error) {
-	systemPrompt := `你是专业的短剧剧本审稿专家。请对给定的剧本内容进行全面AI审查，返回严格 JSON（不要 markdown 代码块）：
-{
-  "score": {
-    "completeness": 85,
-    "integrity": 90,
-    "consistency": 72,
-    "transitions": 80,
-    "dialog_quality": 78
-  },
-  "issues": [
-    {
-      "severity": "critical",
-      "type": "character_inconsistency",
-      "description": "具体问题描述",
-      "suggestion": "修改建议"
-    }
-  ],
-  "overall": "总体评价（1-2句）",
-  "strengths": "剧本亮点"
-}
-
-**审查维度说明：**
-- completeness（完整度）：剧情是否完整，有无缺失情节
-- integrity（完善度）：人物塑造是否立体，细节是否充分
-- consistency（一致性）：人物外貌/性格/称谓、道具前后是否一致，场景设定是否自洽
-- transitions（衔接性）：场景间切换是否自然，时间线是否清晰
-- dialog_quality（台词质量）：台词是否自然、符合角色性格、避免说明文式对白
-
-**issue 类型枚举：**
-character_inconsistency | prop_inconsistency | scene_transition | dialog | plot_gap | timeline | other
-
-**severity 枚举：** critical（严重，需修改）| warning（建议修改）| info（小建议）
-
-**请着重检查：**
-1. 同一角色的外貌描述、性格、称谓在不同场景是否前后一致
-2. 重要道具/物品的出现逻辑是否合理
-3. 场景切换是否有明确过渡，时间跳跃是否交代清楚
-4. 台词是否符合人物身份和当前情绪
-5. 情节有无明显逻辑漏洞`
+func (s *EpisodeService) callLLMReview(ctx context.Context, ep *model.Episode, text string, kwLib *KeywordLibrary, mode productionmode.Mode) (*ReviewResult, error) {
+	systemPrompt := productionmode.EpisodeReviewSystemPrompt(mode)
 
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n以下是项目词库，请重点检查剧本是否与词库定义一致：" + bible
@@ -6177,7 +6158,8 @@ func (s *EpisodeService) AutoOptimizeReview(ctx context.Context, id, projectID u
 	episode.ReviewStatus = "reviewing"
 	_ = s.episodeRepo.Update(episode)
 
-	reviewResult, reviewErr := s.callLLMReview(ctx, episode, textToReview, kwLib)
+	productionMode := s.resolveProductionMode(projectID)
+	reviewResult, reviewErr := s.callLLMReview(ctx, episode, textToReview, kwLib, productionMode)
 	if reviewErr != nil {
 		episode.ReviewStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -6202,7 +6184,7 @@ func (s *EpisodeService) AutoOptimizeReview(ctx context.Context, id, projectID u
 
 	if criticalCount > 0 || avgScore < 75 {
 		writingHints := s.fetchWritingSkillHints(ctx, projectID)
-		repaired, repairErr := s.callLLMRepair(ctx, episode, reviewResult, writingHints, kwLib)
+		repaired, repairErr := s.callLLMRepair(ctx, episode, reviewResult, writingHints, kwLib, productionMode)
 		if repairErr == nil && repaired.OptimizedText != "" {
 			episode.OptimizedText = repaired.OptimizedText
 			if repaired.Title != "" {
@@ -6214,6 +6196,8 @@ func (s *EpisodeService) AutoOptimizeReview(ctx context.Context, id, projectID u
 			_ = s.episodeRepo.Update(episode)
 		}
 	}
+	writingHints := s.fetchWritingSkillHints(ctx, projectID)
+	s.ensureCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib)
 
 	if err := s.episodeRepo.Update(episode); err != nil {
 		return nil, fmt.Errorf("save auto-optimize-review: %w", err)
@@ -6275,7 +6259,8 @@ func (s *EpisodeService) optimizeEpisodeInternal(ctx context.Context, id, projec
 	}
 	episode.OptimizeStatus = "optimizing"
 	_ = s.episodeRepo.Update(episode)
-	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib)
+	productionMode := s.resolveProductionMode(projectID)
+	result, err := s.callLLMOptimize(ctx, episode, writingHints, kwLib, productionMode)
 	if err != nil {
 		episode.OptimizeStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -6292,6 +6277,7 @@ func (s *EpisodeService) optimizeEpisodeInternal(ctx context.Context, id, projec
 	if result.Summary != "" {
 		episode.Summary = result.Summary
 	}
+	s.ensureCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib)
 	if err := s.episodeRepo.Update(episode); err != nil {
 		return nil, fmt.Errorf("save optimized episode: %w", err)
 	}
@@ -6315,7 +6301,8 @@ func (s *EpisodeService) autoOptimizeReviewInternal(ctx context.Context, id, pro
 	episode.ReviewStatus = "reviewing"
 	_ = s.episodeRepo.Update(episode)
 
-	reviewResult, reviewErr := s.callLLMReview(ctx, episode, textToReview, kwLib)
+	productionMode := s.resolveProductionMode(projectID)
+	reviewResult, reviewErr := s.callLLMReview(ctx, episode, textToReview, kwLib, productionMode)
 	if reviewErr != nil {
 		episode.ReviewStatus = "failed"
 		_ = s.episodeRepo.Update(episode)
@@ -6338,7 +6325,7 @@ func (s *EpisodeService) autoOptimizeReviewInternal(ctx context.Context, id, pro
 		reviewResult.Score.DialogQuality) / 5
 
 	if criticalCount > 0 || avgScore < 75 {
-		repaired, repairErr := s.callLLMRepair(ctx, episode, reviewResult, writingHints, kwLib)
+		repaired, repairErr := s.callLLMRepair(ctx, episode, reviewResult, writingHints, kwLib, productionMode)
 		if repairErr == nil && repaired.OptimizedText != "" {
 			episode.OptimizedText = repaired.OptimizedText
 			if repaired.Title != "" {
@@ -6350,6 +6337,7 @@ func (s *EpisodeService) autoOptimizeReviewInternal(ctx context.Context, id, pro
 			_ = s.episodeRepo.Update(episode)
 		}
 	}
+	s.ensureCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib)
 
 	if err := s.episodeRepo.Update(episode); err != nil {
 		return nil, fmt.Errorf("save auto-optimize-review: %w", err)
@@ -6357,8 +6345,91 @@ func (s *EpisodeService) autoOptimizeReviewInternal(ctx context.Context, id, pro
 	return episode, nil
 }
 
+func buildCommentaryFormatReviewResult(text string) *ReviewResult {
+	issues := productionmode.CommentaryFormatIssues(text)
+	if len(issues) == 0 {
+		return nil
+	}
+	result := &ReviewResult{
+		Score: ReviewScore{
+			Completeness:  70,
+			Integrity:     45,
+			Consistency:   75,
+			Transitions:   65,
+			DialogQuality: 35,
+		},
+		Overall: "文稿格式不符合解说漫旁白驱动要求",
+	}
+	for _, issue := range issues {
+		result.Issues = append(result.Issues, ReviewIssue{
+			Severity:    "critical",
+			Type:        issue.Type,
+			Description: issue.Description,
+			Suggestion:  issue.Suggestion,
+		})
+	}
+	return result
+}
+
+// ensureCommentaryScriptFormat repairs optimize output that was miswritten as script drama.
+func (s *EpisodeService) ensureCommentaryScriptFormat(ctx context.Context, episode *model.Episode, projectID uint64, writingHints string, kwLib *KeywordLibrary) {
+	mode := s.resolveProductionMode(projectID)
+	if mode != productionmode.ModeCommentaryComic {
+		return
+	}
+	if !productionmode.NeedsCommentaryFormatRepair(episode.OptimizedText) {
+		return
+	}
+	if s.logger != nil {
+		s.logger.Warn("commentary script format repair triggered",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("episode_id", episode.ID),
+			zap.Int("episode", episode.EpisodeNumber),
+		)
+	}
+	s.repairCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib, false)
+	if productionmode.NeedsCommentaryFormatRepair(episode.OptimizedText) && strings.TrimSpace(episode.OriginalExcerpt) != "" {
+		s.repairCommentaryScriptFormat(ctx, episode, projectID, writingHints, kwLib, true)
+	}
+}
+
+func (s *EpisodeService) repairCommentaryScriptFormat(ctx context.Context, episode *model.Episode, projectID uint64, writingHints string, kwLib *KeywordLibrary, useOriginalReference bool) {
+	review := buildCommentaryFormatReviewResult(episode.OptimizedText)
+	if review == nil {
+		return
+	}
+	mode := s.resolveProductionMode(projectID)
+	hints := writingHints
+	if useOriginalReference {
+		ref := strings.TrimSpace(episode.OriginalExcerpt)
+		if ref == "" {
+			ref = strings.TrimSpace(episode.ScriptExcerpt)
+		}
+		if ref != "" {
+			hints += "\n\n【原始旁白参考（必须恢复讲解口径与信息点，不要改写成短剧场景剧本）】\n" + ref
+		}
+	}
+	repaired, err := s.callLLMRepair(ctx, episode, review, hints, kwLib, mode)
+	if err != nil || repaired == nil || strings.TrimSpace(repaired.OptimizedText) == "" {
+		if s.logger != nil && err != nil {
+			s.logger.Warn("commentary script format repair failed",
+				zap.Uint64("episode_id", episode.ID),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+	episode.OptimizedText = repaired.OptimizedText
+	if repaired.Title != "" {
+		episode.Title = repaired.Title
+	}
+	if repaired.Summary != "" {
+		episode.Summary = repaired.Summary
+	}
+}
+
 // callLLMRepair takes the optimized text and review issues and produces a repaired version.
-func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, review *ReviewResult, writingHints string, kwLib *KeywordLibrary) (*OptimizedEpisode, error) {
+func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, review *ReviewResult, writingHints string, kwLib *KeywordLibrary, mode productionmode.Mode) (*OptimizedEpisode, error) {
 	// Build a focused issue list for the prompt
 	var issueLines []string
 	for _, issue := range review.Issues {
@@ -6369,19 +6440,7 @@ func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, r
 	}
 	issueBlock := strings.Join(issueLines, "\n")
 
-	systemPrompt := `你是专业的短剧剧本修改专家。请根据审查意见对剧本进行针对性修改，弥补不足、保留优点，返回严格 JSON（不要 markdown 代码块）：
-{
-  "title": "集标题（可保持不变或优化）",
-  "summary": "分集简介（可保持不变或优化）",
-  "optimized_text": "修改后的完整剧本格式正文"
-}
-
-**修改要求：**
-- 严格按照审查意见修复 critical 和 warning 级别问题
-- 保持场景标题格式：【内景/外景 · 地点 · 时间段】
-- 台词格式：角色名（表情）\n　　台词内容
-- 不得改变核心情节，只修改有问题的部分
-- 保留原有亮点和已写好的场景`
+	systemPrompt := productionmode.EpisodeRepairSystemPrompt(mode)
 
 	if writingHints != "" {
 		systemPrompt += "\n\n**本项目专属写作指引：**\n" + writingHints

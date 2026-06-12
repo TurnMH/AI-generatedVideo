@@ -100,6 +100,20 @@ func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) 
 			}
 			continue
 		}
+		if len(sentinel.EpisodeIDs) != 1 {
+			pipelineState, stateErr := fetchProjectPipelineState(ctx, s.projectServiceURL, sentinel.ProjectID, jwtToken)
+			if stateErr == nil && pipelineState.blocksProjectWideExtraction() {
+				s.assetSvc.DeleteSentinel(sentinel.ProjectID)
+				if s.logger != nil {
+					s.logger.Info("skip stale project-wide extraction resume during active episode pipeline",
+						zap.Uint64("project_id", sentinel.ProjectID),
+						zap.String("status", pipelineState.Status),
+						zap.String("stage", pipelineState.Stage),
+					)
+				}
+				continue
+			}
+		}
 		resumed++
 		if len(sentinel.EpisodeIDs) == 1 {
 			episodeID := uint64(sentinel.EpisodeIDs[0])
@@ -221,13 +235,20 @@ func mergeExtractedDescription(existing, extracted string) string {
 	}
 }
 
+func episodeExtractionContent(ep episodeSummary) string {
+	if content := strings.TrimSpace(ep.Excerpt); content != "" {
+		return content
+	}
+	if content := strings.TrimSpace(ep.OptimizedText); content != "" {
+		return content
+	}
+	return strings.TrimSpace(ep.Summary)
+}
+
 func buildEpisodeExtractionChunks(episodes []episodeSummary) []extractionChunk {
 	chunks := make([]extractionChunk, 0, len(episodes))
 	for _, ep := range episodes {
-		content := strings.TrimSpace(ep.Excerpt)
-		if content == "" {
-			content = strings.TrimSpace(ep.Summary)
-		}
+		content := episodeExtractionContent(ep)
 		if content == "" {
 			continue
 		}
@@ -385,6 +406,17 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 	if err != nil {
 		removeSentinel()
 		return nil, fmt.Errorf("fetch project profile: %w", err)
+	}
+	if pipelineState, stateErr := fetchProjectPipelineState(ctx, s.projectServiceURL, projectID, jwtToken); stateErr == nil && pipelineState.blocksProjectWideExtraction() {
+		removeSentinel()
+		if s.logger != nil {
+			s.logger.Info("skip project-wide asset extraction while episode pipeline is active",
+				zap.Uint64("project_id", projectID),
+				zap.String("status", pipelineState.Status),
+				zap.String("stage", pipelineState.Stage),
+			)
+		}
+		return nil, fmt.Errorf("project %d is in active episode pipeline (%s/%s)", projectID, pipelineState.Status, pipelineState.Stage)
 	}
 	scriptText := projectProfile.ScriptText
 	projectVisualHint := buildProjectVisualHint(projectProfile)
@@ -580,11 +612,8 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 		return nil, fmt.Errorf("episode %d not found in project %d", episodeID, projectID)
 	}
 
-	content := target.Excerpt
-	if strings.TrimSpace(content) == "" {
-		content = target.Summary
-	}
-	if strings.TrimSpace(content) == "" {
+	content := episodeExtractionContent(*target)
+	if content == "" {
 		removeSentinel()
 		return nil, fmt.Errorf("episode %d has no content for extraction", episodeID)
 	}
@@ -713,12 +742,8 @@ func (s *ExtractService) buildEpisodeChunks(episodes []episodeSummary, scriptTex
 	}
 
 	for _, ep := range episodes {
-		// Prefer full chapter text over summary
-		content := ep.Excerpt
-		if strings.TrimSpace(content) == "" {
-			content = ep.Summary
-		}
-		if strings.TrimSpace(content) == "" {
+		content := episodeExtractionContent(ep)
+		if content == "" {
 			continue
 		}
 
@@ -833,11 +858,12 @@ func mergeInt64s(a, b []int64) []int64 {
 }
 
 type episodeSummary struct {
-	ID      uint64
-	Number  int
-	Title   string
-	Summary string
-	Excerpt string // full chapter text (ScriptExcerpt)
+	ID            uint64
+	Number        int
+	Title         string
+	Summary       string
+	Excerpt       string // full chapter text (ScriptExcerpt)
+	OptimizedText string
 }
 
 // fetchEpisodeSummaries —— 从 project-service 获取项目的剧集摘要列表
@@ -868,6 +894,7 @@ func (s *ExtractService) fetchEpisodeSummaries(ctx context.Context, projectID ui
 			Title         string `json:"title"`
 			Summary       string `json:"summary"`
 			ScriptExcerpt string `json:"script_excerpt"`
+			OptimizedText string `json:"optimized_text"`
 		} `json:"data"`
 	}
 	body, _ := io.ReadAll(resp.Body)
@@ -878,11 +905,12 @@ func (s *ExtractService) fetchEpisodeSummaries(ctx context.Context, projectID ui
 	var summaries []episodeSummary
 	for _, ep := range result.Data {
 		summaries = append(summaries, episodeSummary{
-			ID:      ep.ID,
-			Number:  ep.EpisodeNumber,
-			Title:   ep.Title,
-			Summary: ep.Summary,
-			Excerpt: ep.ScriptExcerpt,
+			ID:            ep.ID,
+			Number:        ep.EpisodeNumber,
+			Title:         ep.Title,
+			Summary:       ep.Summary,
+			Excerpt:       ep.ScriptExcerpt,
+			OptimizedText: ep.OptimizedText,
 		})
 	}
 	return summaries
@@ -1103,10 +1131,7 @@ func (s *ExtractService) BackfillEpisodeIDs(ctx context.Context, projectID uint6
 		}
 		var matchedIDs []int64
 		for _, ep := range episodes {
-			content := ep.Excerpt
-			if content == "" {
-				content = ep.Summary
-			}
+			content := episodeExtractionContent(ep)
 			if content == "" {
 				continue
 			}

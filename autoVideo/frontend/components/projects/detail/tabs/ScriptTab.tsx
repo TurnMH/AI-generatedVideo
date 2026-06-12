@@ -113,6 +113,8 @@ import { STATUS_MAP } from '@/lib/projects/status'
 import type { LegacyChatMessage } from '@/lib/projects/chat'
 import { getChatRole, getChatContent, getChatImageUrl, getChatImageModel } from '@/lib/projects/chat'
 import { COMIC_STYLE_PRESETS, splitEpisodeIntoComicPanels, recommendEpisodeCount } from '@/lib/projects/comic'
+import { AUTO_EPISODE_SPLIT_HINT, prefersAutoEpisodeSplit } from '@/lib/projects/episode-split'
+import { deriveVideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
 import type { ComicStylePresetKey, EpisodeCountRecommendation } from '@/lib/projects/comic'
 import { getAssetGeneratedImages, getSelectedGeneratedImageUrl, getAssetGenerationProgress, getGenerationStageHint, getGenerationEtaLabel, getGenerationElapsedLabel } from '@/lib/projects/assets'
 import type { AssetImageVersion, AssetGenerationProgress } from '@/lib/projects/assets'
@@ -155,6 +157,7 @@ export function ScriptTab({
   onAutoStoryboardQueued?: () => void
 }) {
   const { toast } = useToast()
+  const usesAutoEpisodeSplit = prefersAutoEpisodeSplit(project)
   const getApiErrorMessage = (error: unknown) => {
     const response = (error as { response?: { data?: { message?: string; error?: string } } })?.response?.data
     return response?.message || response?.error || (error as { message?: string })?.message || ''
@@ -210,9 +213,6 @@ export function ScriptTab({
   // window between DeleteByProjectID completing and the sentinel being created.
   const extractionStartedAtRef = React.useRef<number | null>(null)
   const autoOptimizePollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Derive processing state from project status OR local trigger
-  const isProcessing = project.status === 'script_processing' || episodeGenerating
 
   // Track asset extraction progress
   const { data: extractAssetsData, mutate: mutateExtractAssets } = useSWR(
@@ -315,7 +315,7 @@ export function ScriptTab({
   const selectedImageModelAvailability = selectedImageModel ? getProjectModelAvailability(selectedImageModel) : null
   const parsedTargetEpisodes = Number.parseInt(draftTargetEpisodes, 10)
   const hasValidTargetEpisodes = Number.isFinite(parsedTargetEpisodes) && parsedTargetEpisodes >= 1 && parsedTargetEpisodes <= 200
-  const splitConfigReady = !!selectedSplitModel && hasValidTargetEpisodes
+  const splitConfigReady = !!selectedSplitModel && (usesAutoEpisodeSplit || hasValidTargetEpisodes)
   const shouldShowSplitSearch = splitModels.length > 8
   const filteredSplitModels = useMemo(() => {
     const keyword = splitModelSearch.trim().toLocaleLowerCase()
@@ -323,12 +323,16 @@ export function ScriptTab({
     return splitModels.filter((model) => buildSplitModelSearchText(model).includes(keyword))
   }, [splitModels, splitModelSearch])
 
+  const shouldPollEpisodes = episodeGenerating
+    || project.status === 'script_processing'
+    || ['episode_splitting', 'script_prepping', 'scene_splitting'].includes(project.progress?.stage ?? '')
+
   const { data: episodesData, isLoading: episodesLoading, mutate: mutateEpisodes } = useSWR(
     ['episodes', projectId],
     () => projectAPI.listEpisodes(projectId) as unknown as Promise<{ data: Episode[] }>,
     {
       refreshInterval: (data) => {
-        if (isProcessing) return 3000
+        if (shouldPollEpisodes) return 3000
         const eps = (data as { data?: Episode[] })?.data ?? []
         if (eps.some((ep) => ep.optimize_status === 'optimizing' || ep.optimize_status === '' || ep.review_status === 'reviewing')) return 3000
         return 0
@@ -336,6 +340,28 @@ export function ScriptTab({
     }
   )
   const episodes = (episodesData as { data?: Episode[] })?.data ?? []
+
+  const pipeline = useMemo(
+    () => deriveVideoPipelineSnapshot({
+      project,
+      episodes,
+      episodeGenerating,
+      assetExtracting: extractionInProgress,
+      assetGenerating,
+      storyboardGenerating: storyboardDispatching || episodeStoryboardDispatching !== null,
+    }),
+    [
+      project,
+      episodes,
+      episodeGenerating,
+      extractionInProgress,
+      assetGenerating,
+      storyboardDispatching,
+      episodeStoryboardDispatching,
+    ],
+  )
+
+  const isProcessing = episodeGenerating || pipeline.isActive
   const nextManualEpisodeNumber = useMemo(
     () => episodes.reduce((maxValue, episode) => Math.max(maxValue, episode.episode_number), 0) + 1,
     [episodes]
@@ -348,7 +374,7 @@ export function ScriptTab({
   const { data: scriptTabSbData, mutate: mutateScriptTabSb } = useSWR(
     episodes.length > 0 ? ['script-tab-storyboards', projectId] : null,
     () => storyboardAPI.list(projectId, { page_size: 100 }) as unknown as Promise<{ data: Storyboard[] | { items: Storyboard[] } }>,
-    { refreshInterval: isProcessing ? 5000 : 0 }
+    { refreshInterval: shouldPollEpisodes || pipeline.isActive ? 5000 : 0 }
   )
   const scriptTabSbRaw = (scriptTabSbData as { data?: Storyboard[] | { items?: Storyboard[] } })?.data
   const scriptTabStoryboards: Storyboard[] = Array.isArray(scriptTabSbRaw) ? scriptTabSbRaw : (scriptTabSbRaw as { items?: Storyboard[] })?.items ?? []
@@ -495,10 +521,18 @@ export function ScriptTab({
   }, [assetGenerating, extractTotal, extractionInProgress, extractAssetsRaw])
 
   React.useEffect(() => {
-    if (splitSettingsDirty) return
+    if (!usesAutoEpisodeSplit || project.target_episodes <= 0) return
+    void projectAPI.update(projectId, { target_episodes: 0 } as Partial<Project>).then(() => {
+      mutateProject()
+      globalMutate(['project', projectId])
+    })
+  }, [usesAutoEpisodeSplit, project.target_episodes, projectId, mutateProject])
+
+  React.useEffect(() => {
+    if (splitSettingsDirty || usesAutoEpisodeSplit) return
     setDraftSplitModelId(project.text_model_id ? String(project.text_model_id) : '')
     setDraftTargetEpisodes(resolveDraftTargetEpisodes(project.target_episodes, recommendedEpisodeCount, episodes.length > 0))
-  }, [episodes.length, project.target_episodes, project.text_model_id, recommendedEpisodeCount, splitSettingsDirty])
+  }, [episodes.length, project.target_episodes, project.text_model_id, recommendedEpisodeCount, splitSettingsDirty, usesAutoEpisodeSplit])
 
   // Poll every 3s while auto-optimize-review is running (backend is async)
   React.useEffect(() => {
@@ -537,12 +571,12 @@ export function ScriptTab({
       toast({ title: '请先选择分集模型', variant: 'destructive' })
       return false
     }
-    if (!hasValidTargetEpisodes) {
+    if (!usesAutoEpisodeSplit && !hasValidTargetEpisodes) {
       toast({ title: '请填写 1-200 的目标分集数', variant: 'destructive' })
       return false
     }
 
-    const nextTargetEpisodes = parsedTargetEpisodes
+    const nextTargetEpisodes = usesAutoEpisodeSplit ? 0 : parsedTargetEpisodes
     const shouldUpdate =
       project.text_model_id !== selectedSplitModel.id ||
       project.target_episodes !== nextTargetEpisodes
@@ -582,7 +616,7 @@ export function ScriptTab({
       const nextProject = await mutateProject()
       const uploadedProject = (nextProject as { data?: Project } | undefined)?.data
       const uploadedRecommendation = recommendEpisodeCount(uploadedProject?.script_text?.trim() ?? '')
-      if (!splitSettingsDirty) {
+      if (!splitSettingsDirty && !usesAutoEpisodeSplit) {
         setDraftTargetEpisodes(resolveDraftTargetEpisodes(uploadedProject?.target_episodes ?? 0, uploadedRecommendation, false))
       }
       globalMutate(['project', projectId])
@@ -594,7 +628,7 @@ export function ScriptTab({
     await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: autoStoryboardAfterSplit })
     toast({
       title: '上传成功，已自动开始分集',
-      description: autoStoryboardAfterSplit ? '系统会继续自动衔接资源提取与分镜流程。' : '分集完成后可继续手动推进后续流程。',
+      description: autoStoryboardAfterSplit ? '系统会自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在单集列表手动启动。' : '分集完成后可继续手动推进后续流程。',
       variant: 'success',
     })
     if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()
@@ -608,7 +642,11 @@ export function ScriptTab({
 
     toast({
       title: '上传成功，请选择模型后手动开始分集',
-      description: uploadedRecommendation ? `已推荐 ${uploadedRecommendation.count} 个分集，${uploadedRecommendation.reason}` : '可按需要手动填写目标分集数',
+      description: usesAutoEpisodeSplit
+        ? (uploadedRecommendation
+          ? `将按剧本自动分集，预计约 ${uploadedRecommendation.count} 集（${uploadedRecommendation.reason}）`
+          : AUTO_EPISODE_SPLIT_HINT)
+        : (uploadedRecommendation ? `已推荐 ${uploadedRecommendation.count} 个分集，${uploadedRecommendation.reason}` : '可按需要手动填写目标分集数'),
       variant: 'success',
     })
     } catch {
@@ -625,7 +663,7 @@ export function ScriptTab({
       return
     }
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
       return
     }
 
@@ -664,7 +702,7 @@ export function ScriptTab({
     try {
       await projectAPI.generateEpisodes(projectId, hasKeywords ? keywords : undefined, { autoStoryboard: autoStoryboardAfterSplit })
       toast({
-        title: autoStoryboardAfterSplit ? '重新分集已启动：旧分集与旧分镜将按新配置重建，分镜仍需等待资源图全部完成后再开始' : '重新分集已启动：旧分集与旧分镜将按新配置重建',
+        title: autoStoryboardAfterSplit ? '重新分集已启动：将自动润色优化第 1 集示范剧本（仅文本）' : '重新分集已启动：旧分集与旧分镜将按新配置重建',
         variant: 'success',
       })
       if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()
@@ -697,7 +735,7 @@ export function ScriptTab({
 
   const handleRetryStalledScript = async () => {
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
       return
     }
 
@@ -740,7 +778,7 @@ export function ScriptTab({
       return
     }
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
       return
     }
 
@@ -787,13 +825,14 @@ export function ScriptTab({
       const created = await projectAPI.createEpisode(projectId, payload) as unknown as { data?: Episode }
       console.log('[createEpisode] response:', JSON.stringify(created))
 
-      const nextEpisodeTarget = Math.max(project.target_episodes || 0, episodes.length + 1, parsedManualEpisodeNumber)
-      if (nextEpisodeTarget !== project.target_episodes) {
-        await projectAPI.update(projectId, { target_episodes: nextEpisodeTarget } as Partial<Project>)
+      if (!usesAutoEpisodeSplit) {
+        const nextEpisodeTarget = Math.max(project.target_episodes || 0, episodes.length + 1, parsedManualEpisodeNumber)
+        if (nextEpisodeTarget !== project.target_episodes) {
+          await projectAPI.update(projectId, { target_episodes: nextEpisodeTarget } as Partial<Project>)
+        }
+        setDraftTargetEpisodes(String(nextEpisodeTarget))
+        setSplitSettingsDirty(false)
       }
-
-      setDraftTargetEpisodes(String(nextEpisodeTarget))
-      setSplitSettingsDirty(false)
       setShowCreateEpisodeDialog(false)
       mutateEpisodes()
       mutateProject()
@@ -1172,7 +1211,9 @@ export function ScriptTab({
                           ) : null}
                         </div>
                         <p className="text-xs leading-5 text-surface-500">
-                          这一块默认收起。只有在需要更换分集模型、调整目标集数或手动覆盖推荐值时，再展开修改即可。
+                          {usesAutoEpisodeSplit
+                            ? '这一块默认收起。视频项目会按剧本自动分集，通常只需确认分集模型即可。'
+                            : '这一块默认收起。只有在需要更换分集模型、调整目标集数或手动覆盖推荐值时，再展开修改即可。'}
                         </p>
 
                         <div className="grid gap-2 md:grid-cols-3">
@@ -1182,22 +1223,30 @@ export function ScriptTab({
                             <p className="truncate text-[11px] text-surface-500">{selectedSplitModelProvider || '展开后可切换模型'}</p>
                           </div>
                           <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
-                            <p className="text-[11px] text-surface-400">目标分集数</p>
-                            <p className="text-sm font-medium text-surface-900">{hasValidTargetEpisodes ? `${parsedTargetEpisodes} 集` : '未设置'}</p>
-                            <p className="text-[11px] text-surface-500">启动自动分集时会按这里的集数执行</p>
+                            <p className="text-[11px] text-surface-400">{usesAutoEpisodeSplit ? '分集方式' : '目标分集数'}</p>
+                            <p className="text-sm font-medium text-surface-900">
+                              {usesAutoEpisodeSplit
+                                ? (recommendedEpisodeCount ? `按剧本自动拆分（约 ${recommendedEpisodeCount.count} 集）` : '按剧本自动拆分')
+                                : (hasValidTargetEpisodes ? `${parsedTargetEpisodes} 集` : '未设置')}
+                            </p>
+                            <p className="text-[11px] text-surface-500">
+                              {usesAutoEpisodeSplit
+                                ? AUTO_EPISODE_SPLIT_HINT
+                                : '启动自动分集时会按这里的集数执行'}
+                            </p>
                           </div>
                           <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
-                            <p className="text-[11px] text-surface-400">智能建议</p>
+                            <p className="text-[11px] text-surface-400">{usesAutoEpisodeSplit ? '拆分依据' : '智能建议'}</p>
                             <p className="text-sm font-medium text-surface-900">
-                              {recommendedEpisodeCount ? `推荐 ${recommendedEpisodeCount.count} 集` : '暂无推荐'}
+                              {recommendedEpisodeCount ? `预计 ${recommendedEpisodeCount.count} 集` : '暂无预估'}
                             </p>
-                            <p className="truncate text-[11px] text-surface-500">{recommendedEpisodeCount?.reason || '上传并解析剧本后自动计算推荐值'}</p>
+                            <p className="truncate text-[11px] text-surface-500">{recommendedEpisodeCount?.reason || '上传并解析剧本后自动计算'}</p>
                           </div>
                         </div>
                       </div>
 
                       <div className="flex shrink-0 flex-wrap items-center gap-2">
-                        {recommendedEpisodeCount && draftTargetEpisodes !== String(recommendedEpisodeCount.count) ? (
+                        {!usesAutoEpisodeSplit && recommendedEpisodeCount && draftTargetEpisodes !== String(recommendedEpisodeCount.count) ? (
                           <Button
                             type="button"
                             size="sm"
@@ -1315,29 +1364,41 @@ export function ScriptTab({
                           ) : null}
                         </div>
 
-                        <div className="space-y-1.5">
-                          <Label className="text-xs font-medium text-surface-700">目标分集数</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={200}
-                            step={1}
-                            value={draftTargetEpisodes}
-                            onChange={(event) => {
-                              setDraftTargetEpisodes(event.target.value.replace(/[^\d]/g, ''))
-                              setSplitSettingsDirty(true)
-                            }}
-                            placeholder="填写需要拆分的分集数量，例如 12"
-                            disabled={savingSplitModel || isProcessing}
-                            className="bg-white"
-                          />
-                          {recommendedEpisodeCount ? (
-                            <p className="text-[11px] leading-4 text-emerald-700">
-                              推荐 {recommendedEpisodeCount.count} 段（{recommendedEpisodeCount.reason}）
-                              {draftTargetEpisodes === String(recommendedEpisodeCount.count) ? '，当前已采用推荐值。' : '。'}
-                            </p>
-                          ) : null}
-                        </div>
+                        {usesAutoEpisodeSplit ? (
+                          <div className="rounded-xl border border-primary-100 bg-primary-50/50 px-3 py-2.5">
+                            <p className="text-xs font-medium text-primary-800">按剧本自动分集</p>
+                            <p className="mt-1 text-[11px] leading-5 text-primary-700">{AUTO_EPISODE_SPLIT_HINT}</p>
+                            {recommendedEpisodeCount ? (
+                              <p className="mt-2 text-[11px] leading-4 text-primary-600">
+                                当前剧本预计约 {recommendedEpisodeCount.count} 集（{recommendedEpisodeCount.reason}），实际以拆分结果为准。
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-surface-700">目标分集数</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={200}
+                              step={1}
+                              value={draftTargetEpisodes}
+                              onChange={(event) => {
+                                setDraftTargetEpisodes(event.target.value.replace(/[^\d]/g, ''))
+                                setSplitSettingsDirty(true)
+                              }}
+                              placeholder="填写需要拆分的分集数量，例如 12"
+                              disabled={savingSplitModel || isProcessing}
+                              className="bg-white"
+                            />
+                            {recommendedEpisodeCount ? (
+                              <p className="text-[11px] leading-4 text-emerald-700">
+                                推荐 {recommendedEpisodeCount.count} 段（{recommendedEpisodeCount.reason}）
+                                {draftTargetEpisodes === String(recommendedEpisodeCount.count) ? '，当前已采用推荐值。' : '。'}
+                              </p>
+                            ) : null}
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </div>
@@ -1346,7 +1407,7 @@ export function ScriptTab({
             </div>
           </div>
 
-          {isProcessing && episodes.length === 0 ? (
+          {pipeline.phase === 'episode_splitting' ? (
             <div className="rounded-xl border border-primary-100 bg-gradient-to-b from-primary-50/80 to-white px-5 py-5">
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-100">
@@ -1354,19 +1415,16 @@ export function ScriptTab({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-primary-900">分集生成进行中</p>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-primary-600 shadow-sm">
-                      总控进度已同步到上方
-                    </span>
+                    <p className="text-sm font-semibold text-primary-900">剧本分集中</p>
                     {project.progress?.episode_split?.total ? (
                       <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-medium text-primary-700">
                         {project.progress.episode_split.completed ?? 0}/{project.progress.episode_split.total} 集
                       </span>
                     ) : null}
                   </div>
-                  <p className="mt-1 text-sm leading-6 text-primary-800">{splitProgressSummary}</p>
+                  <p className="mt-1 text-sm leading-6 text-primary-800">{pipeline.activeDetail || splitProgressSummary}</p>
                   <p className="mt-1 text-xs leading-5 text-primary-600">
-                    分集、资源提取、分镜格式化等进度已统一汇总到上方“剧本大纲与项目总控”，这里仅保留当前阶段摘要。分集完成后会自动出现在下方列表。
+                    分集完成后会自动出现在下方列表，详细进度见上方「项目总控」。
                   </p>
                   {splitProgressPercent > 0 ? (
                     <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-primary-100">
@@ -1388,7 +1446,22 @@ export function ScriptTab({
                 </div>
               )}
             </div>
-          ) : isProcessing && episodes.length > 0 ? (
+          ) : pipeline.phase === 'script_prepping' ? (
+            <div className="rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 to-sky-50 px-4 py-3.5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-blue-900">剧本润色与自动准备中</p>
+                  <p className="mt-1 text-sm leading-6 text-blue-800">{pipeline.activeDetail}</p>
+                  <p className="mt-1 text-xs text-blue-600">
+                    分集已完成（{episodes.length} 集）。系统正在润色剧本并串联后续流程，这不是分镜拆分。
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : pipeline.phase === 'scene_splitting' ? (
             <div className="space-y-4">
               <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-purple-50 px-4 py-3.5">
                 <div className="flex items-start gap-3">
@@ -1397,28 +1470,20 @@ export function ScriptTab({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-violet-900">分镜序列格式化进行中</p>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-violet-600 shadow-sm">
-                        总控进度已同步到上方
-                      </span>
+                      <p className="text-sm font-semibold text-violet-900">分镜拆分中</p>
                       <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">
-                        {sceneReadyCount}/{Math.max(episodes.length, 1)} 集就绪
+                        {sceneReadyCount}/{Math.max(episodes.length, 1)} 集已拆分
                       </span>
                     </div>
-                    <p className="mt-1 text-sm leading-6 text-violet-800">
-                      {project.progress?.message || `分集已完成（${episodes.length} 集），AI 正在逐集拆分分镜序列…`}
-                    </p>
+                    <p className="mt-1 text-sm leading-6 text-violet-800">{pipeline.activeDetail}</p>
                     <p className="mt-1 text-xs text-violet-600">{sceneProcessingSummary}</p>
-                    {storyboardSplitTiming ? (
-                      <p className="mt-1 text-[11px] text-violet-400">{storyboardSplitTiming}</p>
-                    ) : null}
                     <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-violet-200">
                       <div className="h-full rounded-full bg-violet-500 transition-all duration-700" style={{ width: `${sceneProcessingProgress}%` }} />
                     </div>
                     {scriptProgressStalled && (
                       <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span>分镜格式化进度长时间未更新，可能已卡住。</span>
+                          <span>分镜拆分进度长时间未更新，可能已卡住。</span>
                           <Button size="sm" variant="outline" className="h-7 border-amber-300 bg-white text-amber-700 hover:bg-amber-100" onClick={handleRetryStalledScript}>
                             <RefreshCw className="mr-1 h-3 w-3" />
                             重新拉起
@@ -1515,7 +1580,22 @@ export function ScriptTab({
             </div>
           ) : (
             <>
-              {/* Asset extraction trigger — top position */}
+              {pipeline.episodeSplitDone && !pipeline.isActive ? (
+                <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-emerald-900">分集已完成（{episodes.length} 集）</p>
+                      <p className="mt-1 text-xs leading-5 text-emerald-700">
+                        {episodes.length > 1
+                          ? '系统已自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在左侧单集列表点击「自动处理」。'
+                          : pipeline.nextStepHint}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {/* Batch script formatting progress banner */}
           {(() => {
             const formattingCount = episodes.filter((ep) => ep.optimize_status === 'optimizing').length
@@ -1532,7 +1612,7 @@ export function ScriptTab({
                   </div>
                   <div className="flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-violet-900">AI 自动处理中 · 分镜序列格式化</p>
+                      <p className="text-sm font-semibold text-violet-900">AI 自动处理中 · 剧本润色</p>
                       <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">
                         {formattedCount}/{episodes.length} 集
                       </span>
@@ -1571,7 +1651,7 @@ export function ScriptTab({
                             <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-700">步骤 2/3</span>
                           </div>
                           <p className="mt-1 text-xs text-yellow-700">
-                            正在从剧本文本中识别并提取全部角色、场景、道具资源，提取完成后将自动开始分镜序列格式化（步骤 3）
+                            正在从剧本文本中识别并提取角色、场景、道具资源，完成后可在各集工作台继续出图
                           </p>
                         </>
                       ) : extractionDone ? (
@@ -1836,7 +1916,9 @@ export function ScriptTab({
                 <div>
                   <p className="text-xs font-medium text-surface-800">本次分集使用模型</p>
                   <p className="mt-1 text-xs text-surface-500">
-                    这里展示你手动选择的分集模型与目标分集数，确认后才会开始本次自动分集。
+                    {usesAutoEpisodeSplit
+                      ? '这里展示你手动选择的分集模型。确认后将按剧本内容自动拆分，无需填写目标集数。'
+                      : '这里展示你手动选择的分集模型与目标分集数，确认后才会开始本次自动分集。'}
                   </p>
                 </div>
                 {selectedSplitModel ? (
@@ -1851,7 +1933,11 @@ export function ScriptTab({
                 )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Badge variant="outline">目标分集数：{hasValidTargetEpisodes ? parsedTargetEpisodes : '未填写'}</Badge>
+                <Badge variant="outline">
+                  {usesAutoEpisodeSplit
+                    ? `分集方式：按剧本自动拆分${recommendedEpisodeCount ? `（约 ${recommendedEpisodeCount.count} 集）` : ''}`
+                    : `目标分集数：${hasValidTargetEpisodes ? parsedTargetEpisodes : '未填写'}`}
+                </Badge>
               </div>
               {selectedSplitModel ? (
                 <>
@@ -1916,9 +2002,9 @@ export function ScriptTab({
             <div className="rounded-md border border-surface-200 bg-surface-50 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-surface-800">分集完成后自动衔接后续分镜流程</p>
+                  <p className="text-sm font-medium text-surface-800">分集完成后自动润色优化第 1 集示范剧本</p>
                   <p className="mt-1 text-xs text-surface-500">
-                    重新分集会替换旧分集，并清空旧分镜后按新结果重建；若开启这里，系统会在资源准备完成后自动继续拆分分镜，但不会跳过资源图校验。
+                    仅执行文本模型的润色、优化与审查，不会自动提取资源或拆分分镜。资源与分镜请在单集列表点击「自动处理」手动启动。
                   </p>
                 </div>
                 <Switch checked={autoStoryboardAfterSplit} onCheckedChange={setAutoStoryboardAfterSplit} />

@@ -199,6 +199,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     compose_stage?: string;
     serial_scene?: boolean;
     scene_group_keys?: string[];
+    scene_description?: string;
+    render_config?: Record<string, unknown>;
     task_debug_summary?: VideoTaskDebugSummary;
     clips_debug?: VideoClipDebugInfo[];
   }
@@ -230,6 +232,20 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const composeActiveStages = composeStageOrder.filter((stage) => stage !== 'done')
   const isComposeRunning = (task: Pick<VTask, 'compose_stage'>) =>
     Boolean(task.compose_stage && task.compose_stage !== '' && task.compose_stage !== 'done')
+
+  const resolveVideoTaskDisplayStatus = (task: Pick<VTask, 'status' | 'compose_stage' | 'clips' | 'image_urls'>) => {
+    if (isComposeRunning(task)) return 'processing'
+    if (task.status === 'processing' || task.status === 'succeeded' || task.status === 'failed') {
+      return task.status
+    }
+    const clips = task.clips ?? []
+    const clipTotal = clips.length || task.image_urls?.length || 0
+    if (clipTotal === 0) return task.status
+    const clipsDone = clips.filter((clip) => clip.status === 'succeeded').length
+    const clipsActive = clips.some((clip) => clip.status === 'pending' || clip.status === 'processing')
+    if (clipsActive && clipsDone < clipTotal) return 'processing'
+    return task.status
+  }
 
   const rawItems = (tasksRaw as { items?: VTask[] })?.items ?? (Array.isArray(tasksRaw) ? tasksRaw as VTask[] : [])
   const tasks: VTask[] = rawItems.filter(t => t.status !== 'cancelled')
@@ -280,6 +296,38 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     }
     return map
   }, [storyboards])
+
+  const resolveClipScenePreview = (
+    task: VTask,
+    clipOrder: number,
+    clip?: Pick<VClip, 'scene_group_key' | 'scene_seq'>,
+  ): { promptUsed: string; sceneDescription: string } => {
+    const episodeId = task.episode_id ? Number(task.episode_id) : NaN
+    if (Number.isFinite(episodeId) && episodeId > 0) {
+      const episodeStoryboards = episodeStoryboardsMap.get(episodeId) ?? []
+      const storyboard = clip?.scene_group_key
+        ? episodeStoryboards.find((sb) => sb.scene_group_key === clip.scene_group_key)
+        : episodeStoryboards.find((sb) => sb.sequence_number === clipOrder + 1)
+      if (storyboard) {
+        return {
+          promptUsed: storyboard.prompt_used || '',
+          sceneDescription: storyboard.scene_description || '',
+        }
+      }
+    }
+
+    const renderConfig = task.render_config ?? {}
+    const sceneDescriptions = Array.isArray(renderConfig.scene_descriptions)
+      ? renderConfig.scene_descriptions.map((item) => String(item ?? '').trim())
+      : []
+    const motionDescs = Array.isArray(renderConfig.motion_descs)
+      ? renderConfig.motion_descs.map((item) => String(item ?? '').trim())
+      : []
+    const promptUsed = sceneDescriptions[clipOrder] ?? ''
+    const sceneDescription = motionDescs[clipOrder]
+      || (clipOrder === 0 ? String(task.scene_description ?? '').trim() : '')
+    return { promptUsed, sceneDescription }
+  }
 
   // Fetch episodes for display
   const { data: episodesData } = useSWR(
@@ -492,6 +540,13 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     Boolean(storyboard?.scene_group_key)
   const includeStoryboardForVideoTask = (storyboard?: Pick<Storyboard, 'image_url' | 'scene_group_key'> | null) =>
     Boolean(storyboard?.image_url || isStoryboardSerialCandidate(storyboard))
+
+  const getCachedEligibleStoryboards = (episodeId?: number) => {
+    const source = episodeId ? (episodeStoryboardsMap.get(episodeId) ?? []) : storyboards
+    return source
+      .filter((sb) => sb.status === 'completed' && includeStoryboardForVideoTask(sb))
+      .sort((a, b) => a.sequence_number - b.sequence_number)
+  }
   const videoEpisodeOptions = useMemo(() => {
     const storyboardCounts = new Map<number, { total: number; completed: number; pending: number; firstClipTotal: number; firstClipReady: number }>()
     const taskCounts = new Map<number, { total: number; active: number; failed: number; succeeded: number }>()
@@ -814,12 +869,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       return
     }
     const episode = episodeMap.get(episodeId)
-    const completedSbs = ((await storyboardAPI.listAll(projectId, { episode_id: episodeId, status: 'completed' })) as { data?: Storyboard[] }).data ?? []
-    // 串行模式：非首帧分镜无 image_url（由视频服务用前一片段末帧填充），但仍需包含在 clips 列表里以触发串行链。
-    // 非串行模式：只包含有 image_url 的分镜。
-    const sortedSbs = completedSbs
-      .filter((sb) => includeStoryboardForVideoTask(sb))
-      .sort((a, b) => a.sequence_number - b.sequence_number)
+    const sortedSbs = getCachedEligibleStoryboards(episodeId)
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
     // Prefer LLM-refined prompt_used; fall back to raw scene_description for older storyboards.
     const sceneDescriptions = sortedSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
@@ -1070,12 +1120,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
       })
       return
     }
-    const completedSb = ((await storyboardAPI.listAll(projectId, { status: 'completed' })) as { data?: Storyboard[] }).data ?? []
-    // 串行模式：非首帧分镜（image_url 为空但有 scene_group_key）也需要包含，
-    // 视频服务会用前一片段末帧作为其首帧。
-    const eligibleSbs = completedSb
-      .filter((sb) => includeStoryboardForVideoTask(sb))
-      .sort((a, b) => a.sequence_number - b.sequence_number)
+    const eligibleSbs = getCachedEligibleStoryboards()
     const hasSerialCandidate = eligibleSbs.some((sb) => isStoryboardSerialCandidate(sb))
     if (eligibleSbs.length === 0 || !eligibleSbs.some((sb) => sb.image_url)) {
       toast({ title: hasSerialCandidate ? '暂无可用场景首帧，请先完成首帧准备' : '暂无已完成的分镜图片，请先生成分镜图片', variant: 'destructive' })
@@ -2214,7 +2259,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                   const clipsFailed = clips.filter(c => c.status === 'failed').length
                   const clipsTotal = clips.length || t.image_urls?.length || 0
                   const progress = clipsTotal > 0 ? Math.round((clipsDone / clipsTotal) * 100) : 0
-                  const isActive = t.status === 'processing' || t.status === 'pending' || isComposeRunning(t)
+                  const displayStatus = resolveVideoTaskDisplayStatus(t)
+                  const isActive = displayStatus === 'processing' || displayStatus === 'pending' || isComposeRunning(t)
 
                   return (
                     <Card key={t.id} className={`transition-shadow hover:shadow-sm ${isActive ? 'border-blue-200 bg-blue-50/30' : ''}`}>
@@ -2237,7 +2283,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                 {ep ? `第 ${ep.episode_number} 集 · ${ep.title}` : t.episode_id ? `第 ${t.episode_id} 集` : `任务 #${t.id}`}
                               </p>
                               <div className="flex items-center gap-3 text-xs text-surface-400">
-                                <VideoTaskStatusBadge status={t.status} />
+                                <VideoTaskStatusBadge status={displayStatus} />
                                 <span>{t.model_name}</span>
                                 {t.serial_scene && (
                                   <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-600">
@@ -2473,7 +2519,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                   processing: '生成中',
                                   pending: '等待中',
                                 }
-                                const scene = taskDetailScenes.find((item) => item.sequenceNumber === clip.clip_order + 1)
+                                const scenePreview = resolveClipScenePreview(t, clip.clip_order, clip)
                                 const isChainBroken = clip.error_msg?.startsWith('serial chain broken')
                                 const clipDebug = t.clips_debug?.find((item) => item.clip_order === clip.clip_order)
                                 return (
@@ -2535,11 +2581,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                           <div className="grid gap-2 text-xs text-surface-500 md:grid-cols-2">
                                             <div className="rounded-md bg-white/80 px-2.5 py-2">
                                               <p className="text-[10px] text-surface-400">提示词</p>
-                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scene?.promptUsed || '暂无'}</p>
+                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scenePreview.promptUsed || '暂无'}</p>
                                             </div>
                                             <div className="rounded-md bg-white/80 px-2.5 py-2">
                                               <p className="text-[10px] text-surface-400">描述</p>
-                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scene?.sceneDescription || '暂无'}</p>
+                                              <p className="mt-1 line-clamp-3 break-words text-surface-700">{scenePreview.sceneDescription || '暂无'}</p>
                                             </div>
                                           </div>
                                           {(clipDebug?.spatial_anchor || clipDebug?.subject_positions || clipDebug?.transition_note) ? (

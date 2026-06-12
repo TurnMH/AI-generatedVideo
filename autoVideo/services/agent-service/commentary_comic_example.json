@@ -1,0 +1,70 @@
+{
+  "goal": "生成一个45秒的解说漫短视频，主题是年轻剑客误入被遗忘的机械神庙，在旁白推进下发现古代核心装置重新苏醒。",
+  "project_id": 1,
+  "episode_id": 1,
+  "user_id": 100,
+  "constraints": {
+    "mode": "commentary_comic",
+    "duration_sec": 45,
+    "style": "anime-2d",
+    "style_preset": "anime-2d",
+    "motion_mode": "gentle",
+    "model_name": "kling",
+    "voice_style": "calm_narration",
+    "subtitle_style": "comic_caption",
+    "shot_density": "high",
+    "target_shot_count": 9,
+    "character_name": "年轻剑客林澈",
+    "character_focus": "年轻剑客林澈",
+    "costume_hint": "dark travel cloak, rain-soaked light armor, glowing blue rune accents",
+    "location_tag": "ancient mechanical temple",
+    "wait_for_image_result": true,
+    "image_poll_timeout_sec": 120,
+    "image_poll_interval_sec": 3,
+    "language": "zh-CN"
+  },
+  "context": {
+    "mode": "commentary_comic",
+    "authorization": "Bearer <token>",
+    "title": "机械神庙的苏醒",
+    "episode_title": "第一集：误入遗迹",
+    "genre": "奇幻冒险",
+    "tone": "mysterious, tense, cinematic",
+    "audience": "anime and commentary-comic viewers",
+    "platform": "commentary_comic",
+    "script_mode": "narration_script",
+    "delivery_format": "video",
+    "chapter_brief": "主角在遗迹探险时触发失落文明装置，旁白逐步揭示世界观与危机。",
+    "source_text": "年轻剑客在暴雨夜追踪失踪商队，闯入山体深处的机械神庙。破损壁画暗示这里曾由古代工程文明统治。随着主角点亮残破灯柱，沉睡多年的金属核心开始转动，整座神庙像活过来一样发出低鸣。旁白要强调神秘感、危险临近，以及主角即将被卷入更大的阴谋。",
+    "voice_style": "calm_narration",
+    "subtitle_style": "comic_caption",
+    "main_character": "年轻剑客林澈",
+    "character_name": "年轻剑客林澈",
+    "character_focus": "年轻剑客林澈",
+    "costume_hint": "dark travel cloak, rain-soaked light armor, glowing blue rune accents",
+    "scene_location": "ancient mechanical temple",
+    "location_tag": "ancient mechanical temple",
+    "wait_for_image_result": true
+  },
+  "expected_video_episode_payload_shape": {
+    "episodes": [
+      {
+        "episode_id": 1,
+        "image_urls": ["https://example.com/shot-1.png", "https://example.com/shot-2.png"],
+        "scene_descriptions": ["scene / shot description 1", "scene / shot description 2"],
+        "dialogues": ["旁白1", "旁白2"],
+        "camera_movements": ["wide", "close_up"],
+        "moods": ["mysterious", "dramatic"],
+        "transition_plan": ["cut", "dissolve"],
+        "character_focus": ["年轻剑客林澈", "年轻剑客林澈"],
+        "costume_hints": ["dark travel cloak, rain-soaked light armor", "dark travel cloak, rain-soaked light armor"],
+        "location_tags": ["ancient mechanical temple", "ancient mechanical temple"],
+        "audio_url": "https://example.com/narration.mp3",
+        "subtitle_timeline": [
+          { "index": 0, "text": "旁白1", "start_sec": 0.0, "end_sec": 2.4 },
+          { "index": 1, "text": "旁白2", "start_sec": 2.4, "end_sec": 4.8 }
+        ]
+      }
+    ]
+  }
+}

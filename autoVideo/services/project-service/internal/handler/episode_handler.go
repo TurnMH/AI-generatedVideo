@@ -20,13 +20,17 @@ type EpisodeHandler struct {
 	// Per-project generation lock to prevent concurrent episode generation
 	genMu      sync.Mutex
 	genRunning map[uint64]bool
+
+	episodeAutoMu      sync.Mutex
+	episodeAutoRunning map[uint64]bool
 }
 
 // NewEpisodeHandler —— 创建剧集处理器实例
 func NewEpisodeHandler(svc *service.EpisodeService) *EpisodeHandler {
 	return &EpisodeHandler{
-		svc:        svc,
-		genRunning: make(map[uint64]bool),
+		svc:                svc,
+		genRunning:         make(map[uint64]bool),
+		episodeAutoRunning: make(map[uint64]bool),
 	}
 }
 
@@ -187,6 +191,50 @@ func (h *EpisodeHandler) ExtractStoryboards(c *gin.Context) {
 
 	response.OK(c, gin.H{
 		"status": "started",
+	})
+}
+
+// AutoPrepareEpisode —— 为单集执行自动处理（润色 → 资源 → 分镜），异步执行
+// POST /api/v1/projects/:id/episodes/:eid/auto-pipeline
+func (h *EpisodeHandler) AutoPrepareEpisode(c *gin.Context) {
+	projectID, err := parseUint64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+	episodeID, err := parseUint64Param(c, "eid")
+	if err != nil {
+		response.BadRequest(c, "invalid episode id")
+		return
+	}
+
+	h.episodeAutoMu.Lock()
+	if h.episodeAutoRunning[episodeID] {
+		h.episodeAutoMu.Unlock()
+		response.Fail(c, http.StatusConflict, 409, "该分集自动处理任务正在进行中")
+		return
+	}
+	h.episodeAutoRunning[episodeID] = true
+	h.episodeAutoMu.Unlock()
+
+	release := func() {
+		h.episodeAutoMu.Lock()
+		delete(h.episodeAutoRunning, episodeID)
+		h.episodeAutoMu.Unlock()
+	}
+	if err := h.svc.StartEpisodeAutoPipeline(projectID, episodeID, release); err != nil {
+		release()
+		if strings.Contains(err.Error(), "not found") {
+			response.NotFound(c, err.Error())
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	response.OK(c, gin.H{
+		"status":     "started",
+		"episode_id": episodeID,
 	})
 }
 

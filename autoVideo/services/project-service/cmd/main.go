@@ -143,6 +143,7 @@ func main() {
 	episodeSvc.SetCharacterService(characterBaseURL, cfg.JWT.AccessSecret)
 	episodeSvc.SetScriptService(cfg.Script.BaseURL)
 	episodeSvc.SetVideoService(videoBaseURL)
+	storyboardSvc.SetVideoService(videoBaseURL)
 	scheduleStartupRecovery(logger, "interrupted episode generation", []time.Duration{0, 15 * time.Second, 45 * time.Second, 90 * time.Second}, func() (int, error) {
 		return episodeSvc.ResumeInterruptedEpisodeGeneration(20)
 	})
@@ -192,6 +193,7 @@ func main() {
 		projects.PUT("/:id/episodes/:eid", episodeHandler.UpdateEpisode)
 		projects.DELETE("/:id/episodes/:eid", episodeHandler.DeleteEpisode)
 		projects.POST("/:id/episodes/:eid/polish", episodeHandler.PolishEpisode)
+		projects.POST("/:id/episodes/:eid/auto-pipeline", episodeHandler.AutoPrepareEpisode)
 		projects.POST("/:id/episodes/:eid/extract-storyboards", episodeHandler.ExtractEpisodeStoryboards)
 		projects.POST("/:id/episodes/:eid/optimize", episodeHandler.OptimizeEpisode)
 		projects.POST("/:id/episodes/:eid/apply-optimized", episodeHandler.ApplyOptimizedText)

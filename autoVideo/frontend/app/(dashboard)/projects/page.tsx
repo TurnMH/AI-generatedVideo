@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { projectAPI } from '@/lib/api'
 import { matchesProjectMedia, PROJECT_MEDIA_META, stripProjectMediaTags } from '@/lib/project-media'
+import { resolveVideoProductionModeLabel } from '@/lib/projects/new/production-mode'
 import type { Project, ProjectStatus, ProjectProgress, StageProgress } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -338,6 +339,7 @@ export default function ProjectsPage() {
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {sorted.map((project) => {
             const icons = modelIcons(project)
+            const productionModeLabel = resolveVideoProductionModeLabel(project)
             return (
               <Card
                 key={project.id}
@@ -405,6 +407,11 @@ export default function ProjectsPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
+                  {productionModeLabel ? (
+                    <Badge variant="secondary" className="w-fit rounded-full px-2 py-0.5 text-[10px]">
+                      {productionModeLabel}
+                    </Badge>
+                  ) : null}
                   {project.description && (
                     <p className="line-clamp-2 text-xs text-surface-500">{project.description}</p>
                   )}

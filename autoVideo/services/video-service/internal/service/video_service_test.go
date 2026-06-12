@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/autovideo/video-service/internal/model"
+	"github.com/autovideo/video-service/internal/service/generators"
 )
 
 func TestMotionPromptIncludesRenderConfigHints(t *testing.T) {
@@ -36,6 +38,40 @@ func TestMotionPromptWithoutRenderConfigKeepsBasePrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "gentle motion") {
 		t.Fatalf("expected gentle prompt, got %q", prompt)
+	}
+}
+
+func TestClipConcurrencySlots(t *testing.T) {
+	svc := &VideoService{maxClips: 5, localMaxClips: 1}
+	if got := svc.clipConcurrencySlots(nil, "kling-v3"); got != 5 {
+		t.Fatalf("kling slots = %d, want 5", got)
+	}
+	if got := svc.clipConcurrencySlots(&namedTestGenerator{name: "tencent-vclm"}, "tencent-vclm"); got != 1 {
+		t.Fatalf("vclm slots = %d, want 1", got)
+	}
+}
+
+type namedTestGenerator struct {
+	name string
+}
+
+func (g *namedTestGenerator) Name() string { return g.name }
+func (g *namedTestGenerator) IsAvailable(context.Context) bool { return true }
+func (g *namedTestGenerator) SupportsNativeAudio() bool { return false }
+func (g *namedTestGenerator) ParamOptions() []generators.ModelParamOption { return nil }
+func (g *namedTestGenerator) Generate(context.Context, generators.VideoGenerateReq) (*generators.VideoClip, error) {
+	return nil, nil
+}
+
+func TestCollectFailedClips(t *testing.T) {
+	clips := []*model.VideoClip{
+		{Status: model.StatusSucceeded},
+		{Status: model.StatusFailed},
+		{Status: model.StatusFailed},
+	}
+	got := collectFailedClips(clips)
+	if len(got) != 2 {
+		t.Fatalf("failed clips = %d, want 2", len(got))
 	}
 }
 
