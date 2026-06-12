@@ -47,13 +47,20 @@ func TestHasInlineScriptAnnotations(t *testing.T) {
 
 func TestShouldSkipScriptPrepAfterAutoOptimize(t *testing.T) {
 	annotated := "开场。[字幕:夜色降临] 镜头推近。[角色:林默]"
-	if !ShouldSkipScriptPrepAfterAutoOptimize("done", "done", annotated) {
+	if !ShouldSkipScriptPrepAfterAutoOptimize("done", "done", annotated, ModeCommentaryComic) {
 		t.Fatal("expected to skip script prep when optimize output is already annotated")
 	}
-	if ShouldSkipScriptPrepAfterAutoOptimize("pending", "done", annotated) {
+	if ShouldSkipScriptPrepAfterAutoOptimize("pending", "done", annotated, ModeCommentaryComic) {
 		t.Fatal("should not skip when optimize is not done")
 	}
-	if ShouldSkipScriptPrepAfterAutoOptimize("done", "reviewing", annotated) {
+	if ShouldSkipScriptPrepAfterAutoOptimize("done", "reviewing", annotated, ModeCommentaryComic) {
 		t.Fatal("should not skip while review is still in progress")
+	}
+	visualOnly := "开场。[场景:后厨][人物:刘师傅揉面][摄影:中景]"
+	if ShouldSkipScriptPrepAfterAutoOptimize("done", "done", visualOnly, ModeCommentaryComic) {
+		t.Fatal("commentary should not skip prep when [字幕:] tags are missing")
+	}
+	if !ShouldSkipScriptPrepAfterAutoOptimize("done", "done", visualOnly, ModeScriptDrama) {
+		t.Fatal("script drama can still skip prep with generic annotations")
 	}
 }

@@ -49,11 +49,8 @@ func comicsSceneSplitPrompt(p SceneSplitParams) string {
 **拆分规则：**
 - 每次人物动作变化、场景切换、对白转换、情绪转折都应独立为一格
 - 不限制格数，根据内容自然拆分，宁多勿少
-- description 用中文描述画面内容（50-150字），包含：
-  ① 画面主体：人物姿态、表情、手势、位置
-  ② 构图类型：如特写、半身、全身、广角、俯瞰
-  ③ 背景与环境：场景细节、光线氛围、时间（日/夜）
-  ④ 道具与服装细节
+- description 用中文写“这一格观众看到什么”（40-120字），只写：人物动作、表情、关键道具、环境氛围、时间线索
+- 禁止在 description 里写：左/右画幅、前景中景后景、机位、轴线、镜头运动、空间方位套话；这些由 shot_type 承担
 - shot_type 使用漫画构图类型：face-closeup / bust / full-body / wide / establishing / insert / reaction
 - characters 列出该格中出现的角色名
 - character_states 每个角色的姿态和情绪（name/action/emotion）
@@ -95,7 +92,7 @@ func adSceneSplitPrompt(p SceneSplitParams) string {
   5. 确实需要一个极短强调镜头，但必须严格控制数量
 - 轻微的表情变化、手部动作变化、视线变化、镜头轻推拉，不足以单独拆成新分镜；如果没有新的信息点，继续留在当前分镜内
 - 广告口播项目中，分镜默认必须承载明确的 dialogue / 字幕 / 卖点信息
-- description 用中文描述画面内容（50-150字）
+- description 用中文写可见画面（40-120字）：人物在做什么、表情、环境、关键道具；不要写机位/方位/分层术语
 - shot_type 推荐景别：close-up / medium / full / wide / overhead / low-angle / tracking / handheld
 - characters / character_states / items / mood / location 按画面需要填写
 - duration 该分镜的视频时长（秒数，整数），必须严格等于当前目标单分镜时长：
@@ -131,19 +128,22 @@ func commentarySceneSplitPrompt(p SceneSplitParams) string {
 **拆分规则：**
 - 旁白转折、场景切换、人物登场/退场、剧情节点、设定块切换 → 新分镜
 - 同一旁白段若信息量超过当前单镜时长，再按句群二次拆分
-- description 用中文描述画面（50-150字）：角色姿态、漫画构图、背景、道具、情绪
+- description 用中文写这一镜的可见画面（40-120字）：角色动作、表情、场景、道具、情绪；不要写左/右/机位/分层
 - shot_type：close-up / medium / full / wide / establishing / insert / reaction
 - characters / character_states / items / mood / location 按需填写
-- duration 整数秒，默认等于目标单分镜时长；仅当旁白明显更短或更长时可微调，但同一轮尽量统一：
+- duration 整数秒，必须随旁白节奏变化：短句/反应镜 3-5 秒，标准叙述 5-8 秒，信息密集段 8-12 秒；不要全部填同一个数
 %s
 - 构图/画面约束：
 %s
 - 语速/旁白承载约束：
 %s
 - dialogue：该镜会被 TTS 念出的旁白/对白原文（保持原文，不可省略）
+- dialogue 禁止直接抄写 description 的画面描写；description 写给眼睛看，dialogue 写给配音念
+- 原文若已有 [字幕:…]，dialogue 必须优先原样保留 [字幕:] 内文本，不要改写成“某某正在做什么”的旁观镜头句
 
 **对白提取规则：**
 [字幕:…]、引号内容、冒号引用句、解说性旁白段落必须进入 dialogue。
+禁止把第三人称画面动作句（如“刘师傅正低头揉面”）当作旁白，除非它本来就出现在原文 [字幕:] 或讲解句中。
 无旁白纯转场镜尽量少用；若确需保留，duration 应较短。
 
 请严格按以下 JSON 格式返回：
@@ -166,10 +166,10 @@ func scriptDramaSceneSplitPrompt(p SceneSplitParams) string {
 
 **拆分规则：**
 - 新场景 / 新时空 → 新分镜；同场景内按动作链和对白回合递进拆分
-- description 用中文描述画面（50-150字）：人物位置、动作、表情、景别、光线、环境
+- description 用中文写可见画面（40-120字）：人物动作、表情、环境、光线氛围；景别只填 shot_type，不要写机位/方位
 - shot_type：close-up / medium / full / wide / overhead / low-angle / tracking / establishing
 - characters / character_states / items / mood / location 按需填写
-- duration 整数秒，参考目标单分镜时长，可按镜头内容在合理范围内浮动：
+- duration 整数秒，按对白长短与动作复杂度估算：无对白反应镜 2-4 秒，短对白 4-6 秒，标准对白 5-8 秒，长对白/情绪高潮 8-12 秒：
 %s
 - 构图/画面约束：
 %s
@@ -192,13 +192,19 @@ func comicsSceneSplitSystemPrompt() string {
 }
 
 func adSceneSplitSystemPrompt() string {
-	return "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。当前为广告口播模式：分镜拆分必须优先按当前目标单分镜时长判断台词/口播承载量；若同一段口播在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue；无台词或台词过短的分镜必须并回相邻分镜。相邻同场景分镜必须保持人物站位、服化道、光线方向和空间结构连续。"
+	return "你是分镜场景拆分助手，只输出JSON，不要输出其他内容。当前为广告口播模式：分镜拆分必须优先按当前目标单分镜时长判断台词/口播承载量；若同一段口播在当前时长内能完整表达，应优先保留在同一分镜中。除最后一个分镜外，默认每个分镜都必须包含可被念出或显示的 dialogue；无台词或台词过短的分镜必须并回相邻分镜。description 只写可见动作与氛围，禁止写空间方位和机位术语。"
 }
 
 func commentarySceneSplitSystemPrompt() string {
-	return "你是解说漫分镜拆分助手，只输出JSON，不要输出其他内容。当前为旁白驱动漫画风讲解模式：按旁白信息点和剧情节点拆分，宁多勿少，不要把多段旁白硬合并。dialogue 必须承载会被念出的旁白原文。同场景相邻分镜保持角色造型、站位、光线连续。"
+	return `你是解说漫分镜拆分助手，只输出JSON，不要输出其他内容。
+当前为旁白驱动漫画风讲解模式：
+- 按旁白信息点和剧情节点拆分，宁多勿少，不要把多段旁白硬合并
+- dialogue 必须承载会被 TTS 念出的旁白原文；优先逐字保留原文中的 [字幕:…] 内文本
+- description 只写画面，禁止写机位/方位套话，禁止把 description 复制进 dialogue
+- 没有可念旁白的镜头应尽量少生成；不要为了凑镜数创造第三人称画面解说
+- duration 要随旁白长短起伏，形成节奏变化`
 }
 
 func scriptDramaSceneSplitSystemPrompt() string {
-	return "你是影视剧本分镜拆分助手，只输出JSON，不要输出其他内容。当前为剧本叙事模式：按场景、动作链、对白回合和情绪转折拆分，不使用广告口播合并规则。允许合理数量的无对白镜头。相邻同场景分镜保持空间、人物站位、服化道和光线连续。"
+	return "你是影视剧本分镜拆分助手，只输出JSON，不要输出其他内容。当前为剧本叙事模式：按场景、动作链、对白回合和情绪转折拆分，不使用广告口播合并规则。允许合理数量的无对白镜头。duration 随对白与动作复杂度变化。description 只写可见内容，禁止空间方位和机位术语。"
 }

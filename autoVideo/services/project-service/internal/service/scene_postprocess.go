@@ -8,21 +8,21 @@ import (
 	"github.com/autovideo/project-service/internal/speechtext"
 )
 
-func (s *EpisodeService) postProcessScenes(scenes []llmScene, clipDuration int, profile productionmode.Profile) []llmScene {
+func (s *EpisodeService) postProcessScenes(scenes []llmScene, clipDuration int, speechPace string, profile productionmode.Profile) []llmScene {
 	if profile.ShouldPostProcessMergeScenes() {
 		return s.postProcessAdScenes(scenes, clipDuration)
 	}
 	if profile.IsCommentaryComic() {
-		return postProcessCommentaryScenes(scenes, clipDuration)
+		return postProcessCommentaryScenes(scenes, clipDuration, speechPace)
 	}
-	return postProcessNarrativeScenes(scenes, clipDuration)
+	return postProcessRhythmicScenes(scenes, clipDuration, speechPace)
 }
 
 func sanitizeStoryboardDialogue(text string) string {
 	return speechtext.SanitizeForSpeech(text)
 }
 
-func postProcessNarrativeScenes(scenes []llmScene, clipDuration int) []llmScene {
+func postProcessRhythmicScenes(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
 	if len(scenes) == 0 {
 		return scenes
 	}
@@ -30,15 +30,17 @@ func postProcessNarrativeScenes(scenes []llmScene, clipDuration int) []llmScene 
 	copy(out, scenes)
 	for i := range out {
 		out[i].Dialogue = strings.TrimSpace(speechtext.SanitizeForSpeech(out[i].Dialogue))
-		out[i].Description = strings.TrimSpace(out[i].Description)
+		out[i].Description = sanitizeUserSceneDescription(out[i].Description)
 		if out[i].Duration <= 0 {
-			out[i].Duration = normalizeAdSceneDuration(out[i].Duration, clipDuration)
+			out[i].Duration = inferSceneDurationFromDialogue(out[i].Dialogue, clipDuration, speechPace)
+		} else {
+			out[i].Duration = clampDuration(out[i].Duration, 2, 12)
 		}
 	}
 	return out
 }
 
-func postProcessCommentaryScenes(scenes []llmScene, clipDuration int) []llmScene {
+func postProcessCommentaryScenes(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
 	if len(scenes) == 0 {
 		return scenes
 	}
@@ -47,22 +49,12 @@ func postProcessCommentaryScenes(scenes []llmScene, clipDuration int) []llmScene
 
 	const minNarrationRunes = 12
 	for i := range out {
-		rawDialogue := strings.TrimSpace(out[i].Dialogue)
-		extracted := speechtext.ExtractNarrationForSpeech(rawDialogue)
-		if extracted == "" {
-			extracted = speechtext.ExtractNarrationForSpeech(out[i].Description)
-		}
-		if extracted != "" {
-			out[i].Dialogue = extracted
-		} else {
-			out[i].Dialogue = strings.TrimSpace(speechtext.SanitizeForSpeech(rawDialogue))
-		}
-		if speechtext.LooksLikeSceneDescription(out[i].Dialogue) {
-			out[i].Dialogue = ""
-		}
-		out[i].Description = strings.TrimSpace(out[i].Description)
+		out[i].Dialogue = speechtext.FinalizeCommentaryDialogue(out[i].Dialogue)
+		out[i].Description = sanitizeUserSceneDescription(out[i].Description)
 		if out[i].Duration <= 0 {
-			out[i].Duration = normalizeAdSceneDuration(out[i].Duration, clipDuration)
+			out[i].Duration = inferSceneDurationFromDialogue(out[i].Dialogue, clipDuration, speechPace)
+		} else {
+			out[i].Duration = clampDuration(out[i].Duration, 2, 12)
 		}
 	}
 
@@ -94,4 +86,33 @@ func postProcessCommentaryScenes(scenes []llmScene, clipDuration int) []llmScene
 		merged = append(merged, scene)
 	}
 	return merged
+}
+
+func alignCommentaryScenesWithSource(source string, scenes []llmScene) []llmScene {
+	if len(scenes) == 0 {
+		return scenes
+	}
+	payload := make([]speechtext.SceneDialogue, len(scenes))
+	for i := range scenes {
+		payload[i].Dialogue = scenes[i].Dialogue
+	}
+	payload = speechtext.AlignCommentaryScenesWithSource(source, payload)
+	for i := range scenes {
+		scenes[i].Dialogue = payload[i].Dialogue
+	}
+	return scenes
+}
+
+func (s *EpisodeService) postProcessAndAlignCommentaryScenes(
+	episodeContent string,
+	scenes []llmScene,
+	clipDuration int,
+	speechPace string,
+	profile productionmode.Profile,
+) []llmScene {
+	scenes = s.postProcessScenes(scenes, clipDuration, speechPace, profile)
+	if profile.IsCommentaryComic() {
+		scenes = alignCommentaryScenesWithSource(episodeContent, scenes)
+	}
+	return scenes
 }

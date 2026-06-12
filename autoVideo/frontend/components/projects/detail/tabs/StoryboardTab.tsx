@@ -120,6 +120,13 @@ import { getAssetGeneratedImages, getSelectedGeneratedImageUrl, getAssetGenerati
 import type { AssetImageVersion, AssetGenerationProgress } from '@/lib/projects/assets'
 import { getSplitModelRemark, buildSplitModelSearchText, getSplitModelAvailabilityRank, mapVideoModelToRuntimeKey, findPreferredVideoModelId } from '@/lib/projects/models'
 import { useProjectEpisodeFilter, ProjectEpisodeFilterContext } from '@/lib/projects/episode-filter'
+import { commentaryProductionModeValue, isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
+import { formatStoryboardDubbingText } from '@/lib/projects/storyboard-dubbing'
+import { canTriggerStoryboardImage, triggerStoryboardImageGeneration } from '@/lib/projects/storyboard-image'
+import {
+  resolveStoryboardClipDurationSec,
+  resolveStoryboardClipDurations,
+} from '@/lib/projects/video-clip-duration'
 import type { StoryboardStatsData, StepAssetStats, StepStoryboardStats, StepDubbingStats, StepVideoStats, WorkflowStepKey, WorkflowStepView, WorkflowStepStatus } from '@/lib/projects/workflow'
 import { buildWorkflowSteps, getDisplayedEpisodeCount, toPercent, getIssueStepIndex, WORKFLOW_STEPS } from '@/lib/projects/workflow'
 import { StatusBadge, VideoTaskStatusBadge } from '@/components/projects/detail/StatusBadge'
@@ -208,6 +215,9 @@ function ImageModelDropdownContent({
 export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboards, isExtractingStoryboards, awaitingAutoStoryboard, storyboardButtonDisabled, hideActionBar, sbGenerateTrigger, sbRegenerateTrigger, sbPauseTrigger, sbResumeTrigger, sbAuditTrigger }: { projectId: number; project: Project ; episodeId?: number; onExtractStoryboards?: () => void; isExtractingStoryboards?: boolean; awaitingAutoStoryboard?: boolean; storyboardButtonDisabled?: boolean; hideActionBar?: boolean; sbGenerateTrigger?: number; sbRegenerateTrigger?: number; sbPauseTrigger?: number; sbResumeTrigger?: number; sbAuditTrigger?: number }) {
   const { toast } = useToast()
   const isSerial = project.project_type === 'video_serial'
+  const isCommentaryProject = useMemo(() => detectCommentaryProject(project), [project])
+  const speakableDialogue = (sb: Storyboard) =>
+    formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
   const storyboardItemLabel = isSerial ? '镜头' : '分镜'
   const storyboardImageLabel = isSerial ? '首帧图片' : '分镜图片'
   const storyboardGenerateLabel = isSerial ? '首帧生成' : '分镜图片生成'
@@ -487,7 +497,9 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     setGeneratingSbVoice(true)
     try {
       if (sbVoiceScope === 'single') {
-        const text = selectedSb.dialogue?.trim() || ''
+        const text = formatStoryboardDubbingText(selectedSb, {
+          isCommentary: isCommentaryProject,
+        })
         if (!text) {
           toast({ title: '该分镜暂无台词，无法生成语音', variant: 'destructive' })
           return
@@ -501,21 +513,31 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
         toast({ title: '单帧语音任务已提交', variant: 'success' })
       } else {
         const allSbsRes = await storyboardAPI.listAll(projectId, { episode_id: selectedSb.episode_id }) as { data?: Storyboard[] }
-        const allDialogues = (allSbsRes?.data ?? [])
+        const isCommentary = isCommentaryProject
+        const eligible = (allSbsRes?.data ?? [])
           .sort((a, b) => a.sequence_number - b.sequence_number)
-          .map((sb) => sb.dialogue || '')
-          .filter(Boolean)
-        const text = allDialogues.join('\n')
-        if (!text.trim()) {
+          .filter((sb) => formatStoryboardDubbingText(sb, { isCommentary }))
+        if (eligible.length === 0) {
           toast({ title: '当前集暂无台词，无法生成语音', variant: 'destructive' })
           return
         }
-        await dubbingAPI.generate(projectId, selectedSb.episode_id, text, sbVoiceModel, {
-          voice_rate: sbVoiceRate,
-          voice_pitch: sbVoicePitch,
-          voice_volume: sbVoiceVolume,
-        })
-        toast({ title: '全集语音任务已提交', variant: 'success' })
+        let submitted = 0
+        for (const sb of eligible) {
+          const text = formatStoryboardDubbingText(sb, { isCommentary })
+          if (!sb.episode_id || !text) continue
+          try {
+            await dubbingAPI.generateForStoryboard(projectId, sb.id, sb.episode_id, text, sbVoiceModel, {
+              voice_rate: sbVoiceRate,
+              voice_pitch: sbVoicePitch,
+              voice_volume: sbVoiceVolume,
+            })
+            submitted++
+          } catch {
+            // skip conflicts/errors per storyboard
+          }
+        }
+        mutateStoryboardTasks()
+        toast({ title: `已提交 ${submitted} 个分镜语音任务`, variant: submitted > 0 ? 'success' : 'destructive' })
       }
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status
@@ -692,8 +714,18 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
     // Prefer LLM-refined prompt_used; fall back to raw scene_description for older storyboards.
     const sceneDescriptions = sortedSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
-    const dialogues = sortedSbs.map((sb) => sb.dialogue || '')
-    const durations = sortedSbs.map((sb) => sb.duration || 0)
+    const modelName = options?.modelName || 'wan'
+    const defaultClipDuration = (() => {
+      const durSel = videoParamSelections[modelName]?.duration
+      if (durSel) return parseFloat(durSel)
+      return project.storyboard_config?.duration || 5
+    })()
+    const dialogues = sortedSbs.map((sb) => speakableDialogue(sb))
+    const durations = resolveStoryboardClipDurations(sortedSbs, {
+      modelKey: modelName,
+      defaultDuration: defaultClipDuration,
+      dubbingTasksByStoryboardId: storyboardTaskMap,
+    })
     const cameraMovements = sortedSbs.map((sb) => sb.camera_movement || '')
     const moods = sortedSbs.map((sb) => sb.mood || '')
     const sceneCharacters = sortedSbs.map((sb) => sb.characters || [])
@@ -709,7 +741,6 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
 
     setGeneratingVideoEps(prev => new Set(prev).add(episodeId))
     try {
-      const modelName = options?.modelName || 'wan'
       await videoAPI.generate(projectId, {
         episode_id: episodeId,
         image_urls: imageUrls,
@@ -725,11 +756,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
         motion_mode: selectedEpisodeVideoMotionMode,
         video_mode: project.video_mode,
         scene_description: sceneDescription || undefined,
-        clip_duration_sec: (() => {
-          const durSel = videoParamSelections[modelName]?.duration
-          if (durSel) return parseFloat(durSel)
-          return project.storyboard_config?.duration || 5
-        })(),
+        clip_duration_sec: defaultClipDuration,
         serial_scene: isSerialScene || undefined,
         scene_group_keys: isSerialScene && sceneGroupKeys.some(Boolean) ? sceneGroupKeys : undefined,
         render_config: {
@@ -738,6 +765,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
           clarity: options?.clarity || selectedEpisodeVideoClarity,
           transition: selectedEpisodeTransition === 'none' ? undefined : selectedEpisodeTransition,
           transition_duration: selectedEpisodeTransition !== 'none' ? parseFloat(selectedEpisodeTransitionDuration) : undefined,
+          production_mode: commentaryProductionModeValue(project),
           ...(videoParamSelections[modelName] ?? {}),
         },
       })
@@ -810,8 +838,14 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
       }
       byEpisode.get(epId)!.push(sb.image_url)
       byEpisodeDesc.get(epId)!.push(sb.prompt_used || sb.scene_description || '')
-      byEpisodeDialogue.get(epId)!.push(sb.dialogue || '')
-      byEpisodeDuration.get(epId)!.push(sb.duration || 0)
+      byEpisodeDialogue.get(epId)!.push(speakableDialogue(sb))
+      byEpisodeDuration.get(epId)!.push(
+        resolveStoryboardClipDurationSec(sb, {
+          modelKey: selectedEpisodeVideoModel || 'wan',
+          defaultDuration: project.storyboard_config?.duration || 5,
+          dubbingTask: storyboardTaskMap.get(sb.id),
+        }),
+      )
       byEpisodeCamera.get(epId)!.push(sb.camera_movement || '')
       byEpisodeMood.get(epId)!.push(sb.mood || '')
       byEpisodeChars.get(epId)!.push(sb.characters || [])
@@ -857,17 +891,31 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
     }
   }
 
-  const handleGenerate = async (id: number) => {
+  const handleGenerateOne = async (sb: Storyboard, modelName?: string) => {
     if (!storyboardAssetsReady) {
       toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
       return
     }
+    if (!canTriggerStoryboardImage(sb)) {
+      toast({ title: '当前分镜正在生成中', variant: 'destructive' })
+      return
+    }
+    const effectiveModel = modelName || sbProjectImageModelKey || undefined
     try {
-      await storyboardAPI.generate(projectId, id, sbProjectImageModelKey)
-      toast({ title: `${storyboardGenerateLabel}已启动`, variant: 'success' })
+      await triggerStoryboardImageGeneration(projectId, sb, effectiveModel)
+      const label = effectiveModel
+        ? SB_MODEL_OPTIONS.find((m) => m.key === effectiveModel)?.label || effectiveModel
+        : (SB_MODEL_OPTIONS.find((m) => m.key === sbProjectImageModelKey)?.label || '项目默认模型')
+      toast({
+        title: sb.status === 'failed' ? `使用 ${label} 重试已启动` : `${storyboardGenerateLabel}已启动`,
+        description: label ? `模型：${label}` : undefined,
+        variant: 'success',
+      })
       mutateSb()
-    } catch {
-      toast({ title: '生成失败', variant: 'destructive' })
+      mutateStats()
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : undefined
+      toast({ title: '生成失败', description: message, variant: 'destructive' })
     }
   }
 
@@ -1105,19 +1153,12 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
   }
 
   const handleRetry = async (id: number, modelName?: string) => {
-    if (!storyboardAssetsReady) {
-      toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
+    const sb = storyboards.find((item) => item.id === id)
+    if (!sb) {
+      toast({ title: '分镜不存在或已刷新', variant: 'destructive' })
       return
     }
-    try {
-      await storyboardAPI.retry(projectId, id, modelName)
-      const label = modelName ? SB_MODEL_OPTIONS.find(m => m.key === modelName)?.label || modelName : '默认'
-      toast({ title: `使用 ${label} 重新生成已启动`, variant: 'success' })
-      mutateSb()
-      mutateStats()
-    } catch {
-      toast({ title: '重试失败', variant: 'destructive' })
-    }
+    await handleGenerateOne(sb, modelName)
   }
 
   const handleRetryAllFailed = async (modelName?: string, modelNames?: string[]) => {
@@ -2004,28 +2045,29 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                 </div>
               )}
               <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                {(sb.status === 'failed' || sb.status === 'pending' || sb.status === 'paused') ? (
+                {canTriggerStoryboardImage(sb) ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button size="sm" variant="ghost" className={`h-7 px-2 text-xs ${sb.status === 'failed' ? 'text-red-500 hover:text-red-700' : sb.status === 'paused' ? 'text-yellow-700 hover:text-yellow-800' : ''}`} title="选择模型生成">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className={`h-7 px-2 text-xs ${sb.status === 'failed' ? 'text-red-500 hover:text-red-700' : sb.status === 'paused' ? 'text-yellow-700 hover:text-yellow-800' : ''}`}
+                        title="选择模型生成"
+                      >
                         {sb.status === 'failed' ? <RefreshCw className="mr-1 h-3 w-3" /> : sb.status === 'paused' ? <Play className="mr-1 h-3 w-3" /> : <Sparkles className="mr-1 h-3 w-3" />}
-                        {sb.status === 'failed' ? '重试' : sb.status === 'paused' ? '继续' : '生成'}
+                        {sb.status === 'failed' ? '重试' : sb.status === 'paused' ? '继续' : sb.status === 'completed' ? '重生成' : '生成'}
                       </Button>
                     </DropdownMenuTrigger>
                     <ImageModelDropdownContent
                       options={SB_MODEL_OPTIONS}
                       availability={imageModelAvailability}
-                      onSelect={(key) => handleRetry(sb.id, key)}
+                      onSelect={(key) => handleGenerateOne(sb, key)}
                       align="start"
                       showTags
                       stopPropagation
                     />
                   </DropdownMenu>
-                ) : (
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => handleGenerate(sb.id)} title="生成">
-                    <Sparkles className="h-3.5 w-3.5" />
-                  </Button>
-                )}
+                ) : null}
                 <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setSelectedSb(sb); setVersionIdx(0) }} title="查看">
                   <Eye className="h-3.5 w-3.5" />
                 </Button>
@@ -2369,14 +2411,14 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                           className="w-full border-violet-300 bg-violet-600 text-white hover:bg-violet-700"
                           disabled={generatingSbVoice || (sbVoiceScope === 'single' && (storyboardTaskMap.get(selectedSb.id)?.status === 'pending' || storyboardTaskMap.get(selectedSb.id)?.status === 'processing'))}
                           onClick={handleSbGenerateVoice}
-                          title={sbVoiceScope === 'single' ? '使用本帧台词生成语音' : '聚合本集全部分镜台词生成语音'}
+                          title={sbVoiceScope === 'single' ? '使用本帧台词生成语音' : '为本集每个分镜分别生成语音'}
                         >
                           {generatingSbVoice ? (
                             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                           ) : (
                             <Mic className="mr-1.5 h-3.5 w-3.5" />
                           )}
-                          {sbVoiceScope === 'single' ? '生成本帧语音' : '生成全集语音'}
+                          {sbVoiceScope === 'single' ? '生成本帧语音' : '生成全部镜语音'}
                         </Button>
                         {/* Per-storyboard task status & audio player */}
                         {sbVoiceScope === 'single' && (() => {
@@ -2409,17 +2451,25 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                     )}
                   </div>
 
-                  {(selectedSb.status === 'failed' || selectedSb.status === 'pending' || selectedSb.status === 'paused') && (
-                    <div className={`mt-4 rounded-xl border p-4 shadow-sm ${selectedSb.status === 'failed' ? 'border-red-200 bg-red-50' : selectedSb.status === 'paused' ? 'border-yellow-200 bg-yellow-50' : 'border-amber-200 bg-amber-50'}`}>
-                      <p className={`mb-1 text-sm font-medium ${selectedSb.status === 'failed' ? 'text-red-700' : selectedSb.status === 'paused' ? 'text-yellow-800' : 'text-amber-700'}`}>
-                        {selectedSb.status === 'failed' ? `${storyboardGenerateLabel}失败，可直接换模型重试` : selectedSb.status === 'paused' ? `${storyboardGenerateLabel}已暂停，可直接继续` : `${storyboardImageLabel}待生成，可直接选择模型启动`}
+                  {canTriggerStoryboardImage(selectedSb) && (
+                    <div className={`mt-4 rounded-xl border p-4 shadow-sm ${selectedSb.status === 'failed' ? 'border-red-200 bg-red-50' : selectedSb.status === 'paused' ? 'border-yellow-200 bg-yellow-50' : selectedSb.status === 'completed' ? 'border-primary-200 bg-primary-50/40' : 'border-amber-200 bg-amber-50'}`}>
+                      <p className={`mb-1 text-sm font-medium ${selectedSb.status === 'failed' ? 'text-red-700' : selectedSb.status === 'paused' ? 'text-yellow-800' : selectedSb.status === 'completed' ? 'text-primary-800' : 'text-amber-700'}`}>
+                        {selectedSb.status === 'failed'
+                          ? `${storyboardGenerateLabel}失败，可直接换模型重试`
+                          : selectedSb.status === 'paused'
+                            ? `${storyboardGenerateLabel}已暂停，可直接继续`
+                            : selectedSb.status === 'completed'
+                              ? `可单独重新生成当前${storyboardImageLabel}`
+                              : `${storyboardImageLabel}待生成，可直接选择模型启动`}
                       </p>
-                      <p className={`mb-3 text-[11px] ${selectedSb.status === 'failed' ? 'text-red-600' : selectedSb.status === 'paused' ? 'text-yellow-800/80' : 'text-amber-700/80'}`}>
+                      <p className={`mb-3 text-[11px] ${selectedSb.status === 'failed' ? 'text-red-600' : selectedSb.status === 'paused' ? 'text-yellow-800/80' : selectedSb.status === 'completed' ? 'text-primary-700/80' : 'text-amber-700/80'}`}>
                         {selectedSb.status === 'failed'
                           ? `原因：${formatSbErrorMsg(selectedSb.error_msg || '')}`
                           : selectedSb.status === 'paused'
                             ? `继续后，会从当前${storyboardItemLabel}队列重新拉起${storyboardImageLabel}生成。`
-                            : `发送对话修改后，可在这里继续选择模型生成对应${storyboardImageLabel}。`}
+                            : selectedSb.status === 'completed'
+                              ? `只会重新生成这一条${storyboardItemLabel}的图片，不会影响其他分镜。`
+                              : `发送对话修改后，可在这里继续选择模型生成对应${storyboardImageLabel}。`}
                       </p>
                       <div className="max-h-[45vh] overflow-y-auto space-y-3 pr-0.5">
                         {(([
@@ -2444,7 +2494,7 @@ export function StoryboardTab({ projectId, project, episodeId, onExtractStoryboa
                                     title={broken ? `已停用：${m.failureReason}` : undefined}
                                     disabled={broken}
                                     className={`flex items-start gap-2 rounded-lg border p-2.5 text-left transition-colors ${broken ? 'cursor-not-allowed border-red-200 bg-red-50 opacity-60' : avail === false ? 'border-surface-200 bg-surface-50 opacity-50 cursor-not-allowed' : 'border-surface-200 bg-white hover:border-primary-300 hover:bg-primary-50'}`}
-                                    onClick={() => broken ? undefined : handleRetry(selectedSb.id, m.key)}
+                                    onClick={() => broken ? undefined : handleGenerateOne(selectedSb, m.key)}
                                   >
                                     <div className="mt-0.5 flex flex-col items-center gap-0.5">
                                       <span className="text-base leading-none">{m.icon}</span>

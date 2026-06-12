@@ -1,7 +1,7 @@
 import type { Project } from '@/types'
 
 export const AUTO_EPISODE_SPLIT_HINT =
-  '上传剧本后，系统会按章节标记或剧情结构自动分集，无需手动填写集数。'
+  '上传剧本后，系统会优先识别章节标题（第X章/回/节/集等）分集；若无章节标记，再按剧情结构或字数估算。'
 
 type EpisodeSplitProject = Pick<Project, 'target_episodes' | 'project_type'> | null | undefined
 

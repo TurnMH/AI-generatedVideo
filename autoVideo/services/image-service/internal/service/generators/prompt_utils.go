@@ -162,6 +162,9 @@ func buildImagePromptSpec(req GenerateReq) imagePromptSpec {
 // character turnaround sheet. It honours the explicit req.IsCharacterSheet
 // flag and falls back to substring detection on the reference URL set.
 func isCharacterSheetRequest(req GenerateReq) bool {
+	if NormalizeImageTaskType(req.TaskType, req.Prompt) == "storyboard" {
+		return false
+	}
 	if req.IsCharacterSheet {
 		return true
 	}
@@ -396,7 +399,7 @@ func taskNegativeHints(taskType string) (string, string) {
 	case "poster":
 		return "Avoid overcrowded backgrounds, weak focal hierarchy, unreadable title area, and fragmented composition.", "避免背景过满、主次不清、标题区不可用以及构图碎裂。"
 	case "storyboard":
-		return "Avoid poster-like posing, glamour-shot framing, unclear action, and unreadable story blocking.", "避免海报摆拍感、写真式取景、动作含义不明以及叙事调度混乱。"
+		return "Avoid poster-like posing, glamour-shot framing, unclear action, unreadable story blocking, character reference sheets, turnaround layouts, multi-panel collages, and split-screen compositions.", "避免海报摆拍感、写真式取景、动作含义不明、叙事调度混乱、角色设定图、四视图拼版、多格拼贴和分屏构图。"
 	case "scene-concept":
 		return "Avoid oversized foreground characters, flattened depth, random props, and environment scale confusion.", "避免前景人物过大、空间扁平、道具堆砌和环境尺度混乱。"
 	default:

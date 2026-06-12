@@ -7,8 +7,8 @@ func TestBuildDubbingChunksAutoAssignsDistinctVoices(t *testing.T) {
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks, got %d", len(chunks))
 	}
-	if chunks[0].VoiceKey != "male3" {
-		t.Fatalf("expected narrator to use male3, got %q", chunks[0].VoiceKey)
+	if chunks[0].VoiceKey != "narrator-male" {
+		t.Fatalf("expected narrator to use narrator-male, got %q", chunks[0].VoiceKey)
 	}
 	if chunks[1].VoiceKey != "female1" {
 		t.Fatalf("expected female lead to use female1, got %q", chunks[1].VoiceKey)
@@ -23,8 +23,19 @@ func TestBuildDubbingChunksAutoFallsBackToNarrationWithoutLabels(t *testing.T) {
 	if len(chunks) != 1 {
 		t.Fatalf("expected 1 chunk, got %d", len(chunks))
 	}
-	if chunks[0].VoiceKey != "male3" {
+	if chunks[0].VoiceKey != "narrator-male" {
 		t.Fatalf("expected unlabeled narration to use narrator voice, got %q", chunks[0].VoiceKey)
+	}
+}
+
+func TestEnsureSpeakerLabelsForStoryboardDubbing(t *testing.T) {
+	got := ensureSpeakerLabelsForStoryboardDubbing("我在德聚楼掌勺三十年")
+	if got != "旁白：我在德聚楼掌勺三十年" {
+		t.Fatalf("expected narrator prefix, got %q", got)
+	}
+	labeled := ensureSpeakerLabelsForStoryboardDubbing("刘师傅：你好")
+	if labeled != "刘师傅：你好" {
+		t.Fatalf("expected labeled dialogue unchanged, got %q", labeled)
 	}
 }
 

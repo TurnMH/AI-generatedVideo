@@ -4,7 +4,7 @@ import * as React from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
 export type VoicePickerOption = {
@@ -104,6 +104,7 @@ export function VoicePickerDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="sr-only">搜索并选择配音音色，可试听预览。</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Input
@@ -125,13 +126,15 @@ export function VoicePickerDialog({
                   <div className="overflow-hidden rounded-md border border-surface-200 bg-white">
                     <div className="divide-y divide-surface-100">
                       {groupOptions.map((option) => (
-                        <button
+                        <div
                           key={option.value || '__empty__'}
-                          type="button"
-                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-surface-50 ${selectedValue === option.value ? 'bg-primary-50' : 'bg-white'}`}
-                          onClick={() => onSelect(option.value)}
+                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 ${selectedValue === option.value ? 'bg-primary-50' : 'bg-white'}`}
                         >
-                          <div className="min-w-0 flex-1 space-y-1">
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 space-y-1 text-left hover:opacity-90"
+                            onClick={() => onSelect(option.value)}
+                          >
                             <div className="flex flex-wrap items-center gap-1.5">
                               <div className="truncate text-sm text-surface-800">{option.label}</div>
                               {option.recommended ? <Badge className="h-5 px-1.5 text-[10px]">推荐</Badge> : null}
@@ -146,22 +149,21 @@ export function VoicePickerDialog({
                               {option.provider ? <span>{option.provider}</span> : null}
                               {option.voiceName ? <span>{translateVoiceMeta(option.voiceName)}</span> : null}
                             </div>
-                          </div>
+                          </button>
                           {onPreview && option.value && option.value !== 'auto' ? (
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 text-[10px]"
-                              onClick={async (e) => {
-                                e.stopPropagation()
+                              className="h-7 shrink-0 px-2 text-[10px]"
+                              onClick={async () => {
                                 await onPreview(option.value)
                               }}
                             >
                               试听
                             </Button>
                           ) : null}
-                        </button>
+                        </div>
                       ))}
                     </div>
                   </div>

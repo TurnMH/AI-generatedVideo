@@ -984,8 +984,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// dubbing attachment by default. Users can opt-in by setting
 	// render_config.attach_dubbing=true to mix TTS on top of native audio.
 	attachDubbing := renderConfigBool(task.RenderConfig, "attach_dubbing")
+	generateNative := renderConfigBool(task.RenderConfig, "generate_audio")
 	nativeAudio := gen.SupportsNativeAudio()
-	allowDubbingAttach := !nativeAudio || attachDubbing
+	allowDubbingAttach := shouldAttachExternalDubbing(nativeAudio, attachDubbing, generateNative, composedDialogues)
 
 	// Per-clip audio synthesis path — produce TTS per clip, mux each with its
 	// storyboard video, then concat. This eliminates the dialogue↔frame drift
@@ -1018,10 +1019,11 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		subtitleText = joinDialogues(composedDialogues)
 	}
 	subtitleURL := "" // VTT subtitle URL from dubbing task
-	if nativeAudio && !attachDubbing {
-		s.logger.Info("skipping dubbing attachment: model supports native audio (set render_config.attach_dubbing=true to override)",
+	if !allowDubbingAttach {
+		s.logger.Info("skipping dubbing attachment: native-audio model with generate_audio enabled and no dialogues to dub",
 			zap.Int64("task_id", taskID),
-			zap.String("model", gen.Name()))
+			zap.String("model", gen.Name()),
+			zap.Bool("generate_audio", generateNative))
 	} else if perClipAudioUsed {
 		s.logger.Info("skipping dubbing attachment: per-clip audio already muxed",
 			zap.Int64("task_id", taskID))
@@ -1187,17 +1189,31 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageConcating)
 	transitionPlan2, transitionDurations2 := resolveTransitionPlan(task.RenderConfig, len(clipURLs), composedSceneGroupKeys, composedSceneDescs, composedCameras, composedMoods)
-	mergedPath, err := s.ffmpeg.ConcatClipsWithTransitionPlan(ctx, clipURLs, task.VideoMode, transitionPlan2, transitionDurations2)
-	if err != nil {
-		_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
-		s.markFailed(ctx, taskID, err.Error())
-		return err
+
+	composeGen, _, _ := s.resolveGenerator(ctx, task.ModelName)
+	composeAttachDubbing := renderConfigBool(task.RenderConfig, "attach_dubbing")
+	composeGenerateNative := renderConfigBool(task.RenderConfig, "generate_audio")
+	composeNativeAudio := composeGen != nil && composeGen.SupportsNativeAudio()
+	composeAllowDubbing := shouldAttachExternalDubbing(composeNativeAudio, composeAttachDubbing, composeGenerateNative, composedDialogues)
+
+	mergedPath := ""
+	perClipAudioUsed := false
+	if s.dubbing != nil && composeAllowDubbing && hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) {
+		mergedPath, perClipAudioUsed = s.tryPerClipAudioCompose(
+			ctx, task, clipURLs, composedDialogues, transitionPlan2, transitionDurations2,
+		)
+	}
+	if !perClipAudioUsed {
+		var err error
+		mergedPath, err = s.ffmpeg.ConcatClipsWithTransitionPlan(ctx, clipURLs, task.VideoMode, transitionPlan2, transitionDurations2)
+		if err != nil {
+			_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
+			s.markFailed(ctx, taskID, err.Error())
+			return err
+		}
 	}
 
 	finalPath := mergedPath
-
-	// Resolve generator to check for native audio support.
-	composeGen, _, _ := s.resolveGenerator(ctx, task.ModelName)
 
 	// Attach dubbing audio — skip when the video model already embeds native audio.
 	audioURL := task.AudioURL
@@ -1206,18 +1222,18 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	if subtitleText == "" {
 		subtitleText = joinDialogues(composedDialogues)
 	}
-	// Manual override: attach_dubbing=true lets users mix external dubbing
-	// even when the video model already embeds native audio.
-	composeAttachDubbing := renderConfigBool(task.RenderConfig, "attach_dubbing")
-	composeNativeAudio := composeGen != nil && composeGen.SupportsNativeAudio()
-
 	subtitleURL2 := ""
 	var whisperSegments []whisperClient.Segment
 	var whisperWords []whisperClient.Word
-	if composeNativeAudio && !composeAttachDubbing {
-		s.logger.Info("compose: skipping dubbing attachment: model supports native audio (set render_config.attach_dubbing=true to override)",
+	if !composeAllowDubbing {
+		modelLabel := task.ModelName
+		if composeGen != nil {
+			modelLabel = composeGen.Name()
+		}
+		s.logger.Info("compose: skipping dubbing attachment: native-audio model with generate_audio enabled and no dialogues to dub",
 			zap.Int64("task_id", taskID),
-			zap.String("model", composeGen.Name()))
+			zap.String("model", modelLabel),
+			zap.Bool("generate_audio", composeGenerateNative))
 		if s.whisperURL != "" {
 			transcriptSourceURL := firstNonEmpty(
 				renderConfigString(task.RenderConfig, "original_result_url"),
@@ -1237,6 +1253,14 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 				}
 			}
 		}
+	} else if perClipAudioUsed {
+		s.logger.Info("compose: skipping dubbing attachment: per-clip audio already muxed",
+			zap.Int64("task_id", taskID))
+		if subtitleText == "" {
+			if _, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubSub != "" {
+				subtitleURL2 = dubSub
+			}
+		}
 	} else {
 		if audioURL == "" {
 			if dubAudio, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubAudio != "" {
@@ -1252,11 +1276,12 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 
 		if audioURL != "" {
 			_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageAudio)
-			finalPath, err = s.ffmpeg.AddAudio(ctx, finalPath, audioURL)
-			if err != nil {
+			var attachErr error
+			finalPath, attachErr = s.ffmpeg.AddAudio(ctx, finalPath, audioURL)
+			if attachErr != nil {
 				_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageNone)
-				s.markFailed(ctx, taskID, err.Error())
-				return fmt.Errorf("attach audio: %w", err)
+				s.markFailed(ctx, taskID, attachErr.Error())
+				return fmt.Errorf("attach audio: %w", attachErr)
 			}
 		}
 	}
@@ -3118,15 +3143,16 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 	if !ok {
 		return result
 	}
+	commentary := isCommentaryProductionMode(renderConfigString(renderConfig, "production_mode"))
 	switch v := raw.(type) {
 	case []string:
 		for i := 0; i < n && i < len(v); i++ {
-			result[i] = strings.TrimSpace(cleanScriptForSpeech(v[i]))
+			result[i] = cleanPerClipDialogueForMode(v[i], commentary)
 		}
 	case []interface{}:
 		for i := 0; i < n && i < len(v); i++ {
 			if s, ok := v[i].(string); ok {
-				result[i] = strings.TrimSpace(cleanScriptForSpeech(s))
+				result[i] = cleanPerClipDialogueForMode(s, commentary)
 			}
 		}
 	}
@@ -3137,7 +3163,7 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 func joinDialogues(dialogues []string) string {
 	var parts []string
 	for _, d := range dialogues {
-		cleaned := strings.TrimSpace(cleanScriptForSpeech(d))
+		cleaned := cleanPerClipDialogue(d)
 		if cleaned != "" {
 			parts = append(parts, cleaned)
 		}
@@ -3464,7 +3490,13 @@ func resolveTransitionPlan(renderConfig model.RenderConfig, clipCount int, scene
 		durations := make([]float64, cutCount)
 		for i := 0; i < cutCount; i++ {
 			transitions[i] = transition
-			durations[i] = fallbackDur
+			leftScene := stringSliceValue(sceneGroupKeys, i)
+			rightScene := stringSliceValue(sceneGroupKeys, i+1)
+			if leftScene != "" && strings.EqualFold(leftScene, rightScene) {
+				durations[i] = maxFloat(fallbackDur*1.25, 0.65)
+			} else {
+				durations[i] = fallbackDur
+			}
 		}
 		return transitions, durations
 	}
@@ -3517,6 +3549,10 @@ func inferSemanticTransition(cutIdx int, sceneGroupKeys, perClipDescs, perClipCa
 	rightMood := stringSliceValue(perClipMoods, cutIdx+1)
 	combined := strings.ToLower(strings.Join([]string{leftDesc, rightDesc, leftCamera, rightCamera, leftMood, rightMood}, " "))
 	sameScene := leftScene != "" && strings.EqualFold(leftScene, rightScene)
+
+	if sameScene {
+		return "dissolve", maxFloat(0.55, fallbackDur*1.15)
+	}
 
 	if leftScene != "" || rightScene != "" {
 		if !sameScene {

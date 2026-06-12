@@ -87,6 +87,28 @@ func (f *FFmpegService) MuxClipAudioNormalized(
 		return outPath, nil
 	}
 
+	// Prefer mild atempo sync when drift is small — smoother than freeze-frame / silence pad.
+	drift := audioVideoDriftRatio(videoDur, audioDur)
+	if drift > 0.01 && drift <= audioSyncAtempoMaxDrift {
+		atempoRatio := audioDur / videoDur
+		filter := fmt.Sprintf("[0:v]%s[v];[1:a]%s[a]",
+			scaleFilter, buildAtempoChain(atempoRatio))
+		args := []string{
+			"-i", rawPath, "-i", audioLocalPath,
+			"-filter_complex", filter,
+			"-map", "[v]", "-map", "[a]",
+			"-c:v", "libx264", "-preset", "fast", "-crf", "20",
+			"-c:a", "aac", "-ar", "44100", "-ac", "2",
+			"-t", formatFFmpegDuration(videoDur),
+			"-pix_fmt", "yuv420p", "-movflags", "+faststart",
+			outPath,
+		}
+		if err := f.RunFFmpeg(ctx, args...); err != nil {
+			return "", fmt.Errorf("mux clip %d (atempo sync): %w", idx, err)
+		}
+		return outPath, nil
+	}
+
 	// Case A — audio is longer: pad video tail by cloning last frame so no dialogue is cut.
 	if videoDur+0.05 < audioDur {
 		padDur := audioDur - videoDur

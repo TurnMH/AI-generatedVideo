@@ -125,14 +125,14 @@ func TestResolveTransitionPlanUsesSceneSemantics(t *testing.T) {
 	if len(transitions) != 2 || len(durations) != 2 {
 		t.Fatalf("unexpected transition plan sizes: %v %v", transitions, durations)
 	}
-	if transitions[0] != "wipeleft" {
-		t.Fatalf("first cut = %q, want wipeleft", transitions[0])
+	if transitions[0] != "dissolve" {
+		t.Fatalf("first cut = %q, want dissolve for same scene group", transitions[0])
 	}
 	if transitions[1] != "fade" {
 		t.Fatalf("second cut = %q, want fade", transitions[1])
 	}
-	if durations[0] != 0.22 {
-		t.Fatalf("first duration = %v, want 0.22", durations[0])
+	if durations[0] < 0.55 {
+		t.Fatalf("first duration = %v, want >= 0.55 for same-scene dissolve", durations[0])
 	}
 	if durations[1] < 0.32 {
 		t.Fatalf("second duration = %v, want >= 0.32", durations[1])

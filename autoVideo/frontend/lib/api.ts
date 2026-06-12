@@ -896,8 +896,19 @@ export const dubbingAPI = {
       voice_pitch: options?.voice_pitch || '+0Hz',
       voice_volume: options?.voice_volume || '+0%',
     }),
-  listStoryboardTasks: (projectId: number) =>
-    api.get<{ code: number; data: DubbingTask[] }>(`/api/v1/projects/${projectId}/dubbing/storyboard-tasks`),
+  listStoryboardTasks: async (projectId: number) => {
+    const res = await api.get<{ code: number; data: unknown }>(`/api/v1/projects/${projectId}/dubbing/storyboard-tasks`)
+    const items = Array.isArray(res.data) ? res.data : []
+    return items
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const record = item as { task?: DubbingTask }
+        if (record.task?.id) return record.task
+        const asTask = item as DubbingTask
+        return asTask.id && asTask.storyboard_id != null ? asTask : null
+      })
+      .filter(Boolean) as DubbingTask[]
+  },
 }
 
 export const scriptLibraryAPI = {

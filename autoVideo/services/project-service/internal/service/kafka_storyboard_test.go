@@ -123,7 +123,7 @@ func TestBuildImagePromptIncludesConstraintLocks(t *testing.T) {
 		"PRE-GEN CONSTRAINT PRIORITY",
 		"POSE AND GESTURE LOCK",
 		"ACTION STAGING",
-		"SPATIAL BLOCKING LOCK",
+		"SPATIAL NOTE",
 		"WARDROBE AND GROOMING LOCK",
 	} {
 		if !strings.Contains(prompt, want) {

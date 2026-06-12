@@ -17,7 +17,7 @@ func HasInlineScriptAnnotations(text string) bool {
 }
 
 // ShouldSkipScriptPrepAfterAutoOptimize skips the extra storyboard-prep LLM when auto-optimize already produced annotated text.
-func ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, content string) bool {
+func ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, content string, mode Mode) bool {
 	if strings.TrimSpace(optimizeStatus) != "done" {
 		return false
 	}
@@ -25,7 +25,15 @@ func ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, content
 	if reviewStatus != "" && reviewStatus != "done" && reviewStatus != "failed" {
 		return false
 	}
+	if mode == ModeCommentaryComic {
+		// Commentary requires speakable [字幕:] tags, not only visual annotations.
+		return countSubtitleTags(content) >= 1 && HasInlineScriptAnnotations(content)
+	}
 	return HasInlineScriptAnnotations(content)
+}
+
+func countSubtitleTags(text string) int {
+	return len(subtitleTagPattern.FindAllString(text, -1))
 }
 
 // EpisodePolishSystemPrompt returns the system prompt for per-episode polish before optimization.

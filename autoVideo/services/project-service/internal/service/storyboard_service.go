@@ -175,7 +175,7 @@ func (s *StoryboardService) AuditSceneContinuity(ctx context.Context, projectID 
 		}
 		applied := false
 		if strings.TrimSpace(p.SceneDescription) != "" {
-			sb.SceneDescription = p.SceneDescription
+			sb.SceneDescription = sanitizeUserSceneDescription(p.SceneDescription)
 			sb.PromptUsed = "" // clear so the next generation re-translates
 			applied = true
 		}
@@ -454,13 +454,12 @@ func (s *StoryboardService) markStoryboardPaused(sb *model.Storyboard) error {
 	return s.repo.Update(sb)
 }
 
-func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, versionID uint64, modelName string) error {
+func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, versionID uint64, modelName string, forceImage bool) error {
 	if s.isProjectGenerationPaused(sb.ProjectID) {
 		return s.markStoryboardPaused(sb)
 	}
-	// 串行模式：非首帧分镜无需 AI 生成图片，直接标记为 completed。
-	// 视频生成时会以前一 clip 的末帧作为其首帧，image_url 留空即可。
-	if sb.SceneGroupKey != "" && !sb.IsSceneFirstClip {
+	// 串行模式：非首帧分镜默认跳过出图；用户显式点「单个生成」时 forceImage=true 仍会出图。
+	if !forceImage && sb.SceneGroupKey != "" && !sb.IsSceneFirstClip {
 		sb.Status = "completed"
 		sb.UpdatedAt = time.Now()
 		if s.logger != nil {
@@ -490,7 +489,15 @@ func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, ve
 		return err
 	}
 
-	if s.kafkaProducer != nil {
+	if s.kafkaProducer == nil {
+		sb.Status = "failed"
+		sb.ErrorMsg = "storyboard image pipeline unavailable (kafka producer not configured)"
+		sb.UpdatedAt = time.Now()
+		_ = s.repo.Update(sb)
+		return fmt.Errorf("storyboard image pipeline unavailable")
+	}
+
+	{
 		// If PromptUsed is empty (e.g. created before refinement or description was edited),
 		// fall back to SceneDescription so image generator always has meaningful input.
 		promptUsed := sb.PromptUsed
@@ -772,7 +779,7 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 
 	if v, ok := updates["scene_description"]; ok {
 		if str, ok := v.(string); ok {
-			sb.SceneDescription = str
+			sb.SceneDescription = sanitizeUserSceneDescription(str)
 		}
 	}
 	if v, ok := updates["characters"]; ok {
@@ -906,7 +913,7 @@ func (s *StoryboardService) Generate(id uint64, modelName string) (*model.Storyb
 	}
 
 	sb.CurrentVersion = newVersionNum
-	if err := s.publishStoryboardGeneration(sb, ver.ID, modelName); err != nil {
+	if err := s.publishStoryboardGeneration(sb, ver.ID, modelName, true); err != nil {
 		return nil, err
 	}
 
@@ -926,7 +933,7 @@ func (s *StoryboardService) Retry(id uint64, modelName string) (*model.Storyboar
 	if s.isProjectGenerationPaused(sb.ProjectID) {
 		return nil, fmt.Errorf("project storyboard generation is paused")
 	}
-	if err := s.publishStoryboardGeneration(sb, 0, modelName); err != nil {
+	if err := s.publishStoryboardGeneration(sb, 0, modelName, true); err != nil {
 		return nil, err
 	}
 	return sb, nil
@@ -949,7 +956,7 @@ func (s *StoryboardService) RetryBatch(projectID uint64, episodeID *uint64, mode
 			continue
 		}
 		usedModel := resolvedModels[count%len(resolvedModels)]
-		if err := s.publishStoryboardGeneration(&sb, 0, usedModel); err != nil {
+		if err := s.publishStoryboardGeneration(&sb, 0, usedModel, true); err != nil {
 			continue
 		}
 		count++
@@ -1070,7 +1077,7 @@ func (s *StoryboardService) dispatchReadyStoryboards(projectID uint64, scope sto
 	dispatched := 0
 	for i := range storyboards {
 		usedModel := resolvedModels[dispatched%len(resolvedModels)]
-		if err := s.publishStoryboardGeneration(&storyboards[i], 0, usedModel); err != nil {
+		if err := s.publishStoryboardGeneration(&storyboards[i], 0, usedModel, false); err != nil {
 			s.logger.Warn("dispatch storyboard generation skipped",
 				zap.Uint64("storyboard_id", storyboards[i].ID),
 				zap.Uint64("project_id", projectID),
@@ -1226,6 +1233,7 @@ func (s *StoryboardService) Chat(id uint64, message map[string]interface{}) (*mo
 			}
 		}
 	}
+	sb.SceneDescription = sanitizeUserSceneDescription(sb.SceneDescription)
 
 	assistantReply := "已记录这次分镜修改，并同步到当前场景描述。你可以继续补充角色、景别、光线或台词细节，然后重新生成查看新图。"
 	if sb.Status == "generating" {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/autovideo/project-service/internal/repository"
 	"github.com/autovideo/project-service/internal/stylepreset"
@@ -54,11 +55,12 @@ type StoryboardGenerateResult struct {
 }
 
 type storyboardAssetReference struct {
-	ID         int64  `json:"id"`
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	ImageURL   string `json:"image_url"`
-	PromptUsed string `json:"prompt_used"`
+	ID          int64    `json:"id"`
+	Type        string   `json:"type"`
+	Name        string   `json:"name"`
+	ImageURL    string   `json:"image_url"`
+	PromptUsed  string   `json:"prompt_used"`
+	PanelImages []string `json:"panel_images"`
 }
 
 type assetReferenceMaps struct {
@@ -343,6 +345,7 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message) {
 	charRefImages, charAssetPrompts, sceneRefImages := c.fetchAllAssetRefsOnce(ctx, req.ProjectID)
 	charRefImages = mergeAssetReferenceMap(charRefImages, directAssetMaps.CharacterImages)
 	charAssetPrompts = mergeAssetReferenceMap(charAssetPrompts, directAssetMaps.CharacterPrompts)
+	sanitizeCharacterPromptMapForStoryboard(charAssetPrompts)
 	sceneRefImages = mergeAssetReferenceMap(sceneRefImages, directAssetMaps.SceneImages)
 
 	// Pick the first listed character that has a generated image as the primary reference.
@@ -437,12 +440,15 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message) {
 	}
 	// Append model-specific negative prompt tokens for diffusion models.
 	negativePrompt = appendModelNegativeTokens(negativePrompt, modelName)
+	negativePrompt = appendStoryboardAntiSheetNegativeTokens(negativePrompt)
 	// D: environment/prop-only frames (no characters listed) must actively exclude people,
 	// otherwise diffusion models hallucinate incidental figures in landscape/prop shots.
 	if len(req.Characters) == 0 {
 		negativePrompt = appendNoPeopleNegativeTokens(negativePrompt)
 	}
+	referenceImageURLs = filterStoryboardReferenceURLs(referenceImageURLs)
 	referenceImageURLs = prioritizeStoryboardReferenceImages(referenceImageURLs)
+	styleReferenceURL = resolveStoryboardStyleReferenceURL(styleReferenceURL, referenceImageURLs)
 	c.logger.Info("storyboard references prepared",
 		zap.Uint64("storyboard_id", req.StoryboardID),
 		zap.String("model", modelName),
@@ -615,8 +621,8 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 		if constraintHints.ActionConstraint != "" {
 			parts = append(parts, "ACTION STAGING — make the current frame look like one clean beat inside a continuous motion chain, not an unrelated pose jump: "+constraintHints.ActionConstraint+".")
 		}
-		if constraintHints.SpatialConstraint != "" {
-			parts = append(parts, "SPATIAL BLOCKING LOCK — preserve screen direction, left/right placement, distance to anchor objects, and foreground/midground/background relations using these cues: "+constraintHints.SpatialConstraint+".")
+		if spatial := strings.TrimSpace(constraintHints.SpatialConstraint); spatial != "" && utf8.RuneCountInString(spatial) >= 12 {
+			parts = append(parts, "SPATIAL NOTE — only if already established in the scene text, keep these relations stable: "+spatial+".")
 		}
 		if constraintHints.WardrobeConstraint != "" {
 			parts = append(parts, "WARDROBE AND GROOMING LOCK — unless the scene explicitly calls for a costume change, preserve outfit silhouette, garment layers, accessories, hair styling, and makeup: "+constraintHints.WardrobeConstraint+".")
@@ -654,7 +660,8 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 		"Frame one decisive story moment with clear subject hierarchy, readable blocking, believable foreground-midground-background separation, and lighting that supports the narrative beat.",
 		"Keep anatomy, costumes, props, and environment consistent and production-ready. Clothing must strictly match each character's gender — never render female garments (chest-high ruqun, pibo sashes, hairpin buns) on male characters, or male garments on female characters.",
 		"Facial expressions and body language should read as natural, micro-expression-level human performance (subtle brow, eye, and mouth movement) — avoid stiff mannequin poses, frozen smiles, or exaggerated anime reactions in live-action frames. Ensure limb articulation and weight distribution feel physically plausible.",
-		"Output a single cinematic image with no text, no subtitle, no watermark, no split screen, and no collage layout.",
+		"Output a single cinematic storyboard frame with no text, no subtitle, no watermark, no split screen, and no collage layout.",
+		"Do NOT render a character reference sheet, turnaround sheet, model sheet, or multi-panel layout. Use character references only for face, hairstyle, and wardrobe identity — not for sheet composition.",
 	)
 	// Append model-specific quality suffix tokens (T4: per-model keyword optimization).
 	if qualitySuffix := modelQualitySuffix(modelName, stylePreset); qualitySuffix != "" {
@@ -715,11 +722,11 @@ func buildAssetReferenceMaps(assets []storyboardAssetReference) assetReferenceMa
 		}
 		switch strings.ToLower(strings.TrimSpace(asset.Type)) {
 		case "character":
-			if asset.ImageURL != "" {
-				maps.CharacterImages[nameKey] = asset.ImageURL
+			if picked := pickStoryboardCharacterReferenceImage(asset.ImageURL, asset.PanelImages); picked != "" {
+				maps.CharacterImages[nameKey] = picked
 			}
 			if asset.PromptUsed != "" {
-				maps.CharacterPrompts[nameKey] = asset.PromptUsed
+				maps.CharacterPrompts[nameKey] = sanitizeCharacterAssetPromptForStoryboard(asset.PromptUsed)
 			}
 		case "scene", "location":
 			if asset.ImageURL != "" {
@@ -927,10 +934,11 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	}
 
 	type assetItem struct {
-		Name       string `json:"name"`
-		Type       string `json:"type"`
-		ImageURL   string `json:"image_url"`
-		PromptUsed string `json:"prompt_used"`
+		Name        string   `json:"name"`
+		Type        string   `json:"type"`
+		ImageURL    string   `json:"image_url"`
+		PromptUsed  string   `json:"prompt_used"`
+		PanelImages []string `json:"panel_images"`
 	}
 	parseItems := func(items []assetItem) {
 		charImages = make(map[string]string)
@@ -943,11 +951,11 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 			}
 			switch strings.ToLower(strings.TrimSpace(item.Type)) {
 			case "character":
-				if item.ImageURL != "" {
-					charImages[key] = item.ImageURL
+				if picked := pickStoryboardCharacterReferenceImage(item.ImageURL, item.PanelImages); picked != "" {
+					charImages[key] = picked
 				}
 				if item.PromptUsed != "" {
-					charPrompts[key] = item.PromptUsed
+					charPrompts[key] = sanitizeCharacterAssetPromptForStoryboard(item.PromptUsed)
 				}
 			case "scene", "location":
 				if item.ImageURL != "" {
@@ -1329,26 +1337,6 @@ func (c *KafkaConsumer) translateIfNeeded(ctx context.Context, text string) stri
 	return translated
 }
 
-// containsCompositeCharacterSheet reports whether any of the given reference
-// image URLs points to a 4-panel character turnaround sheet produced by
-// character-service (filename pattern "asset_*_composite.jpg"). When true,
-// image-service will inject explicit "SAME person, 4 views" guidance into the
-// prompt so generators don't paint the sheet as four separate characters.
-func containsCompositeCharacterSheet(primary string, extras []string) bool {
-	check := func(u string) bool {
-		return strings.Contains(strings.ToLower(u), "_composite.")
-	}
-	if check(primary) {
-		return true
-	}
-	for _, u := range extras {
-		if check(u) {
-			return true
-		}
-	}
-	return false
-}
-
 // aspectRatioDimensions converts an aspect-ratio string into a width/height pair.
 // The returned dimensions are intentionally model-agnostic; image-service's
 // NormalizeGenerateSize will clamp/round them to the per-model allowed size set.
@@ -1394,13 +1382,8 @@ func (c *KafkaConsumer) callImageService(ctx context.Context, projectID uint64, 
 	if len(referenceImageURLs) > 0 {
 		body["reference_image_urls"] = referenceImageURLs
 	}
-	// Tell image-service when any attached reference is a 4-panel character
-	// turnaround sheet (filename "asset_*_composite.jpg") so Gemini / Baidu /
-	// SDXL can inject the "SAME person, 4 views" interpretation guide. Without
-	// this, models tend to paint four separate characters into the output.
-	if containsCompositeCharacterSheet(styleReferenceURL, referenceImageURLs) {
-		body["is_character_sheet"] = true
-	}
+	// Storyboard frames must never be conditioned as 4-panel turnaround sheets.
+	body["is_character_sheet"] = false
 	data, err := json.Marshal(body)
 	if err != nil {
 		return "", fmt.Errorf("marshal image request: %w", err)

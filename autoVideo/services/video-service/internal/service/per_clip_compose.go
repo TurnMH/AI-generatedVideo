@@ -10,6 +10,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// shouldAttachExternalDubbing decides whether to mux TTS / dubbing audio onto the
+// final video. Native-audio models (e.g. seedance) skip external dubbing by default
+// only when the user explicitly requested model-native speech (generate_audio=true).
+// Commentary/drama projects with dialogues should still get TTS even on those models.
+func shouldAttachExternalDubbing(nativeAudio, attachDubbingExplicit, generateNative bool, dialogues []string) bool {
+	if attachDubbingExplicit {
+		return true
+	}
+	if !nativeAudio {
+		return true
+	}
+	if generateNative {
+		return false
+	}
+	return hasAnyNonEmpty(dialogues)
+}
+
 // hasAnyNonEmpty returns true when at least one string in dialogues is not
 // whitespace-only — the trigger for the per-clip audio compose path.
 func hasAnyNonEmpty(dialogues []string) bool {

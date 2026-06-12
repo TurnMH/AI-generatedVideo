@@ -25,6 +25,7 @@ import (
 	"github.com/autovideo/project-service/internal/model"
 	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/repository"
+	"github.com/autovideo/project-service/internal/speechtext"
 	"github.com/autovideo/project-service/internal/stylepreset"
 )
 
@@ -1663,7 +1664,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project
 		"model": llmCfg.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": fmt.Sprintf("请对第 %d 集剧本进行分镜预处理优化，添加视觉标注后返回优化后的脚本。必须显式补齐并澄清：世界观/视觉宇宙、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容，以及最终给 AI 使用的视觉生成描述边界。\n\n%s", episodeNum, content)},
+			{"role": "user", "content": productionmode.ScriptPrepUserContent(profile.Mode, episodeNum, content)},
 		},
 		"temperature": 0.4,
 		"max_tokens":  8192,
@@ -1943,7 +1944,7 @@ func (s *EpisodeService) GenerateFromScriptWithOptions(ctx context.Context, proj
 		EpisodeSplit: &StageProgress{Status: "running"},
 	})
 
-	episodes, err := s.doGenerateFromScript(ctx, project, autoStoryboard)
+	episodes, err := s.doGenerateFromScript(ctx, project, autoStoryboard, force)
 	if err != nil {
 		s.updateProgress(projectID, ProgressInfo{
 			Stage:        "idle",
@@ -2119,6 +2120,17 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 
 func (s *EpisodeService) runEpisodeAutoPipeline(ctx context.Context, project model.Project, ep model.Episode, totalEpisodes int, resumed, isFirstAutoEpisode, triggerAssets bool) bool {
 	if s.episodeAutoPrepared(ep) {
+		if !triggerAssets {
+			return true
+		}
+		// Text already prepared; continue with asset extraction and let defer trigger storyboards.
+		if _, applyErr := s.ApplyOptimizedText(WithSkipEpisodeStoryboardTrigger(ctx), ep.ID, project.ID); applyErr != nil && s.logger != nil {
+			s.logger.Warn("auto apply prepared episode text failed",
+				zap.Uint64("episode_id", ep.ID),
+				zap.Error(applyErr),
+			)
+			return false
+		}
 		return true
 	}
 
@@ -2229,7 +2241,8 @@ func (s *EpisodeService) launchEpisodeAutoPipelineJob(project model.Project, epi
 		}
 
 		processedEpisodes := 0
-		if s.episodeAutoPrepared(episode) {
+		textAlreadyPrepared := s.episodeAutoPrepared(episode)
+		if textAlreadyPrepared && !opts.TriggerAssets {
 			processedEpisodes = 1
 		}
 		timedOut := false
@@ -2266,7 +2279,7 @@ func (s *EpisodeService) launchEpisodeAutoPipelineJob(project model.Project, epi
 			}
 		}()
 
-		if processedEpisodes >= 1 {
+		if processedEpisodes >= 1 && !opts.TriggerAssets {
 			return
 		}
 
@@ -2324,19 +2337,34 @@ func (s *EpisodeService) StartEpisodeAutoPipeline(projectID, episodeID uint64, o
 	return nil
 }
 
-func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, eps []model.Episode, resumed bool, autoTextPrep bool) {
-	if len(eps) == 0 || !autoTextPrep {
+type autoPrepMode int
+
+const (
+	autoPrepOff autoPrepMode = iota
+	autoPrepTextOnly
+	autoPrepFullFirstEpisode
+)
+
+func (s *EpisodeService) startAutoPreparationPipeline(project *model.Project, eps []model.Episode, resumed bool, mode autoPrepMode) {
+	if len(eps) == 0 || mode == autoPrepOff {
 		return
 	}
 	firstEp := firstEpisodeByNumber(eps)
-	s.launchEpisodeAutoPipelineJob(*project, firstEp, len(eps), episodeAutoPipelineJobOptions{
-		TriggerStoryboards: false,
-		TriggerAssets:      false,
-		TextOnly:           true,
+	opts := episodeAutoPipelineJobOptions{
 		Resumed:            resumed,
 		IsFirstAutoEpisode: true,
 		Timeout:            90 * time.Minute,
-	})
+	}
+	if mode == autoPrepFullFirstEpisode {
+		opts.TriggerStoryboards = true
+		opts.TriggerAssets = true
+		opts.TextOnly = false
+	} else {
+		opts.TriggerStoryboards = false
+		opts.TriggerAssets = false
+		opts.TextOnly = true
+	}
+	s.launchEpisodeAutoPipelineJob(*project, firstEp, len(eps), opts)
 }
 
 // ResumeInterruptedAutoPreparation restarts projects that were left in
@@ -2368,7 +2396,7 @@ func (s *EpisodeService) ResumeInterruptedAutoPreparation(limit int) (int, error
 				zap.Int("already_prepared", s.countPreparedEpisodes(episodes)),
 			)
 		}
-		s.startAutoPreparationPipeline(&projects[i], episodes, true, true)
+		s.startAutoPreparationPipeline(&projects[i], episodes, true, autoPrepTextOnly)
 		resumed++
 	}
 	return resumed, nil
@@ -2404,7 +2432,7 @@ func (s *EpisodeService) ResumeInterruptedEpisodeGeneration(limit int) (int, err
 }
 
 // doGenerateFromScript —— 执行剧集生成的核心逻辑，包含数据清理、分集和分镜创建
-func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *model.Project, autoStoryboard bool) ([]model.Episode, error) {
+func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *model.Project, autoStoryboard bool, isResplit bool) ([]model.Episode, error) {
 	projectID := uint64(project.ID)
 
 	// Get script content
@@ -2555,7 +2583,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		}
 	}
 
-	// Priority: user keywords → chapter markers → LLM → simple fallback
+	// Priority: chapter markers → user keywords → LLM estimate → simple fallback
 	// ══════════════════════════════════════════════════════════════════════════
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
@@ -2564,15 +2592,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		AutoSplit:    &autoSplitProgress,
 	})
 
-	// Try user-provided split keywords first
-	episodes := splitByUserKeywords(optimizedScriptText, kwLib.SplitKeywords)
-	splitMethod := "user_keywords"
-
-	// Fallback to chapter markers
-	if len(episodes) == 0 {
-		episodes = splitByChapters(optimizedScriptText)
-		splitMethod = "chapters"
-	}
+	episodes, splitMethod := resolveStructuralEpisodeSplit(optimizedScriptText, strings.TrimSpace(scriptText), kwLib.SplitKeywords)
 
 	chapterSplit := len(episodes) > 0
 
@@ -2661,25 +2681,40 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	// Report episode split done
 	autoSplitMeta.EstimatedEpisodes = len(dbEpisodes)
 	if autoStoryboard {
+		prepMode := autoPrepFullFirstEpisode
+		sceneSplitStatus := "running"
+		var prepMessage string
+		var prepNextStep string
+		if isResplit {
+			prepMode = autoPrepTextOnly
+			sceneSplitStatus = "pending"
+			if len(dbEpisodes) <= 1 {
+				prepMessage = fmt.Sprintf("分集完成（%d 集），开始润色优化剧本（仅文本处理）…", len(dbEpisodes))
+			} else {
+				prepMessage = fmt.Sprintf("分集完成（%d 集），将自动润色优化第 1 集示范剧本（仅文本），资源与分镜请手动启动", len(dbEpisodes))
+			}
+			prepNextStep = "示范集文本处理完成后，请在单集列表点击「自动处理」衔接资源与分镜"
+		} else if len(dbEpisodes) <= 1 {
+			prepMessage = fmt.Sprintf("分集完成（%d 集），开始自动处理第 1 集（润色 → 资源 → 分镜）…", len(dbEpisodes))
+			prepNextStep = "完成后可在第 1 集工作台继续出图与成片"
+		} else {
+			prepMessage = fmt.Sprintf("分集完成（%d 集），将自动处理第 1 集示范流程（润色 → 资源 → 分镜）", len(dbEpisodes))
+			prepNextStep = "示范集完成后，请为其余分集点击「自动处理」"
+		}
 		s.updateProgress(projectID, ProgressInfo{
 			Stage: "script_prepping",
 			EpisodeSplit: &StageProgress{
 				Total: len(dbEpisodes), Completed: len(dbEpisodes), Status: "done",
 			},
 			SceneSplit: &StageProgress{
-				Total: len(dbEpisodes), Completed: 0, Status: "pending",
+				Total: len(dbEpisodes), Completed: 0, Status: sceneSplitStatus,
 			},
-			Message: func() string {
-				if len(dbEpisodes) <= 1 {
-					return fmt.Sprintf("分集完成（%d 集），开始润色优化剧本（仅文本处理）…", len(dbEpisodes))
-				}
-				return fmt.Sprintf("分集完成（%d 集），将自动润色优化第 1 集示范剧本（仅文本），资源与分镜请手动启动", len(dbEpisodes))
-			}(),
+			Message:    prepMessage,
 			PhaseLabel: "分集已完成",
-			NextStep:   "示范集文本处理完成后，请在单集列表点击「自动处理」衔接资源与分镜",
-			AutoSplit: &autoSplitMeta,
+			NextStep:   prepNextStep,
+			AutoSplit:  &autoSplitMeta,
 		})
-		s.startAutoPreparationPipeline(project, dbEpisodes, false, true)
+		s.startAutoPreparationPipeline(project, dbEpisodes, false, prepMode)
 	} else {
 		s.updateProgress(projectID, ProgressInfo{
 			Stage: "idle",
@@ -2931,7 +2966,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			}
 
 			optimized := epContent
-			if productionmode.ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, epContent) {
+			if productionmode.ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, epContent, productionProfile.Mode) {
 				if s.logger != nil {
 					s.logger.Info("skip script prep because auto-optimize output already annotated",
 						zap.Int("episode", epNum),
@@ -3124,6 +3159,11 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				})
 			}
 
+			storyboardDialogue := scene.Dialogue
+			if productionProfile.IsCommentaryComic() {
+				storyboardDialogue = speechtext.FinalizeCommentaryDialogue(storyboardDialogue)
+			}
+
 			_, err := s.storyboardSvc.Create(projectID, CreateStoryboardReq{
 				EpisodeID:        &epID,
 				SequenceNumber:   globalSeq,
@@ -3131,7 +3171,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				Characters:       chars,
 				Location:         scene.Location,
 				Duration:         clampDuration(scene.Duration, 2, 12),
-				Dialogue:         scene.Dialogue,
+				Dialogue:         storyboardDialogue,
 				CameraMovement:   shotTypeToCameraMovement(scene.ShotType),
 				Mood:             scene.Mood,
 				PromptUsed:       promptUsed,
@@ -3171,7 +3211,13 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 	}
 
 	fallback := func() []llmScene {
-		return s.postProcessScenes(s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration), clipDuration, profile)
+		return s.postProcessAndAlignCommentaryScenes(
+			episodeContent,
+			s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration, profile),
+			clipDuration,
+			speechPace,
+			profile,
+		)
 	}
 
 	// Try LLM-based scene splitting with retries
@@ -3191,7 +3237,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 
 		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
 		if len(scenes) > 0 {
-			return s.postProcessScenes(scenes, clipDuration, profile)
+			return s.postProcessAndAlignCommentaryScenes(episodeContent, scenes, clipDuration, speechPace, profile)
 		}
 	}
 
@@ -3421,7 +3467,7 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 // fallbackSceneSplit —— 降级方案：按段落将剧集内容拆分为场景
 // fallbackSceneSplit creates scenes from episode text using paragraph-based splitting.
 // Each paragraph becomes its own scene for maximum granularity.
-func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum int, clipDuration int) []llmScene {
+func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum int, clipDuration int, profile productionmode.Profile) []llmScene {
 	paragraphs := splitIntoParagraphs(episodeContent)
 
 	if len(paragraphs) <= 1 {
@@ -3445,12 +3491,20 @@ func (s *EpisodeService) fallbackSceneSplit(episodeContent string, episodeNum in
 			desc += "..."
 		}
 
+		dialogue := sanitizeStoryboardDialogue(p)
+		if profile.IsCommentaryComic() {
+			if narr := speechtext.ExtractParagraphNarration(p); narr != "" {
+				dialogue = narr
+			} else {
+				dialogue = ""
+			}
+		}
 		scenes = append(scenes, llmScene{
 			Description: fmt.Sprintf("第%d集·场景%d：%s", episodeNum, i+1, desc),
 			Characters:  nil,
 			Location:    "",
 			Duration:    dur,
-			Dialogue:    sanitizeStoryboardDialogue(p),
+			Dialogue:    dialogue,
 		})
 	}
 
@@ -3838,48 +3892,37 @@ Rules:
 Your task: produce polished, optimized image generation prompts for a sequence of storyboard scenes that will be used BOTH as reference images AND as video generation seeds.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
-PROMPT STRUCTURE — every scene prompt must follow this 6-layer order (comma-separated):
+PROMPT STRUCTURE — every scene prompt should follow this order (comma-separated):
 ━━━━━━━━━━━━━━━━━━━━━━━━
-① Subject anchor: character(s) + exact frame position (left/center/right of frame) + posture/stance + wardrobe silhouette
-② Face & expression: specific muscle-level descriptor (e.g., "jaw slightly dropped, eyebrows raised, pupils dilated" — NOT "surprised face")
-③ Action beat: what the character is physically doing right now (verb + visible result + readable hand/body behavior)
-④ Camera & depth: shot type + lens (e.g., "medium close-up, 85mm portrait lens, shallow DOF, subject sharp, background softly blurred")
-⑤ Environment layers: foreground element + midground set detail + background atmosphere (all 3 planes present)
-⑥ Light & style: key light direction + color temperature + fill/rim ratio + grade keywords
+① Subject anchor: character(s) + posture/stance + wardrobe silhouette
+② Face & expression: specific muscle-level descriptor (e.g., "jaw slightly dropped, eyebrows raised" — NOT "surprised face")
+③ Action beat: one clear physical action with visible result
+④ Framing: shot type + simple lens/framing cue from shot_type (do NOT invent left/right screen direction unless provided in input)
+⑤ Environment: setting, atmosphere, key props, readable background
+⑥ Light & style: key light direction + color temperature + grade keywords
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 Rules:
 ━━━━━━━━━━━━━━━━━━━━━━━━
-1. Each prompt must be 80-220 words, entirely in English, for AI image generators (Stable Diffusion / Flux / DALL-E).
-2. All 6 structural layers must appear in every prompt — never omit face/expression or environment layers.
-3. When a scene has "character_appearance" data, embed those EXACT visual descriptors (hair color, clothing color/texture, face features) — NEVER invent different appearances.
-4. When a scene has "character_emotions" data, translate to specific micro-expression descriptors: muscles, gaze direction, lip shape, brow tension — NOT emotion adjectives alone.
-5. When a scene has "location_description" data, use that EXACT environment description as the scene background — NEVER invent different architectural details, color temperature, or set dressing.
-6. When a scene has "items" or "prop_visual" data, place those specific props/objects at a specific depth plane (foreground/midground) with their exact described appearance.
-7. When a scene has "spatial_anchor", "subject_positions", or "transition_note" data, treat them as high-priority blocking instructions: they override generic composition habits.
-8. If the source description is under-specified, you must still infer and state a usable body pose, hand behavior, screen direction, and wardrobe continuity instead of leaving them generic.
-9. VISUAL CONTINUITY RULES (critical for video generation):
-   - Adjacent scenes sharing the same "location" MUST describe identical background architecture, furniture placement, and ambient lighting color temperature.
-   - Characters appearing across multiple scenes MUST wear exactly the same clothing and hairstyle unless explicitly changed.
-   - If the VISUAL BRIDGE prompt is provided, your FIRST scene must visually extend from it: same color grading, same character frame position, matching depth planes.
-   - Frame position consistency: if a character is on the left in scene N, keep them left in scene N+1 unless a motivated move is described.
-   - Spatial anchor consistency: doors, windows, tables, sofas, beds, stairs, counters, vehicles, or other key anchor objects must stay in consistent relative positions unless the prompt explicitly describes a re-blocking or camera relocation.
-   - Eyeline continuity: if two characters were facing each other in the prior frame, do not silently reverse their facing direction or swap screen direction.
-   - Depth continuity: preserve who is foreground, midground, and background across adjacent shots unless a visible transition justifies the change.
-9. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
-10. Incorporate provided art style and skill guidelines naturally into every prompt.
-11. The "shot_type" field dictates framing: close-up → face fills 60%+ of frame; medium → waist-up, environment visible; wide → full figure + environment; establishing → location dominant, figure small.
-12. If "lighting_note" is present, incorporate the EXACT color temperature, direction, and quality (hard/soft, spot/fill ratio).
-13. If "art_note" is present, use it to describe scene environment and set dressing accurately.
-14. Preserve explicit era / period / costume cues. Dynasty/scifi/modern/retro setting details must be kept and strengthened.
-15. VIDEO-FRIENDLY COMPOSITION: avoid cluttered mid-ground; keep subject-background separation clean for AI video motion to work well.
-16. ACTION CONTINUITY: if adjacent scenes share the same location or belong to one uninterrupted action, keep pose progression physically connected; do not jump from setup pose to resolved pose without an intermediate action beat.
-17. SPATIAL CONSISTENCY: preserve left/right frame placement, eyeline direction, hand-held props, environment geography, and key light direction unless the scene input explicitly signals a change.
-18. FIRST SHOT OF A NEW LOCATION: prefer a readable establishing or environment-anchored composition before pushing into close coverage, unless the scene input explicitly demands an immediate crash-in close-up.
-19. ONE DECISIVE VISUAL IDEA PER FRAME: do not describe two unrelated focal actions or multiple competing hero subjects in the same prompt.
-20. COSTUME AND PROP LOCK: wardrobe layers, accessories, injuries, dirt, blood, wetness, and damage state must remain stable across adjacent prompts until the input explicitly changes them.
-21. TRANSITION EXPLICITNESS: when a character changes screen position, depth plane, or relation to a key prop, describe the visible in-between action (steps closer, circles around the table, stops by the window, turns from the door) instead of teleporting to the new pose.
-22. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
+1. Each prompt must be 60-160 words, entirely in English, for AI image generators (Stable Diffusion / Flux / DALL-E).
+2. Prioritize one decisive visual beat per frame. Favor readable action and emotion over blocking jargon.
+3. When a scene has "character_appearance" data, embed those EXACT visual descriptors — NEVER invent different appearances.
+4. When a scene has "character_emotions" data, translate to micro-expression descriptors, not emotion adjectives alone.
+5. When a scene has "location_description" data, use that EXACT environment description as the scene background.
+6. When a scene has "items" or "prop_visual" data, make those props clearly visible.
+7. Use "spatial_anchor", "subject_positions", or "transition_note" ONLY when the input already contains them. Do NOT invent screen-left/right placement, axis language, or furniture geography.
+8. If the source description is under-specified, infer a usable pose and hand behavior, but avoid camera-operator jargon.
+9. VISUAL CONTINUITY (lightweight):
+   - Adjacent scenes in the same location should keep wardrobe, hairstyle, lighting color, and major set dressing stable.
+   - If VISUAL BRIDGE is provided, the first scene should extend its color grading and general staging, not copy blocking coordinates verbatim.
+   - Preserve eyeline and held props only when the input already established them.
+10. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
+11. The "shot_type" field dictates framing: close-up → face dominant; medium → waist-up; wide → figure + environment; establishing → location dominant.
+12. Preserve explicit era / period / costume cues.
+13. VIDEO-FRIENDLY COMPOSITION: clean subject-background separation, uncluttered frame, one hero action.
+14. ACTION CONTINUITY: adjacent scenes in one action chain should progress pose naturally, without teleporting between unrelated poses.
+15. ONE DECISIVE VISUAL IDEA PER FRAME.
+16. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
 	if skillHints != "" {
@@ -3906,7 +3949,7 @@ Rules:
 	}
 
 	userContent := fmt.Sprintf(
-		"Generate optimized image generation prompts for %d storyboard scenes from episode %d.%s%s\n\nIMPORTANT: The scenes are ordered. For each scene after the first, visually bridge its prompt from the preceding scene to maintain seamless flow. Pay special attention to spatial continuity: preserve left/right subject placement, eyeline direction, foreground/midground/background layering, and the relative positions of anchor objects such as doors, windows, tables, beds, counters, vehicles, or stairs. When a character or camera relationship changes, describe the visible transition instead of jumping directly to the result.\n\nScenes (JSON):\n%s\n\nReturn JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ...]}",
+		"Generate optimized image generation prompts for %d storyboard scenes from episode %d.%s%s\n\nIMPORTANT: The scenes are ordered. Keep wardrobe, lighting, and major set dressing consistent across adjacent scenes in the same location. Bridge action and emotion naturally, but do not add left/right blocking or camera-axis jargon unless the scene JSON already contains it.\n\nScenes (JSON):\n%s\n\nReturn JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ...]}",
 		len(scenes), episodeNum, continuityNote, templateNote, string(inputJSON),
 	)
 
@@ -5043,94 +5086,43 @@ func buildSharedItemsNote(prevScene *llmScene, scene llmScene) string {
 	return "关键道具延续：" + strings.Join(shared, "、") + "保持同一外观与位置逻辑。"
 }
 
-// enrichSceneDescription enhances the raw LLM scene description with era/mood atmosphere,
-// character appearance anchors and continuity notes so adjacent storyboard descriptions stay coherent.
+// enrichSceneDescription normalizes the user-facing scene description.
+// Spatial continuity and mood live in PromptUsed / dedicated fields, not in Chinese description.
 func enrichSceneDescription(scene llmScene, prevScene *llmScene, kwLib *KeywordLibrary, eraHint string) string {
-	desc := strings.TrimSpace(scene.Description)
-	if desc == "" {
+	_ = prevScene
+	_ = kwLib
+	_ = eraHint
+	desc := sanitizeUserSceneDescription(scene.Description)
+	if desc != "" {
 		return desc
 	}
-
-	var extras []string
-	if eraHint != "" {
-		extras = append(extras, eraHint)
-	}
-
-	_ = buildCharacterAppearanceMap(kwLib)
-
-	if prevScene != nil {
-		sharedLocation := strings.TrimSpace(prevScene.Location) != "" && strings.TrimSpace(prevScene.Location) == strings.TrimSpace(scene.Location)
-		sharedCharacters := 0
-		prevChars := map[string]struct{}{}
-		for _, name := range prevScene.Characters {
-			prevChars[strings.TrimSpace(name)] = struct{}{}
-		}
-		for _, name := range scene.Characters {
-			if _, ok := prevChars[strings.TrimSpace(name)]; ok {
-				sharedCharacters++
-			}
-		}
-		if sharedLocation || sharedCharacters > 0 {
-			bridge := "镜头衔接：承接上一镜头"
-			if sharedLocation {
-				bridge += "，保持同一场景空间方位、布景陈设与光线色温"
-			}
-			if sharedCharacters > 0 {
-				bridge += "，人物朝向、站位、服装发型与动作延续需连贯"
-			}
-			bridge += "。"
-			extras = append(extras, bridge)
-		}
-		if itemsNote := buildSharedItemsNote(prevScene, scene); itemsNote != "" {
-			extras = append(extras, itemsNote)
-		}
-	}
-
-	var moodExtras []string
-	if mood := strings.TrimSpace(scene.Mood); mood != "" {
-		moodCue := map[string]string{
-			"tense":      "氛围：紧张压迫，强烈对比光影。",
-			"romantic":   "氛围：温馨浪漫，暖金色柔光。",
-			"comedic":    "氛围：明快轻松，均匀柔和光线。",
-			"sad":        "氛围：低沉悲伤，冷色去饱和。",
-			"epic":       "氛围：史诗宏大，强烈侧光，壮阔场景。",
-			"mysterious": "氛围：神秘诡谲，低调光影，暗部丰富。",
-			"action":     "氛围：动感迅猛，动态模糊，高能量构图。",
-			"calm":       "氛围：平和宁静，自然柔光，舒缓节奏。",
-			"dramatic":   "氛围：戏剧张力，高反差，情绪强烈。",
-		}[mood]
-		if moodCue != "" {
-			moodExtras = append(moodExtras, moodCue)
-		}
-	}
-
-	if len(scene.CharacterStates) > 0 {
-		var stateParts []string
-		for _, cs := range scene.CharacterStates {
-			if cs.Name == "" {
-				continue
-			}
-			parts := []string{}
-			if cs.Action != "" {
-				parts = append(parts, cs.Action)
-			}
-			if cs.Emotion != "" {
-				parts = append(parts, cs.Emotion)
-			}
-			if len(parts) > 0 {
-				stateParts = append(stateParts, cs.Name+": "+strings.Join(parts, "，"))
-			}
-		}
-		if len(stateParts) > 0 {
-			moodExtras = append(moodExtras, "角色状态——"+strings.Join(stateParts, "；")+"。")
-		}
-	}
-
-	extras = append(extras, moodExtras...)
-	if len(extras) == 0 {
+	if len(scene.CharacterStates) == 0 {
 		return desc
 	}
-	return desc + " " + strings.Join(extras, " ")
+	var stateParts []string
+	for _, cs := range scene.CharacterStates {
+		if cs.Name == "" {
+			continue
+		}
+		parts := []string{}
+		if cs.Action != "" {
+			parts = append(parts, cs.Action)
+		}
+		if cs.Emotion != "" {
+			parts = append(parts, cs.Emotion)
+		}
+		if len(parts) > 0 {
+			stateParts = append(stateParts, cs.Name+"："+strings.Join(parts, "，"))
+		}
+	}
+	if len(stateParts) == 0 {
+		return desc
+	}
+	fallback := strings.Join(stateParts, "；")
+	if strings.TrimSpace(scene.Location) != "" {
+		fallback = scene.Location + "，" + fallback
+	}
+	return sanitizeUserSceneDescription(fallback)
 }
 
 // using the start_text/end_text boundary markers returned by the LLM.
@@ -5189,6 +5181,23 @@ func (s *EpisodeService) fillExcerptsFromBoundaries(scriptText string, episodes 
 		ep.Excerpt = string(runes[startIdx:endIdx])
 		lastEnd = endIdx
 	}
+}
+
+// resolveStructuralEpisodeSplit prefers chapter headings, then user-provided split keywords.
+func resolveStructuralEpisodeSplit(optimizedScript, originalScript string, splitKeywords []string) ([]llmEpisode, string) {
+	if episodes := splitByChapters(optimizedScript); len(episodes) > 0 {
+		return episodes, "chapters"
+	}
+	originalScript = strings.TrimSpace(originalScript)
+	if originalScript != "" && originalScript != strings.TrimSpace(optimizedScript) {
+		if episodes := splitByChapters(originalScript); len(episodes) > 0 {
+			return episodes, "chapters_original"
+		}
+	}
+	if episodes := splitByUserKeywords(optimizedScript, splitKeywords); len(episodes) > 0 {
+		return episodes, "user_keywords"
+	}
+	return nil, ""
 }
 
 // splitByUserKeywords —— 按用户提供的分集关键词在文本中定位并拆分为剧集

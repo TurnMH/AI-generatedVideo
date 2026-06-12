@@ -48,6 +48,10 @@ routes:
     upstream: video
     timeout: "600s"
 
+  - pattern: "^/api/v1/projects/[^/]+/storyboards/[^/]+/(dubbing|subtitle)/?$"
+    upstream: video
+    timeout: "600s"
+
   - pattern: "^/api/v1/projects/[^/]+/episodes/[^/]+/videos"
     upstream: video
     timeout: "30s"

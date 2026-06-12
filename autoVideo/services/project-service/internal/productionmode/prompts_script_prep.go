@@ -1,5 +1,7 @@
 package productionmode
 
+import "fmt"
+
 // ScriptPrepSystemPrompt returns the base system prompt for per-episode script prep before scene split.
 func ScriptPrepSystemPrompt(mode Mode) string {
 	switch mode {
@@ -73,4 +75,26 @@ func scriptPrepCommentaryBase() string {
 - 返回纯文本，不要 JSON
 - 不要写成广告 CTA 结构，不要增加不存在的产品卖点
 - 保持讲解/旁白语气，只在关键视觉节点加入标注`
+}
+
+// ScriptPrepUserContent returns the user message for per-episode script prep before scene split.
+func ScriptPrepUserContent(mode Mode, episodeNum int, content string) string {
+	switch mode {
+	case ModeCommentaryComic:
+		return fmt.Sprintf(`请对第 %d 集解说漫旁白稿进行分镜预处理。
+
+硬性要求：
+1. 保持原有讲解顺序、信息点和旁白语气，不要改写成【内景/外景】短剧场景剧本
+2. 所有会被 TTS 配音念出的旁白/解说，必须用 [字幕:原文] 标注，尽量保留原句，不要改写成第三人称画面描写
+3. 画面动作、场景、构图信息写入 [场景]/[人物]/[摄影]/[美术] 等标注，禁止把这些画面信息误写进 [字幕:]
+4. 不要新增角色大段对白戏；角色台词仅在原文确实存在时保留
+
+返回优化后的纯文本脚本：
+
+%s`, episodeNum, content)
+	default:
+		return fmt.Sprintf(`请对第 %d 集剧本进行分镜预处理优化，添加视觉标注后返回优化后的脚本。必须显式补齐并澄清：世界观/视觉宇宙、空间、时间、人物、服装、动作、核心物件、光线、色彩、材质、镜头运动、情绪、转场、字幕/屏幕文字、配音/口播内容，以及最终给 AI 使用的视觉生成描述边界。
+
+%s`, episodeNum, content)
+	}
 }

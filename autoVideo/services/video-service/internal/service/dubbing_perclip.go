@@ -43,8 +43,7 @@ func (s *DubbingService) SynthesizeClipAudios(
 	ts := time.Now().UnixMilli()
 
 	for clipIdx, raw := range dialogues {
-		text := cleanScriptForSpeech(strings.ReplaceAll(raw, "\r\n", "\n"))
-		text = strings.TrimSpace(text)
+		text := cleanPerClipDialogue(strings.ReplaceAll(raw, "\r\n", "\n"))
 		if text == "" {
 			continue
 		}

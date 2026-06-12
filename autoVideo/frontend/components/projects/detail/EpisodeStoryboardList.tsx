@@ -3,9 +3,9 @@
 
 import { useState } from 'react'
 import useSWR from 'swr'
-import { LayoutGrid, RefreshCw, Loader2, Image as ImageIcon, Sparkles, AlertCircle, Play } from 'lucide-react'
-import { storyboardAPI } from '@/lib/api'
+import { RefreshCw, Loader2, Image as ImageIcon, Sparkles, AlertCircle } from 'lucide-react'
 import type { Storyboard } from '@/types'
+import { canTriggerStoryboardImage, triggerStoryboardImageGeneration } from '@/lib/projects/storyboard-image'
 import { ZoomableImage } from '@/components/ui/image-lightbox'
 import { formatDuration } from '@/lib/projects/utils'
 import { StatusBadge } from './StatusBadge'
@@ -14,13 +14,13 @@ import { useToast } from '@/components/ui/toast'
 
 export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: number; episodeId: number }) {
   const { toast } = useToast()
-  const [retryingId, setRetryingId] = useState<number | null>(null)
+  const [runningId, setRunningId] = useState<number | null>(null)
 
   const { data: sbData, mutate } = useSWR(
     episodeId ? ['storyboards-episode', projectId, episodeId] : null,
     () => storyboardAPI.list(projectId, { episode_id: episodeId }) as unknown as Promise<{ data: Storyboard[] | { items: Storyboard[] } }>,
     { refreshInterval: (data) => {
-      const items = Array.isArray(data?.data) ? data?.data : (data?.data as any)?.items || [];
+      const items = Array.isArray(data?.data) ? data?.data : (data?.data as { items?: Storyboard[] })?.items || [];
       return items.some((sb: Storyboard) => sb.status === 'pending' || sb.status === 'generating') ? 3000 : 0;
     } }
   )
@@ -34,16 +34,17 @@ export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: num
     return <p className="py-6 text-center text-xs text-surface-400">该集暂无分镜数据，请先生成或上传</p>
   }
 
-  const handleRetry = async (sbId: number) => {
-    setRetryingId(sbId)
+  const handleGenerateOne = async (sb: Storyboard) => {
+    setRunningId(sb.id)
     try {
-      await storyboardAPI.retry(projectId, sbId)
-      toast({ title: '已重新加入生成队列', variant: 'success' })
+      await triggerStoryboardImageGeneration(projectId, sb)
+      toast({ title: sb.status === 'failed' ? '已重新加入生成队列' : '分镜图片生成已启动', variant: 'success' })
       mutate()
-    } catch (e: any) {
-      toast({ title: '重试失败', description: e?.message || '网络错误', variant: 'destructive' })
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : '网络错误'
+      toast({ title: '生成失败', description: message, variant: 'destructive' })
     } finally {
-      setRetryingId(null)
+      setRunningId(null)
     }
   }
 
@@ -52,13 +53,13 @@ export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: num
       {storyboards
         .sort((a, b) => a.sequence_number - b.sequence_number)
         .map((sb) => {
-          // 智能推断细粒度状态
           const isFailed = sb.status === 'failed'
           const isGenerating = sb.status === 'generating'
           const isPending = sb.status === 'pending'
+          const isPaused = sb.status === 'paused'
           const isCompleted = sb.status === 'completed'
+          const showGenerateAction = canTriggerStoryboardImage(sb) && !isGenerating
           
-          // 如果正在 generating，有 prompt 视为正在生图，没有则认为还在优化提示词或排队
           const isOptimizingPrompt = isGenerating && !sb.prompt_used
           const isGeneratingImage = isGenerating && !!sb.prompt_used
 
@@ -84,22 +85,28 @@ export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: num
                 </div>
                 
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold text-surface-800">#{sb.sequence_number}</span>
                       <StatusBadge status={sb.status} />
                     </div>
                     
-                    {isFailed && (
+                    {showGenerateAction && (
                       <Button 
                         size="sm" 
                         variant="outline" 
-                        className="h-6 px-2 text-[11px] border-red-200 text-red-600 hover:bg-red-50"
-                        onClick={() => handleRetry(sb.id)}
-                        disabled={retryingId === sb.id}
+                        className={`h-6 px-2 text-[11px] ${isFailed ? 'border-red-200 text-red-600 hover:bg-red-50' : 'border-primary-200 text-primary-700 hover:bg-primary-50'}`}
+                        onClick={() => handleGenerateOne(sb)}
+                        disabled={runningId === sb.id}
                       >
-                        {retryingId === sb.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
-                        失败重试
+                        {runningId === sb.id ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : isFailed ? (
+                          <RefreshCw className="mr-1 h-3 w-3" />
+                        ) : (
+                          <Sparkles className="mr-1 h-3 w-3" />
+                        )}
+                        {isFailed ? '失败重试' : isCompleted && sb.image_url ? '重新生成' : '生成图片'}
                       </Button>
                     )}
                   </div>
@@ -107,35 +114,23 @@ export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: num
                     {sb.scene_description}
                   </p>
                   
-                  {/* 对话与角色信息 (如果有) */}
                   {sb.dialogue && (
                      <p className="mt-1 text-[11px] text-purple-600 line-clamp-1">💬 {sb.dialogue}</p>
                   )}
                   
-                  {/* 细粒度任务流水线展示 */}
                   <div className="mt-2.5 flex items-center gap-2 text-[10px] font-medium">
-                    {/* 1. 提示词优化阶段 */}
                     <span className={`flex items-center gap-1 ${(isCompleted || isGeneratingImage) ? 'text-green-600' : isOptimizingPrompt ? 'text-blue-600' : 'text-surface-400'}`}>
                       {isOptimizingPrompt ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
                       {isCompleted || isGeneratingImage ? '提示词已优化' : isOptimizingPrompt ? '提示词优化中...' : '提示词待优化'}
                     </span>
                     <span className="text-surface-300">→</span>
                     
-                    {/* 2. 生图阶段 */}
-                    <span className={`flex items-center gap-1 ${isCompleted ? 'text-green-600' : isGeneratingImage ? 'text-blue-600' : isFailed ? 'text-red-500' : 'text-surface-400'}`}>
+                    <span className={`flex items-center gap-1 ${isCompleted && sb.image_url ? 'text-green-600' : isGeneratingImage ? 'text-blue-600' : isFailed ? 'text-red-500' : isPending || isPaused ? 'text-amber-600' : 'text-surface-400'}`}>
                       {isGeneratingImage ? <Loader2 className="h-3 w-3 animate-spin" /> : isFailed ? <AlertCircle className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
-                      {isCompleted ? '分镜图生成成功' : isGeneratingImage ? '分镜图生成中...' : isFailed ? '生图失败' : '排队中'}
-                    </span>
-                    <span className="text-surface-300">→</span>
-                    
-                    {/* 3. 视频阶段预留 */}
-                    <span className="flex items-center gap-1 text-surface-400">
-                      <Play className="h-3 w-3" />
-                      视频待合成
+                      {isCompleted && sb.image_url ? '分镜图生成成功' : isGeneratingImage ? '分镜图生成中...' : isFailed ? '生图失败' : isPending || isPaused ? '待生成' : '排队中'}
                     </span>
                   </div>
                   
-                  {/* 错误信息展示 */}
                   {isFailed && sb.error_msg && (
                     <div className="mt-1.5 rounded border border-red-100 bg-red-50 px-2 py-1 text-[10px] text-red-600">
                       失败原因：{sb.error_msg}

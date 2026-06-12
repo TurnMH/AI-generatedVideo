@@ -286,9 +286,10 @@ export function ScriptTab({
   const defaultSplitModel = pickPreferredModel(splitModels, textModelHealthMap)
   const selectedSplitModelId = Number(draftSplitModelId)
   const selectedSplitModel = allTextModels.find((model) => model.id === selectedSplitModelId)
-  const splitModelCapabilities = selectedSplitModel ? getRuntimeModelCapabilityLabels(selectedSplitModel) : []
-  const selectedSplitModelRemark = selectedSplitModel ? getSplitModelRemark(selectedSplitModel) : ''
-  const selectedSplitModelProvider = selectedSplitModel ? getProviderLabel(selectedSplitModel.provider) : null
+  const effectiveSplitModel = selectedSplitModel ?? defaultSplitModel ?? null
+  const splitModelCapabilities = effectiveSplitModel ? getRuntimeModelCapabilityLabels(effectiveSplitModel) : []
+  const selectedSplitModelRemark = effectiveSplitModel ? getSplitModelRemark(effectiveSplitModel) : ''
+  const selectedSplitModelProvider = effectiveSplitModel ? getProviderLabel(effectiveSplitModel.provider) : null
   const imageModels = allImageModels
     .filter((model) => model.is_active || model.failure_reason || model.id === project.image_model_id)
     .sort((left, right) => {
@@ -311,11 +312,11 @@ export function ScriptTab({
     if (health === 'unhealthy') return { label: '连接异常', color: 'bg-red-100 text-red-800' }
     return { label: '已启用', color: 'bg-blue-100 text-blue-800' }
   }
-  const selectedSplitModelAvailability = selectedSplitModel ? getProjectModelAvailability(selectedSplitModel) : null
+  const selectedSplitModelAvailability = effectiveSplitModel ? getProjectModelAvailability(effectiveSplitModel) : null
   const selectedImageModelAvailability = selectedImageModel ? getProjectModelAvailability(selectedImageModel) : null
   const parsedTargetEpisodes = Number.parseInt(draftTargetEpisodes, 10)
   const hasValidTargetEpisodes = Number.isFinite(parsedTargetEpisodes) && parsedTargetEpisodes >= 1 && parsedTargetEpisodes <= 200
-  const splitConfigReady = !!selectedSplitModel && (usesAutoEpisodeSplit || hasValidTargetEpisodes)
+  const splitConfigReady = !!effectiveSplitModel && (usesAutoEpisodeSplit || hasValidTargetEpisodes)
   const shouldShowSplitSearch = splitModels.length > 8
   const filteredSplitModels = useMemo(() => {
     const keyword = splitModelSearch.trim().toLocaleLowerCase()
@@ -362,6 +363,8 @@ export function ScriptTab({
   )
 
   const isProcessing = episodeGenerating || pipeline.isActive
+  const hasExistingEpisodes = episodes.length > 0
+  const splitInProgress = episodeGenerating || (!hasExistingEpisodes && pipeline.isActive)
   const nextManualEpisodeNumber = useMemo(
     () => episodes.reduce((maxValue, episode) => Math.max(maxValue, episode.episode_number), 0) + 1,
     [episodes]
@@ -529,8 +532,17 @@ export function ScriptTab({
   }, [usesAutoEpisodeSplit, project.target_episodes, projectId, mutateProject])
 
   React.useEffect(() => {
+    if (splitSettingsDirty) return
+    const preferredId = project.text_model_id || defaultSplitModel?.id
+    if (!preferredId) return
+    const nextId = String(preferredId)
+    if (draftSplitModelId !== nextId) {
+      setDraftSplitModelId(nextId)
+    }
+  }, [project.text_model_id, defaultSplitModel?.id, splitSettingsDirty, draftSplitModelId])
+
+  React.useEffect(() => {
     if (splitSettingsDirty || usesAutoEpisodeSplit) return
-    setDraftSplitModelId(project.text_model_id ? String(project.text_model_id) : '')
     setDraftTargetEpisodes(resolveDraftTargetEpisodes(project.target_episodes, recommendedEpisodeCount, episodes.length > 0))
   }, [episodes.length, project.target_episodes, project.text_model_id, recommendedEpisodeCount, splitSettingsDirty, usesAutoEpisodeSplit])
 
@@ -567,7 +579,7 @@ export function ScriptTab({
   }, [episodes, autoOptimizingEpisode, selectedEpisode])
 
   const persistSplitSettings = async (options?: { successTitle?: string; silent?: boolean }) => {
-    if (!selectedSplitModel) {
+    if (!effectiveSplitModel) {
       toast({ title: '请先选择分集模型', variant: 'destructive' })
       return false
     }
@@ -578,7 +590,7 @@ export function ScriptTab({
 
     const nextTargetEpisodes = usesAutoEpisodeSplit ? 0 : parsedTargetEpisodes
     const shouldUpdate =
-      project.text_model_id !== selectedSplitModel.id ||
+      project.text_model_id !== effectiveSplitModel.id ||
       project.target_episodes !== nextTargetEpisodes
 
     if (!shouldUpdate) {
@@ -588,7 +600,7 @@ export function ScriptTab({
     setSavingSplitModel(true)
     try {
       await projectAPI.update(projectId, {
-        text_model_id: selectedSplitModel.id,
+        text_model_id: effectiveSplitModel.id,
         target_episodes: nextTargetEpisodes,
       } as Partial<Project>)
       setSplitSettingsDirty(false)
@@ -663,7 +675,11 @@ export function ScriptTab({
       return
     }
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({
+        title: !effectiveSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数',
+        description: !effectiveSplitModel && splitModels.length === 0 ? '当前没有可用的文本模型，请先在模型管理里启用至少一个 LLM。' : undefined,
+        variant: 'destructive',
+      })
       return
     }
 
@@ -681,9 +697,11 @@ export function ScriptTab({
     try {
       const saved = await persistSplitSettings({ silent: true })
       if (!saved) {
+        toast({ title: '分集配置保存失败', description: '请检查分集模型是否可用，或在「分集高级设置」中重新选择模型。', variant: 'destructive' })
         return
       }
     } catch {
+      toast({ title: '分集配置保存失败', variant: 'destructive' })
       return
     }
 
@@ -700,7 +718,10 @@ export function ScriptTab({
     }
 
     try {
-      await projectAPI.generateEpisodes(projectId, hasKeywords ? keywords : undefined, { autoStoryboard: autoStoryboardAfterSplit })
+      await projectAPI.generateEpisodes(projectId, hasKeywords ? keywords : undefined, {
+        autoStoryboard: autoStoryboardAfterSplit,
+        ...(hasExistingEpisodes ? { rebuild: true } : {}),
+      })
       toast({
         title: autoStoryboardAfterSplit ? '重新分集已启动：将自动润色优化第 1 集示范剧本（仅文本）' : '重新分集已启动：旧分集与旧分镜将按新配置重建',
         variant: 'success',
@@ -735,7 +756,7 @@ export function ScriptTab({
 
   const handleRetryStalledScript = async () => {
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({ title: !effectiveSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
       return
     }
 
@@ -777,8 +798,19 @@ export function ScriptTab({
       toast({ title: '请先上传剧本文件', variant: 'destructive' })
       return
     }
+    if (!effectiveSplitModel && defaultSplitModel?.id) {
+      setDraftSplitModelId(String(defaultSplitModel.id))
+    }
     if (!splitConfigReady) {
-      toast({ title: !selectedSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数', variant: 'destructive' })
+      toast({
+        title: !effectiveSplitModel ? '请先选择分集模型' : usesAutoEpisodeSplit ? '分集配置未就绪' : '请填写 1-200 的目标分集数',
+        description: !effectiveSplitModel && splitModels.length === 0 ? '当前没有可用的文本模型，请先在模型管理里启用至少一个 LLM。' : undefined,
+        variant: 'destructive',
+      })
+      return
+    }
+    if (episodeGenerating) {
+      toast({ title: '分集任务已在提交中，请稍候', variant: 'default' })
       return
     }
 
@@ -1172,17 +1204,19 @@ export function ScriptTab({
                 size="sm"
                 variant={episodes.length > 0 ? 'outline' : 'default'}
                 onClick={handleOpenRegenerate}
-                disabled={isProcessing || !splitConfigReady || (!project.script_file_url && !hasScriptText)}
-                title={isProcessing
+                disabled={splitInProgress || !splitConfigReady || (!project.script_file_url && !hasScriptText)}
+                title={splitInProgress
                   ? (project.progress?.message || '当前已有分集任务进行中，请等待当前任务完成')
+                  : !splitConfigReady
+                    ? (!effectiveSplitModel ? '请先在分集高级设置中选择分集模型' : '分集配置未就绪')
                   : (episodes.length > 0 ? '按当前配置重新分集：会替换旧分集，并清空旧分镜后重建' : '按当前手动配置开始自动分集')}
               >
-                {isProcessing ? (
+                {splitInProgress ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                {isProcessing ? '分集进行中' : (episodes.length > 0 ? 'AI 重新分集' : 'AI 开始分集')}
+                {splitInProgress ? '分集进行中' : (episodes.length > 0 ? 'AI 重新分集' : 'AI 开始分集')}
               </Button>
             </div>
           </div>
@@ -1219,7 +1253,7 @@ export function ScriptTab({
                         <div className="grid gap-2 md:grid-cols-3">
                           <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
                             <p className="text-[11px] text-surface-400">当前模型</p>
-                            <p className="truncate text-sm font-medium text-surface-900">{selectedSplitModel?.name || '未选择分集模型'}</p>
+                            <p className="truncate text-sm font-medium text-surface-900">{effectiveSplitModel?.name || '未选择分集模型'}</p>
                             <p className="truncate text-[11px] text-surface-500">{selectedSplitModelProvider || '展开后可切换模型'}</p>
                           </div>
                           <div className="rounded-xl border border-surface-200 bg-surface-50/70 px-3 py-2">
@@ -1312,9 +1346,9 @@ export function ScriptTab({
                             disabled={savingSplitModel || isProcessing}
                           >
                             <SelectTrigger className="h-auto min-h-12 bg-white py-2.5">
-                              {selectedSplitModel ? (
+                              {effectiveSplitModel ? (
                                 <div className="min-w-0 flex-1 text-left">
-                                  <p className="truncate text-sm font-medium text-surface-900">{selectedSplitModel.name}</p>
+                                  <p className="truncate text-sm font-medium text-surface-900">{effectiveSplitModel.name}</p>
                                   <p className="truncate text-[11px] text-surface-400">{selectedSplitModelRemark}</p>
                                 </div>
                               ) : (
@@ -1921,9 +1955,9 @@ export function ScriptTab({
                       : '这里展示你手动选择的分集模型与目标分集数，确认后才会开始本次自动分集。'}
                   </p>
                 </div>
-                {selectedSplitModel ? (
+                {effectiveSplitModel ? (
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="secondary">{selectedSplitModel.name}</Badge>
+                    <Badge variant="secondary">{effectiveSplitModel.name}</Badge>
                     {selectedSplitModelAvailability ? (
                       <Badge className={selectedSplitModelAvailability.color}>{selectedSplitModelAvailability.label}</Badge>
                     ) : null}
@@ -1939,7 +1973,7 @@ export function ScriptTab({
                     : `目标分集数：${hasValidTargetEpisodes ? parsedTargetEpisodes : '未填写'}`}
                 </Badge>
               </div>
-              {selectedSplitModel ? (
+              {effectiveSplitModel ? (
                 <>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {splitModelCapabilities.map((label) => (
@@ -1955,7 +1989,7 @@ export function ScriptTab({
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label className="text-xs font-medium text-red-700">✂️ 分集关键字（每行一个，在原文中出现的位置将作为分集边界）</Label>
+              <Label className="text-xs font-medium text-red-700">✂️ 分集关键字（每行一个，仅在未识别到章节标题时作为分集边界）</Label>
               <Textarea
                 placeholder={"第一回 灵根育孕源流出 心性修持大道生\n第二回 悟彻菩提真妙理 断魔归本合元神\n第三回 四海千山皆拱伏 九幽十类尽除名"}
                 value={kwSplitKeywords}

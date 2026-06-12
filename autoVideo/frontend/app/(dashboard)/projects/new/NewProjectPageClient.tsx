@@ -645,7 +645,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
 
       if (uploadableScriptFile) {
         await projectAPI.uploadScript(projectId, uploadableScriptFile)
-        // 上传了剧本文件时，自动触发分集+资源提取+分镜提取全链路（fire-and-forget）
+        // 上传了剧本文件时，自动触发分集；首次创建会继续自动处理第 1 集（润色 → 资源 → 分镜）
         void projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
       }
 

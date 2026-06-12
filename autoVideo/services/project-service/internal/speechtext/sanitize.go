@@ -43,7 +43,7 @@ var nameOnlyLinePattern = regexp.MustCompile(`^[\p{Han}A-Za-z·]{1,8}[。！?？
 
 var sceneSettingLinePattern = regexp.MustCompile(`^(?:[\p{Han}A-Za-z0-9·]{2,30}[，,]\s*)?(?:清晨|早晨|早上|上午|中午|午后|傍晚|黄昏|夜里|夜晚|夜间|深夜|凌晨|日间|日出|日落)[，,]`)
 
-var locationLeadLinePattern = regexp.MustCompile(`^[\p{Han}]{2,}(?:楼|堂|馆|店|院|房|室|厨|厅|街|巷|路|园|场|殿|宫|城|村|镇|山|河|湖|海|门|间|内|外|里|中)[，,]`)
+var locationLeadLinePattern = regexp.MustCompile(`^[\p{Han}]{2,}(?:楼|堂|馆|店|铺|院|房|室|厨|厅|街|巷|路|园|场|殿|宫|城|村|镇|山|河|湖|海|门|间|内|外|里|中|屋|居|庄|司|厂)[，,]`)
 
 var actionOnlyLinePattern = regexp.MustCompile(`^[\p{Han}]{1,8}(?:缓缓|慢慢|轻轻|忽然|猛然|转身|抬头|低头|走|跑|拿|放|推|拉|看|望|站|坐|蹲|靠|握|举|切|揉|炒|煮|递|接|挥|指|叹|笑|哭|愣|震|顿|沉默|专注).+[。！]?$`)
 

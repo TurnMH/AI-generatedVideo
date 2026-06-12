@@ -8,6 +8,7 @@ import (
 
 var subtitleExtractPattern = regexp.MustCompile(`\[字幕[:：]\s*([^\]]+?)\s*\]`)
 var quotedSpeechPattern = regexp.MustCompile(`[“「『"]([^”」』"]+)[”」』"]`)
+var storyboardVisualKeywordPattern = regexp.MustCompile(`画面|构图|近景|中景|远景|景别|空镜|机位|运镜|特写|环境光线|背景简洁|神情|面露|身穿|穿着|身形对比|视觉`)
 
 // ExtractNarrationForSpeech pulls speakable narration from commentary scripts or misformatted drama scripts.
 func ExtractNarrationForSpeech(text string) string {
@@ -65,6 +66,31 @@ func ExtractNarrationForSpeech(text string) string {
 	}
 
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// LooksLikeStoryboardVisualDescription detects AI storyboard staging text in dialogue fields.
+func LooksLikeStoryboardVisualDescription(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if LooksLikeSceneDescription(text) {
+		return true
+	}
+	keywords := storyboardVisualKeywordPattern.FindAllString(text, -1)
+	if len(keywords) >= 2 {
+		return true
+	}
+	if strings.Contains(text, "内部，") && (strings.Contains(text, "神情") || strings.Contains(text, "表情") || strings.Contains(text, "光线")) {
+		return true
+	}
+	if LooksLikeCompleteUtterance(text) && len(keywords) == 0 {
+		return false
+	}
+	if len(keywords) == 1 {
+		return true
+	}
+	return false
 }
 
 // LooksLikeSceneDescription reports whether text is likely a visual/stage direction, not speakable narration.

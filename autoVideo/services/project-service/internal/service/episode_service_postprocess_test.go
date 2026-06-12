@@ -43,7 +43,7 @@ func TestPostProcessAdScenes_KeepsStructuralShiftBoundary(t *testing.T) {
 			Description: "[远景] 转场到仓库，客户进入新场景并接话",
 			Location:    "仓库",
 			Characters:  []string{"客户"},
-			Dialogue:    "好。",
+			Dialogue:    "好的，可以。",
 			Duration:    5,
 		},
 	}

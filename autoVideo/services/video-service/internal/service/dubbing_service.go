@@ -89,7 +89,7 @@ var nameOnlyLinePattern = regexp.MustCompile(`^[\p{Han}A-Za-z·]{1,8}[。！?？
 var sceneSettingLinePattern = regexp.MustCompile(`^(?:[\p{Han}A-Za-z0-9·]{2,30}[，,]\s*)?(?:清晨|早晨|早上|上午|中午|午后|傍晚|黄昏|夜里|夜晚|夜间|深夜|凌晨|日间|日出|日落)[，,]`)
 
 // locationLeadLinePattern matches location-led descriptive lines, e.g. "德聚楼后厨，…".
-var locationLeadLinePattern = regexp.MustCompile(`^[\p{Han}]{2,}(?:楼|堂|馆|店|院|房|室|厨|厅|街|巷|路|园|场|殿|宫|城|村|镇|山|河|湖|海|门|间|内|外|里|中)[，,]`)
+var locationLeadLinePattern = regexp.MustCompile(`^[\p{Han}]{2,}(?:楼|堂|馆|店|铺|院|房|室|厨|厅|街|巷|路|园|场|殿|宫|城|村|镇|山|河|湖|海|门|间|内|外|里|中|屋|居|庄|司|厂)[，,]`)
 
 // actionOnlyLinePattern matches pure action/staging lines without speakable dialogue.
 var actionOnlyLinePattern = regexp.MustCompile(`^[\p{Han}]{1,8}(?:缓缓|慢慢|轻轻|忽然|猛然|转身|抬头|低头|走|跑|拿|放|推|拉|看|望|站|坐|蹲|靠|握|举|切|揉|炒|煮|递|接|挥|指|叹|笑|哭|愣|震|顿|沉默|专注).+[。！]?$`)
@@ -156,6 +156,13 @@ func cleanScriptForSpeech(text string) string {
 			actionOnlyLinePattern.MatchString(line) ||
 			timeTransitionLinePattern.MatchString(line) {
 			continue
+		}
+		// Drop speaker lines whose content is visual/stage description only.
+		if m := speakerLinePattern.FindStringSubmatch(line); len(m) == 3 {
+			content := strings.TrimSpace(m[2])
+			if content == "" || looksLikeSpeakerVisualStaging(content) {
+				continue
+			}
 		}
 		// Normalize "角色（情绪）：台词" → "角色：台词".
 		if m := speakerWithEmotionLine.FindStringSubmatch(line); len(m) == 3 {
@@ -387,10 +394,11 @@ type speakerSegment struct {
 }
 
 type autoVoiceAssigner struct {
-	speakerVoices map[string]string
-	neutralIndex  int
-	femaleIndex   int
-	maleIndex     int
+	speakerVoices  map[string]string
+	neutralIndex   int
+	femaleIndex    int
+	maleIndex      int
+	narratorIndex  int
 }
 
 type DubbingService struct {
@@ -534,6 +542,34 @@ func (s *DubbingService) ListStoryboardTasks(ctx context.Context, projectID int6
 	return tasks, err
 }
 
+// ensureSpeakerLabelsForStoryboardDubbing prefixes unlabeled per-storyboard dialogue
+// so auto-voice can distinguish narration from character speech.
+func ensureSpeakerLabelsForStoryboardDubbing(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if text == "" {
+		return text
+	}
+	hasSpeaker := false
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if matches := speakerLinePattern.FindStringSubmatch(line); len(matches) == 3 {
+			speaker := normalizeSpeakerLabel(matches[1])
+			content := strings.TrimSpace(matches[2])
+			if speaker != "" && content != "" && isLikelySpeakerLabel(speaker) {
+				hasSpeaker = true
+				break
+			}
+		}
+	}
+	if hasSpeaker {
+		return text
+	}
+	return "旁白：" + text
+}
+
 // CreateStoryboardTask —— 创建分镜级别的配音任务
 // CreateStoryboardTask creates a dubbing task scoped to a specific storyboard.
 func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.DubbingTask, text string) error {
@@ -541,7 +577,9 @@ func (s *DubbingService) CreateStoryboardTask(ctx context.Context, task *model.D
 		return fmt.Errorf("storyboard_id is required")
 	}
 
-	cleanedText := strings.TrimSpace(cleanScriptForSpeech(text))
+	labeledText := normalizeMislabeledNarrationSpeakers(ensureSpeakerLabelsForStoryboardDubbing(text))
+	extractedText := extractStoryboardSpeechText(labeledText)
+	cleanedText := strings.TrimSpace(cleanScriptForSpeech(extractedText))
 	if cleanedText == "" {
 		return fmt.Errorf("spoken text is empty after cleanup")
 	}
@@ -1724,6 +1762,9 @@ func normalizeSpeakerLabel(label string) string {
 	label = strings.TrimSpace(label)
 	label = strings.ReplaceAll(label, " ", "")
 	for _, wrapper := range []string{"角色", "人物", "配音", "旁白", "台词"} {
+		if label == wrapper {
+			continue
+		}
 		label = strings.TrimPrefix(label, wrapper)
 	}
 	return label
@@ -1752,10 +1793,14 @@ func newAutoVoiceAssigner() *autoVoiceAssigner {
 	}
 }
 
+var autoVoiceNarratorCycle = []string{"narrator-male", "narrator-female", "male3", "warm-female"}
+
 func (a *autoVoiceAssigner) voiceForSpeaker(speaker string) string {
 	speaker = normalizeSpeakerLabel(speaker)
 	if speaker == "" || containsAny(speaker, autoVoiceNarratorHints) {
-		return "male3"
+		voiceKey := autoVoiceNarratorCycle[a.narratorIndex%len(autoVoiceNarratorCycle)]
+		a.narratorIndex++
+		return voiceKey
 	}
 	if voiceKey, ok := a.speakerVoices[speaker]; ok {
 		return voiceKey
