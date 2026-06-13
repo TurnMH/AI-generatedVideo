@@ -126,7 +126,7 @@ import { CharacterPanelStrip } from '@/components/projects/detail/CharacterPanel
 import { StoryboardDubbingPanel } from '@/components/projects/detail/StoryboardDubbingPanel'
 import { VoicePickerDialog } from '@/components/projects/detail/VoicePickerDialog'
 import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
-import { formatStoryboardDubbingText, extractStoryboardSpeechText } from '@/lib/projects/storyboard-dubbing'
+import { formatStoryboardDubbingText, extractStoryboardSpeechText, hasSpeakableStoryboardText } from '@/lib/projects/storyboard-dubbing'
 
 type TabKey = WorkflowStepKey
 
@@ -477,17 +477,25 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const handleAggregateDialogues = async (episodeId: number) => {
     setAggregatingDialogues((prev) => ({ ...prev, [episodeId]: true }))
     try {
-      const res = await storyboardAPI.listAll(projectId, { episode_id: episodeId }) as { data?: { id: number; sequence_number: number; dialogue?: string }[] }
-      const dialogues = (res?.data ?? [])
-        .sort((a, b) => a.sequence_number - b.sequence_number)
-        .map((sb) => sb.dialogue || '')
-        .filter(Boolean)
-      if (dialogues.length === 0) {
+      const res = await storyboardAPI.listAll(projectId, { episode_id: episodeId }) as {
+        data?: Array<{
+          id: number
+          sequence_number: number
+          dialogue?: string
+          scene_description?: string
+          characters?: string[]
+        }>
+      }
+      const storyboards = (res?.data ?? []).sort((a, b) => a.sequence_number - b.sequence_number)
+      if (storyboards.length === 0) {
         toast({ title: '当前集暂无分镜台词，请先生成分镜', variant: 'destructive' })
         return
       }
-      const aggregated = dialogues
-        .map((dialogue) => extractStoryboardSpeechText({ dialogue, characters: [] }, { isCommentary: isCommentaryProject }))
+      const aggregated = storyboards
+        .map((sb) => formatStoryboardDubbingText(
+          { dialogue: sb.dialogue || '', characters: sb.characters || [], scene_description: sb.scene_description || '' },
+          { isCommentary: isCommentaryProject },
+        ))
         .filter(Boolean)
         .join('\n')
       if (!aggregated) {
@@ -496,7 +504,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
       }
       setDubbingDrafts((prev) => ({ ...prev, [episodeId]: aggregated }))
       setSubtitleDrafts((prev) => ({ ...prev, [episodeId]: aggregated }))
-      toast({ title: `已从 ${dialogues.length} 个分镜提取台词`, variant: 'success' })
+      toast({ title: `已从 ${storyboards.length} 个分镜提取台词`, variant: 'success' })
     } catch {
       toast({ title: '提取分镜台词失败', variant: 'destructive' })
     } finally {

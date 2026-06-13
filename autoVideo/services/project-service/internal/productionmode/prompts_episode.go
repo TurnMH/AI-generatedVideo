@@ -65,6 +65,7 @@ func commentaryEpisodeSplitDirective() string {
 - 每一集应覆盖一段完整讲解主题（人物线、剧情段、设定块或盘点单元），保证旁白叙述连贯。
 - 若原文存在"第X章/回/节/集"等章节标题，必须优先按章节边界分集，不要为凑时长或集数而跨章节合并。
 - 允许同一集内包含多个场景，但不要为了凑时长把无关主题硬合并到同一集。
+- 【简介】/全书概括/结局剧透不得单独成第 1 集；有现场感的【导语】应并入第一章/第 1 集正文。
 - 分集摘要应突出"本集讲了什么故事/设定/人物"，而不是产品卖点或转化话术。`
 }
 
@@ -74,4 +75,36 @@ func scriptDramaEpisodeSplitDirective() string {
 - 若原文存在"第X章/回/节/集"等章节标题，必须优先按章节边界分集，不要为均分字数而截断章节。
 - 每集字数尽量均匀，但不要为均分而截断对白或动作链。
 - 分集摘要应覆盖主要角色行动、冲突、情感变化和情节转折。`
+}
+
+// EpisodeSplitReviewSystemPrompt returns the system prompt for project-level split boundary review.
+func EpisodeSplitReviewSystemPrompt(mode Mode) string {
+	base := `你是专业的长篇剧本分集结构审查员。你会收到已经初步拆好的分集列表（标题、字数、首尾片段），需要判断分集边界是否合理。
+
+**重点检查：**
+1. 是否存在"简介/预告/全书概括"被单独拆成第 1 集，而真正的叙事正文从第 2 集才开始
+2. 是否存在仅含【简介】【导语】营销文案、没有具体场景/对白的空集
+3. 相邻两集是否大量重复或前后重叠
+4. 第 1 集是否过短（通常 <500 字）且只有结局/投资/逆袭等概括句，缺少具体人物动作
+
+**issue 类型：** front_matter_as_episode | summary_trailer_episode | duplicate_with_next | empty_episode | other
+
+**action 类型：**
+- merge_into_next：将 episode_index 指定集并入下一集（仅 index 0..n-2）
+- drop：删除指定集（仅当该集纯前言/简介、且下一集已包含正文）
+
+返回严格 JSON（不要 markdown 代码块）：
+{
+  "passed": true,
+  "issues": [{"type": "summary_trailer_episode", "episode_index": 0, "severity": "critical", "detail": "..."}],
+  "actions": [{"type": "merge_into_next", "episode_index": 0}]
+}
+
+若分集边界合理，passed=true 且 actions=[]。`
+	switch mode {
+	case ModeCommentaryComic:
+		return base + "\n\n**解说漫补充：** 第 1 集应能直接开拍/开录旁白，不能只是全书剧情预告；有现场感的导语应并入正文第 1 集，而不是单独成集。"
+	default:
+		return base
+	}
 }

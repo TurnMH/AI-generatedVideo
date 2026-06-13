@@ -77,6 +77,21 @@ func TestCleanPerClipDialogue_StripsStageDirections(t *testing.T) {
 	}
 }
 
+func TestFormatStoryboardDubbingFromFields_SplitsNarrationAndCharacter(t *testing.T) {
+	dialogue := "三个月后，德聚楼陷入危机，王大发求助\n一口汤一百万，不讲价\n一口汤一百万，不讲价"
+	scene := `包子铺内，刘师傅专注揉面。王大发小心走进铺内，轻声唤："刘师傅。"`
+	got := formatStoryboardDubbingFromFields(dialogue, scene, []string{"刘师傅", "王大发"}, true)
+	if !strings.Contains(got, "旁白：三个月后，德聚楼陷入危机，王大发求助") {
+		t.Fatalf("missing narration: %q", got)
+	}
+	if !strings.Contains(got, "王大发：刘师傅。") {
+		t.Fatalf("missing character quote: %q", got)
+	}
+	if strings.Count(got, "一口汤一百万，不讲价") > 1 {
+		t.Fatalf("expected deduped narration, got %q", got)
+	}
+}
+
 func TestCreateStoryboardTaskFlow_EmptyVisualOnly(t *testing.T) {
 	visual := "旁白：包子铺内部，刘师傅神情沉着冷静，画面近景突出两人表情，环境光线柔和。"
 	extracted := extractStoryboardSpeechText(ensureSpeakerLabelsForStoryboardDubbing(visual))

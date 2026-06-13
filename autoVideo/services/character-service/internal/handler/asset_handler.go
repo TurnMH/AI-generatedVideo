@@ -838,8 +838,6 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
 		jwtToken = parts[1]
 	}
-	skipStoryboardTrigger := strings.EqualFold(c.GetHeader("X-Autovideo-Skip-Storyboard-Trigger"), "true")
-
 	go func() {
 		h.extractSem <- struct{}{}
 		defer func() { <-h.extractSem }()
@@ -852,11 +850,7 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 				)
 			}
 		}()
-		extractCtx := context.Background()
-		if skipStoryboardTrigger {
-			extractCtx = service.WithSkipStoryboardTrigger(extractCtx)
-		}
-		if _, err := h.extractSvc.ExtractFromEpisode(extractCtx, pid, eid, jwtToken); err != nil {
+		if _, err := h.extractSvc.ExtractFromEpisode(context.Background(), pid, eid, jwtToken); err != nil {
 			h.logger.Error("async episode extraction failed",
 				zap.Uint64("project_id", pid),
 				zap.Uint64("episode_id", eid),

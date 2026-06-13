@@ -21,18 +21,20 @@ const SCENE_SETTING =
 const SCREENPLAY_ACTION =
   /^[\u4e00-\u9fffA-Za-z0-9·\s]{1,16}[（(][^)）]{0,30}[）)]\s*[\u4e00-\u9fffA-Za-z]/u
 
-const NAME_ONLY = /^[\u4e00-\u9fffA-Za-z·]{1,8}[。！?？]?$/u
-
-const ACTION_ONLY =
-  /^[\u4e00-\u9fff]{1,8}(?:缓缓|慢慢|轻轻|忽然|猛然|转身|抬头|低头|走|跑|拿|放|推|拉|看|望|站|坐|蹲|靠|握|举|切|揉|炒|煮|递|接|挥|指|叹|笑|哭|愣|震|顿|沉默|专注).+[。！]?$/u
-
-const TIME_TRANSITION =
-  /^(?:\d+年[前后]?|\d+个?月[前后]?|三天后|翌日|次日|同时|此时|那一刻|三个月前|一年前|数日后|片刻后)[。！]?$/u
-
 const VISUAL_KEYWORDS =
   /画面|构图|近景|中景|远景|景别|空镜|机位|运镜|特写|环境光线|背景简洁|神情|面露|身穿|穿着|身形对比|视觉/gu
 
+const SPEAKER_BEFORE_QUOTE =
+  /([\u4e00-\u9fffA-Za-z·]{2,8})(?:[（(][^)）]{0,16}[）)])?(?:[^"「『"]{0,32})?(?:说|喊|叫|问|答|回应|道|唤|开口|低声|轻声|沉声|冷声|怒|笑)[^"「『"]{0,12}[""「『"]/u
+
 export type StoryboardVoiceRole = 'narrator' | 'character' | 'mixed'
+
+export type CharacterQuote = {
+  speaker: string
+  quote: string
+}
+
+export type StoryboardSpeechInput = Pick<Storyboard, 'dialogue' | 'characters' | 'scene_description'>
 
 export function hasExplicitSpeakerLabel(text: string): boolean {
   const trimmed = text.trim()
@@ -76,7 +78,6 @@ function looksLikeSpeakerVisualStaging(text: string): boolean {
     return true
   }
   if (looksLikeCompleteUtterance(trimmed) && keywords.length === 0) return false
-  if (TIME_TRANSITION.test(trimmed)) return true
   if (SCREENPLAY_ACTION.test(trimmed) && !looksLikeCompleteUtterance(trimmed)) return true
   if (keywords.length === 1) return true
   return false
@@ -103,35 +104,111 @@ function extractQuotedSpeechLines(text: string): string {
   return parts.join('\n').trim()
 }
 
-/** Pull speakable narration from mixed storyboard dialogue (strip visual/staging text). */
-export function extractStoryboardSpeechText(
-  storyboard: Pick<Storyboard, 'dialogue' | 'characters'>,
-  options?: { isCommentary?: boolean },
-): string {
-  const raw = (storyboard.dialogue || '').trim()
-  if (!raw) return ''
+function normalizeCharacterName(name: string): string {
+  return name.trim().replace(/^[\[(（【]+|[\])）】]+$/g, '').trim()
+}
 
-  const subtitleNarration = extractSubtitleTagNarration(raw)
-  if (subtitleNarration) return subtitleNarration
+function pickFallbackSpeaker(characters: string[], quote: string): string {
+  for (const name of characters) {
+    const normalized = normalizeCharacterName(name)
+    if (normalized && normalized !== quote) return normalized
+  }
+  return ''
+}
 
-  const quoted = extractQuotedSpeechLines(raw)
-  if (quoted) return quoted
+function inferSpeakerBeforeQuote(before: string, characters: string[], quote: string): string {
+  const trimmedBefore = before.trim()
+  if (!trimmedBefore) return pickFallbackSpeaker(characters, quote)
 
-  if (options?.isCommentary) {
-    const narrationLines = raw
+  const speakerMatch = trimmedBefore.match(SPEAKER_BEFORE_QUOTE)
+  if (speakerMatch?.[1]) {
+    const speaker = normalizeCharacterName(speakerMatch[1])
+    if (speaker && speaker !== quote) return speaker
+  }
+
+  let lastIdx = -1
+  let lastName = ''
+  for (const name of characters) {
+    const normalized = normalizeCharacterName(name)
+    if (!normalized || normalized === quote) continue
+    const idx = trimmedBefore.lastIndexOf(normalized)
+    if (idx > lastIdx) {
+      lastIdx = idx
+      lastName = normalized
+    }
+  }
+  if (lastName) return lastName
+  return pickFallbackSpeaker(characters, quote)
+}
+
+/** Extract quoted character lines from scene/action descriptions. */
+export function extractCharacterQuotesFromScene(
+  sceneText: string,
+  characters: string[] = [],
+): CharacterQuote[] {
+  const text = sceneText.trim()
+  if (!text) return []
+
+  const results: CharacterQuote[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(QUOTED_SPEECH)) {
+    const quote = match[1]?.trim()
+    if (!quote || quote.length > 120) continue
+    if (looksLikeStoryboardVisualDescription(quote) || looksLikeSceneDescription(quote)) continue
+
+    const start = match.index ?? 0
+    const before = text.slice(Math.max(0, start - 48), start)
+    const speaker = inferSpeakerBeforeQuote(before, characters, quote)
+    if (!speaker) continue
+
+    const key = `${speaker}\0${quote}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    results.push({ speaker, quote })
+  }
+  return results
+}
+
+function dedupeSpeechLines(lines: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+function extractNarrationFromDialogue(raw: string, isCommentary?: boolean): string[] {
+  const text = raw.trim()
+  if (!text) return []
+
+  const subtitleNarration = extractSubtitleTagNarration(text)
+  if (subtitleNarration) {
+    return dedupeSpeechLines(subtitleNarration.split('\n').map((line) => line.trim()).filter(Boolean))
+  }
+
+  if (isCommentary) {
+    const narrationLines = text
       .replace(/\r\n?/g, '\n')
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line && !/^(?:【\s*)?(?:内景|外景|内外景)/u.test(line))
       .map((line) => line.replace(/^[\u3400-\u4dbf\u4e00-\u9fffA-Za-z·]{1,8}[（(][^)）]{0,24}[）)]\s*/, '').trim())
-      .filter((line) => line.length >= 10 && !looksLikeStoryboardVisualDescription(line))
+      .filter((line) => {
+        if (!line) return false
+        if (SPEAKER_LINE.test(line) && !NARRATOR_SPEAKER.test(line.match(SPEAKER_LINE)?.[1] ?? '')) return false
+        return line.length >= 6 && !looksLikeStoryboardVisualDescription(line)
+      })
     if (narrationLines.length > 0) {
-      return narrationLines.join('\n').trim()
+      return dedupeSpeechLines(narrationLines)
     }
   }
 
   const parts: string[] = []
-  for (const rawLine of raw.replace(/\r\n?/g, '\n').split('\n')) {
+  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
     const line = rawLine.trim()
     if (!line) continue
 
@@ -139,29 +216,53 @@ export function extractStoryboardSpeechText(
     if (speakerMatch?.[1] && speakerMatch?.[2]) {
       const speaker = speakerMatch[1].trim()
       const content = speakerMatch[2].trim()
-      if (!content || looksLikeSpeakerVisualStaging(content)) continue
-      parts.push(`${speaker}：${content}`)
+      if (NARRATOR_SPEAKER.test(speaker.replace(/\s+/g, ''))) {
+        if (content && !looksLikeSpeakerVisualStaging(content)) parts.push(content)
+      }
       continue
     }
 
     if (looksLikeStoryboardVisualDescription(line)) continue
-    if ([...line].length >= 6 && !looksLikeSceneDescription(line)) {
+    if ([...line].length >= 6 && !looksLikeSceneDescription(line) && !extractQuotedSpeechLines(line)) {
       parts.push(line)
     }
   }
+  return dedupeSpeechLines(parts)
+}
 
-  return parts.join('\n').trim()
+function extractCharacterLinesFromDialogue(raw: string): string[] {
+  const lines: string[] = []
+  for (const rawLine of raw.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const speakerMatch = line.match(SPEAKER_LINE)
+    if (!speakerMatch?.[1] || !speakerMatch?.[2]) continue
+    const speaker = speakerMatch[1].trim()
+    const content = speakerMatch[2].trim()
+    if (!content || NARRATOR_SPEAKER.test(speaker.replace(/\s+/g, ''))) continue
+    if (looksLikeSpeakerVisualStaging(content)) continue
+    lines.push(`${speaker}：${content}`)
+  }
+  return dedupeSpeechLines(lines)
+}
+
+/** Pull speakable narration from mixed storyboard dialogue (strip visual/staging text). */
+export function extractStoryboardSpeechText(
+  storyboard: StoryboardSpeechInput,
+  options?: { isCommentary?: boolean },
+): string {
+  return formatStoryboardDubbingText(storyboard, options)
 }
 
 export function hasSpeakableStoryboardText(
-  storyboard: Pick<Storyboard, 'dialogue' | 'characters'>,
+  storyboard: StoryboardSpeechInput,
   options?: { isCommentary?: boolean },
 ): boolean {
   return extractStoryboardSpeechText(storyboard, options).length > 0
 }
 
 export function detectStoryboardVoiceRole(
-  storyboard: Pick<Storyboard, 'dialogue' | 'characters'>,
+  storyboard: StoryboardSpeechInput,
 ): StoryboardVoiceRole {
   const text = extractStoryboardSpeechText(storyboard)
   if (!text) return 'narrator'
@@ -183,7 +284,6 @@ export function detectStoryboardVoiceRole(
   return 'narrator'
 }
 
-/** Format storyboard dialogue for TTS with explicit speaker labels. */
 function shouldRelabelAsNarrator(speaker: string, content: string): boolean {
   const normalizedSpeaker = speaker.replace(/\s+/g, '')
   const trimmedContent = content.trim()
@@ -219,20 +319,43 @@ function normalizeMislabeledNarrationSpeakers(text: string): string {
     .join('\n')
 }
 
+/** Format storyboard dialogue for TTS: narration as 旁白, quoted character lines with speaker labels. */
 export function formatStoryboardDubbingText(
-  storyboard: Pick<Storyboard, 'dialogue' | 'characters'>,
+  storyboard: StoryboardSpeechInput,
   options?: { isCommentary?: boolean },
 ): string {
-  const extracted = extractStoryboardSpeechText(storyboard, options)
-  if (!extracted) return ''
-  const normalized = normalizeMislabeledNarrationSpeakers(extracted)
-  if (hasExplicitSpeakerLabel(normalized)) return normalized
-
   const chars = (storyboard.characters || []).map((name) => name.trim()).filter(Boolean)
-  if (!options?.isCommentary && chars.length === 1) {
-    return `${chars[0]}：${normalized}`
+  const rawDialogue = (storyboard.dialogue || '').trim()
+  const parts: string[] = []
+
+  const narrationLines = extractNarrationFromDialogue(rawDialogue, options?.isCommentary)
+  for (const line of narrationLines) {
+    parts.push(`旁白：${line}`)
   }
-  return `旁白：${normalized}`
+
+  const dialogueCharacterLines = extractCharacterLinesFromDialogue(rawDialogue)
+  const sceneQuotes = extractCharacterQuotesFromScene(storyboard.scene_description || '', chars)
+
+  const characterLines = [...dialogueCharacterLines]
+  for (const { speaker, quote } of sceneQuotes) {
+    const labeled = `${speaker}：${quote}`
+    if (characterLines.includes(labeled)) continue
+    if (narrationLines.some((line) => line.includes(quote))) continue
+    characterLines.push(labeled)
+  }
+
+  parts.push(...characterLines)
+
+  if (parts.length === 0) {
+    const quoted = extractQuotedSpeechLines(rawDialogue)
+    if (quoted) {
+      if (!options?.isCommentary && chars.length === 1) return `${chars[0]}：${quoted}`
+      return `旁白：${quoted}`
+    }
+    return ''
+  }
+
+  return normalizeMislabeledNarrationSpeakers(parts.join('\n'))
 }
 
 export function getStoryboardVoiceRoleLabel(role: StoryboardVoiceRole): string {

@@ -1519,6 +1519,25 @@ func resolveEdgeVoice(voiceKey string) string {
 	return EdgeVoices["default"]
 }
 
+// spokenTextWithoutSpeakerLabels removes routing labels like "旁白：" before fixed-voice TTS.
+func spokenTextWithoutSpeakerLabels(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if text == "" {
+		return text
+	}
+	segments := parseSpeakerSegments(text)
+	if len(segments) == 0 {
+		return text
+	}
+	parts := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if content := strings.TrimSpace(segment.Text); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
 func buildDubbingChunks(text, voiceModel string) []dubbingChunk {
 	return buildDubbingChunksWithCharVoices(text, voiceModel, nil)
 }
@@ -1532,6 +1551,12 @@ func buildDubbingChunksWithCharVoices(text, voiceModel string, charVoiceMap map[
 		return nil
 	}
 	if !isAutoVoiceModel(voiceModel) {
+		// Strip speaker labels (e.g. "旁白：") so fixed-voice TTS only reads speakable content.
+		text = spokenTextWithoutSpeakerLabels(text)
+		text = strings.TrimSpace(cleanScriptForSpeech(text))
+		if text == "" {
+			return nil
+		}
 		parts := splitTextChunks(text, maxChunkRunes)
 		chunks := make([]dubbingChunk, 0, len(parts))
 		for _, part := range parts {

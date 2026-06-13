@@ -25,6 +25,7 @@ import (
 	"github.com/autovideo/project-service/internal/model"
 	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/repository"
+	"github.com/autovideo/project-service/internal/scriptsplit"
 	"github.com/autovideo/project-service/internal/speechtext"
 	"github.com/autovideo/project-service/internal/stylepreset"
 )
@@ -507,6 +508,40 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 	return nil
 }
 
+func (s *EpisodeService) triggerEpisodeAssetGeneration(ctx context.Context, projectID, episodeID uint64) error {
+	if !s.autoAssetPipelineReady() {
+		return nil
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets/generate-all?episode_id=%d", s.characterBaseURL, projectID, episodeID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("trigger episode asset generation failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if s.logger != nil {
+		s.logger.Info("triggered episode asset generation",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("episode_id", episodeID),
+		)
+	}
+	return nil
+}
+
 type episodeAssetSnapshot struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -571,6 +606,98 @@ func countSettledEpisodeAssets(assets []episodeAssetSnapshot) int {
 		count++
 	}
 	return count
+}
+
+func (s *EpisodeService) listProjectAssetSnapshots(ctx context.Context, projectID uint64) ([]episodeAssetSnapshot, error) {
+	if !s.autoAssetPipelineReady() {
+		return nil, nil
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets?page=1&page_size=500", s.characterBaseURL, projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("list project assets failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var paged struct {
+		Data struct {
+			Items []episodeAssetSnapshot `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &paged); err == nil && len(paged.Data.Items) > 0 {
+		return paged.Data.Items, nil
+	}
+	var legacy struct {
+		Data []episodeAssetSnapshot `json:"data"`
+	}
+	if err := json.Unmarshal(body, &legacy); err == nil {
+		return legacy.Data, nil
+	}
+	return nil, nil
+}
+
+// waitForProjectAssetExtraction blocks until all async episode/project extractions finish.
+func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, projectID uint64, expectDispatch bool) error {
+	if !s.autoAssetPipelineReady() {
+		return nil
+	}
+	const dispatchGrace = 45 * time.Second
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	started := time.Now()
+
+	for {
+		assets, err := s.listProjectAssetSnapshots(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		if episodeAssetExtractionInFlight(assets) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+		if !expectDispatch || countSettledEpisodeAssets(assets) > 0 {
+			if s.logger != nil {
+				s.logger.Info("project asset extraction settled before storyboard split",
+					zap.Uint64("project_id", projectID),
+					zap.Int("asset_count", countSettledEpisodeAssets(assets)),
+					zap.Bool("expect_dispatch", expectDispatch),
+				)
+			}
+			return nil
+		}
+		if time.Since(started) < dispatchGrace {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+		if s.logger != nil {
+			s.logger.Warn("project asset extraction sentinel did not appear within grace window; continuing storyboard split",
+				zap.Uint64("project_id", projectID),
+				zap.Duration("grace", dispatchGrace),
+			)
+		}
+		return nil
+	}
 }
 
 // waitForEpisodeAssetExtraction blocks until async episode extraction finishes or the context expires.
@@ -798,12 +925,20 @@ func (s *EpisodeService) extractAssetsAfterSplit(ctx context.Context, projectID 
 		return
 	}
 
-	firstEpisode := episodes[0]
-	for i := range episodes {
-		if episodes[i].EpisodeNumber > 0 && episodes[i].EpisodeNumber < firstEpisode.EpisodeNumber {
-			firstEpisode = episodes[i]
+	sorted := append([]model.Episode(nil), episodes...)
+	sort.Slice(sorted, func(i, j int) bool {
+		left, right := sorted[i].EpisodeNumber, sorted[j].EpisodeNumber
+		if left <= 0 {
+			left = int(sorted[i].ID)
 		}
-	}
+		if right <= 0 {
+			right = int(sorted[j].ID)
+		}
+		if left == right {
+			return sorted[i].ID < sorted[j].ID
+		}
+		return left < right
+	})
 
 	if err := s.deleteExistingAssets(ctx, projectID); err != nil {
 		if s.logger != nil {
@@ -815,23 +950,42 @@ func (s *EpisodeService) extractAssetsAfterSplit(ctx context.Context, projectID 
 		return // don't proceed — we'd create duplicate assets
 	}
 
-	if err := s.extractAssetsForEpisode(ctx, projectID, uint64(firstEpisode.ID)); err != nil {
+	dispatched := 0
+	for _, ep := range sorted {
+		if err := s.extractAssetsForEpisode(ctx, projectID, ep.ID); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("episode asset extraction dispatch failed",
+					zap.Uint64("project_id", projectID),
+					zap.Uint64("episode_id", ep.ID),
+					zap.Int("episode_number", ep.EpisodeNumber),
+					zap.Error(err),
+				)
+			}
+			continue
+		}
+		dispatched++
+	}
+	if dispatched == 0 {
 		if s.logger != nil {
-			s.logger.Warn("default episode asset extraction failed",
+			s.logger.Warn("no episode asset extraction requests were dispatched",
 				zap.Uint64("project_id", projectID),
-				zap.Uint64("episode_id", uint64(firstEpisode.ID)),
-				zap.Int("episode_number", firstEpisode.EpisodeNumber),
-				zap.Error(err),
+				zap.Int("episode_count", len(sorted)),
 			)
 		}
 		return
 	}
-	if s.logger != nil {
-		s.logger.Info("default episode asset extraction completed; remaining episodes require manual start",
+
+	if err := s.waitForProjectAssetExtraction(ctx, projectID, true); err != nil && s.logger != nil {
+		s.logger.Warn("project asset extraction did not fully settle before storyboard split; continuing",
 			zap.Uint64("project_id", projectID),
-			zap.Uint64("episode_id", uint64(firstEpisode.ID)),
-			zap.Int("episode_number", firstEpisode.EpisodeNumber),
-			zap.Int("remaining_episodes", max(len(episodes)-1, 0)),
+			zap.Int("dispatched_episodes", dispatched),
+			zap.Error(err),
+		)
+	}
+	if s.logger != nil {
+		s.logger.Info("episode asset extraction completed for all dispatched episodes",
+			zap.Uint64("project_id", projectID),
+			zap.Int("episode_count", dispatched),
 		)
 	}
 }
@@ -2250,6 +2404,22 @@ func (s *EpisodeService) launchEpisodeAutoPipelineJob(project model.Project, epi
 		defer func() {
 			if opts.TriggerStoryboards && !timedOut && processedEpisodes >= 1 && s.storyboardSvc != nil {
 				epID := episode.ID
+				if opts.TriggerAssets {
+					if err := s.waitForEpisodeAssetExtraction(autoCtx, project.ID, epID, true); err != nil && s.logger != nil {
+						s.logger.Warn("auto pipeline asset extraction did not settle before generation",
+							zap.Uint64("project_id", project.ID),
+							zap.Uint64("episode_id", epID),
+							zap.Error(err),
+						)
+					}
+					if err := s.triggerEpisodeAssetGeneration(autoCtx, project.ID, epID); err != nil && s.logger != nil {
+						s.logger.Warn("auto pipeline episode asset generation failed",
+							zap.Uint64("project_id", project.ID),
+							zap.Uint64("episode_id", epID),
+							zap.Error(err),
+						)
+					}
+				}
 				if s.logger != nil {
 					s.logger.Info("auto pipeline finished; triggering storyboard extraction",
 						zap.Uint64("project_id", project.ID),
@@ -2584,6 +2754,26 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	}
 
 	// Priority: chapter markers → user keywords → LLM estimate → simple fallback
+	// Normalize front matter (简介/营销块) before structural split.
+	originalScriptText := strings.TrimSpace(scriptText)
+	normOptimized := scriptsplit.NormalizeForEpisodeSplit(optimizedScriptText)
+	optimizedScriptText = normOptimized.Text
+	normOriginal := scriptsplit.NormalizeForEpisodeSplit(originalScriptText)
+	normalizedOriginalScript := normOriginal.Text
+	if synopsis := strings.TrimSpace(firstNonEmpty(normOptimized.StrippedSynopsis, normOriginal.StrippedSynopsis)); synopsis != "" {
+		if strings.TrimSpace(project.Description) == "" {
+			_ = s.projectRepo.UpdateDescription(projectID, synopsis)
+			project.Description = synopsis
+		}
+		if s.logger != nil && (normOptimized.Changed || normOriginal.Changed) {
+			s.logger.Info("script front matter normalized before episode split",
+				zap.Uint64("project_id", projectID),
+				zap.Strings("removed_blocks", normOptimized.RemovedBlocks),
+				zap.Int("synopsis_chars", utf8.RuneCountInString(synopsis)),
+			)
+		}
+	}
+
 	// ══════════════════════════════════════════════════════════════════════════
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
@@ -2592,9 +2782,10 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		AutoSplit:    &autoSplitProgress,
 	})
 
-	episodes, splitMethod := resolveStructuralEpisodeSplit(optimizedScriptText, strings.TrimSpace(scriptText), kwLib.SplitKeywords)
+	episodes, splitMethod := resolveStructuralEpisodeSplit(optimizedScriptText, normalizedOriginalScript, kwLib.SplitKeywords)
 
 	chapterSplit := len(episodes) > 0
+	llmSplitUsed := false
 
 	if s.logger != nil {
 		s.logger.Info("episode split result",
@@ -2627,6 +2818,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			writingHints := s.fetchWritingSkillHints(splitCtx, projectID)
 			episodes, err = s.callLLMSplit(splitCtx, project, optimizedScriptText, targetEpisodes, &kwLib, writingHints, productionProfile)
 			cancelSplit()
+			llmSplitUsed = err == nil && len(episodes) > 0
 			if err != nil {
 				episodes = s.simpleSplit(optimizedScriptText, targetEpisodes, productionProfile)
 			}
@@ -2646,6 +2838,8 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		s.enrichEpisodesParallel(enrichCtx, project, episodes, &kwLib, chapterWritingHints)
 		cancelEnrich()
 	}
+
+	episodes = s.repairEpisodeSplitStructure(ctx, episodes, splitMethod, llmSplitUsed, productionProfile)
 
 	if s.logger != nil {
 		s.logger.Info("episodes split complete",
@@ -3162,6 +3356,13 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			storyboardDialogue := scene.Dialogue
 			if productionProfile.IsCommentaryComic() {
 				storyboardDialogue = speechtext.FinalizeCommentaryDialogue(storyboardDialogue)
+			}
+			if quotes := speechtext.ExtractCharacterQuotesFromScene(desc, chars); len(quotes) > 0 {
+				var extras []string
+				for _, q := range quotes {
+					extras = append(extras, q.Speaker+"："+q.Quote)
+				}
+				storyboardDialogue = strings.TrimSpace(storyboardDialogue + "\n" + strings.Join(extras, "\n"))
 			}
 
 			_, err := s.storyboardSvc.Create(projectID, CreateStoryboardReq{
@@ -4246,6 +4447,8 @@ func (s *EpisodeService) callLLMSplit(ctx context.Context, project *model.Projec
 - 如果原文有明显的章节/幕/段落分割标记，优先参考这些自然分界线
 - 确保每集字数大致均匀，控制在总字数的 1/%d 左右浮动
 - 分集时注意关键词库中的人物/地点，确保情节连贯
+- 禁止把【简介】/全书概括/结局剧透单独拆成第 1 集；第 1 集必须从具体叙事场景或第一章正文开始
+- 有现场感的【导语】应并入第 1 集正文，不要单独成集
 
 **输出要求：**
 对每一集，请提供：
@@ -5185,12 +5388,12 @@ func (s *EpisodeService) fillExcerptsFromBoundaries(scriptText string, episodes 
 
 // resolveStructuralEpisodeSplit prefers chapter headings, then user-provided split keywords.
 func resolveStructuralEpisodeSplit(optimizedScript, originalScript string, splitKeywords []string) ([]llmEpisode, string) {
-	if episodes := splitByChapters(optimizedScript); len(episodes) > 0 {
+	if episodes := draftEpisodesToLLM(scriptsplit.SplitByChapters(optimizedScript)); len(episodes) > 0 {
 		return episodes, "chapters"
 	}
 	originalScript = strings.TrimSpace(originalScript)
 	if originalScript != "" && originalScript != strings.TrimSpace(optimizedScript) {
-		if episodes := splitByChapters(originalScript); len(episodes) > 0 {
+		if episodes := draftEpisodesToLLM(scriptsplit.SplitByChapters(originalScript)); len(episodes) > 0 {
 			return episodes, "chapters_original"
 		}
 	}
@@ -5198,6 +5401,42 @@ func resolveStructuralEpisodeSplit(optimizedScript, originalScript string, split
 		return episodes, "user_keywords"
 	}
 	return nil, ""
+}
+
+func draftEpisodesToLLM(drafts []scriptsplit.DraftEpisode) []llmEpisode {
+	if len(drafts) == 0 {
+		return nil
+	}
+	out := make([]llmEpisode, 0, len(drafts))
+	for _, d := range drafts {
+		out = append(out, llmEpisode{
+			Title:   d.Title,
+			Summary: d.Summary,
+			Excerpt: d.Excerpt,
+		})
+	}
+	return out
+}
+
+func llmEpisodesToDrafts(episodes []llmEpisode) []scriptsplit.DraftEpisode {
+	out := make([]scriptsplit.DraftEpisode, 0, len(episodes))
+	for _, ep := range episodes {
+		out = append(out, scriptsplit.DraftEpisode{
+			Title:   ep.Title,
+			Summary: ep.Summary,
+			Excerpt: ep.Excerpt,
+		})
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // splitByUserKeywords —— 按用户提供的分集关键词在文本中定位并拆分为剧集
@@ -5235,10 +5474,10 @@ func splitByUserKeywords(text string, keywords []string) []llmEpisode {
 
 	var episodes []llmEpisode
 
-	// Include text before first keyword if substantial
+	// Include text before first keyword only when it looks like narrative lead-in.
 	if markers[0].pos > 100 {
 		preText := strings.TrimSpace(text[:markers[0].pos])
-		if preText != "" {
+		if preText != "" && shouldKeepKeywordPrologue(preText) {
 			summary := preText
 			if utf8.RuneCountInString(summary) > 200 {
 				summary = string([]rune(summary)[:200]) + "..."
@@ -5288,73 +5527,20 @@ func splitByUserKeywords(text string, keywords []string) []llmEpisode {
 	return episodes
 }
 
-// splitByChapters detects chapter markers in the text and splits by chapter boundaries.
-// Supports common Chinese formats: 第X回, 第X章, 第X节, 第X集, 第X卷, 第X幕
-// as well as: Chapter X, CHAPTER X, 序章, 楔子, 尾声, etc.
+func shouldKeepKeywordPrologue(preText string) bool {
+	preText = strings.TrimSpace(preText)
+	if preText == "" || utf8.RuneCountInString(preText) <= 100 {
+		return false
+	}
+	if strings.Contains(preText, "【简介】") || strings.HasPrefix(preText, "简介") {
+		return false
+	}
+	return !scriptsplit.LooksLikeSynopsisOnly(preText)
+}
+
+// splitByChapters is kept for tests that call it directly.
 func splitByChapters(text string) []llmEpisode {
-	// Regex matches common chapter heading patterns at the start of a line
-	chapterRe := regexp.MustCompile(
-		`(?m)^[　 \t]*(` +
-			`第[零一二三四五六七八九十百千万\d]+[回章节集卷幕]` + // 第X回/章/节/集/卷/幕
-			`|Chapter\s+\d+` + // Chapter 1
-			`|CHAPTER\s+\d+` + // CHAPTER 1
-			`|序[章言幕]` + // 序章/序言/序幕
-			`|楔\s*子` + // 楔子
-			`|引\s*子` + // 引子
-			`|尾\s*声` + // 尾声
-			`|终\s*章` + // 终章
-			`|番\s*外` + // 番外
-			`)[　 \t]*(.*)$`,
-	)
-
-	matches := chapterRe.FindAllStringIndex(text, -1)
-	if len(matches) == 0 {
-		// No chapter markers found
-		return nil
-	}
-
-	var episodes []llmEpisode
-	for i, loc := range matches {
-		start := loc[0]
-		end := len(text)
-		if i+1 < len(matches) {
-			end = matches[i+1][0]
-		}
-
-		chapterText := strings.TrimSpace(text[start:end])
-		if chapterText == "" {
-			continue
-		}
-
-		// Extract title from the first line (the chapter heading)
-		firstNewline := strings.IndexAny(chapterText, "\n\r")
-		title := chapterText
-		if firstNewline > 0 {
-			title = strings.TrimSpace(chapterText[:firstNewline])
-		}
-		// Limit title length
-		if utf8.RuneCountInString(title) > 50 {
-			title = string([]rune(title)[:50])
-		}
-
-		// Generate summary from first ~200 chars of body (after title)
-		body := chapterText
-		if firstNewline > 0 && firstNewline < len(chapterText) {
-			body = strings.TrimSpace(chapterText[firstNewline:])
-		}
-		summary := body
-		if utf8.RuneCountInString(summary) > 200 {
-			summary = string([]rune(summary)[:200]) + "..."
-		}
-
-		episodes = append(episodes, llmEpisode{
-			Title:   title,
-			Summary: summary,
-			Excerpt: chapterText,
-		})
-	}
-
-	return episodes
+	return draftEpisodesToLLM(scriptsplit.SplitByChapters(text))
 }
 
 type adSemanticUnit struct {
@@ -5975,6 +6161,114 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 	var result OptimizedEpisode
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("parse optimized JSON: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *EpisodeService) repairEpisodeSplitStructure(ctx context.Context, episodes []llmEpisode, splitMethod string, llmSplitUsed bool, profile productionmode.Profile) []llmEpisode {
+	if len(episodes) == 0 {
+		return episodes
+	}
+
+	drafts := llmEpisodesToDrafts(episodes)
+	repaired, ruleActions := scriptsplit.RepairSplit(drafts)
+	needsReview := llmSplitUsed || splitMethod == "" || splitMethod == "user_keywords" || scriptsplit.NeedsStructuralReview(repaired)
+
+	if needsReview && s.llmBaseURL != "" && s.llmAPIKey != "" {
+		if review, err := s.callLLMSplitStructureReview(ctx, repaired, profile); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("episode split structure review failed; using rule-based repair only", zap.Error(err))
+			}
+		} else if review != nil && !review.Passed && len(review.Actions) > 0 {
+			repaired = scriptsplit.ApplySplitReviewActions(repaired, review.Actions)
+			if s.logger != nil {
+				s.logger.Info("episode split structure repaired by LLM review",
+					zap.Int("actions", len(review.Actions)),
+					zap.Strings("rule_actions", ruleActions),
+				)
+			}
+		}
+	} else if len(ruleActions) > 0 && s.logger != nil {
+		s.logger.Info("episode split structure repaired by rules",
+			zap.Strings("actions", ruleActions),
+			zap.String("split_method", splitMethod),
+		)
+	}
+
+	if len(repaired) == 0 {
+		return episodes
+	}
+	return draftEpisodesToLLM(repaired)
+}
+
+func (s *EpisodeService) callLLMSplitStructureReview(ctx context.Context, episodes []scriptsplit.DraftEpisode, profile productionmode.Profile) (*scriptsplit.SplitReviewResult, error) {
+	if len(episodes) == 0 {
+		return &scriptsplit.SplitReviewResult{Passed: true}, nil
+	}
+
+	var b strings.Builder
+	for i, ep := range episodes {
+		excerpt := strings.TrimSpace(ep.Excerpt)
+		start := excerpt
+		end := excerpt
+		runes := []rune(excerpt)
+		if len(runes) > 80 {
+			start = string(runes[:80])
+			end = string(runes[len(runes)-80:])
+		}
+		fmt.Fprintf(&b, "第 %d 集 | title=%q | chars=%d | start=%q | end=%q\n",
+			i+1, ep.Title, utf8.RuneCountInString(excerpt), start, end)
+	}
+
+	systemPrompt := productionmode.EpisodeSplitReviewSystemPrompt(profile.Mode)
+	reqBody := map[string]interface{}{
+		"model": s.llmModel,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": "请审查以下分集边界是否合理：\n\n" + b.String()},
+		},
+		"temperature":     0.2,
+		"max_tokens":      2048,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+	data, _ := json.Marshal(reqBody)
+
+	reviewCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reviewCtx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("LLM split review request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LLM split review responded %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var llmResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &llmResp); err != nil {
+		return nil, fmt.Errorf("parse split review response: %w", err)
+	}
+	if len(llmResp.Choices) == 0 {
+		return nil, errors.New("llm split review returned no choices")
+	}
+
+	var result scriptsplit.SplitReviewResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(llmResp.Choices[0].Message.Content)), &result); err != nil {
+		return nil, fmt.Errorf("parse split review json: %w", err)
 	}
 	return &result, nil
 }

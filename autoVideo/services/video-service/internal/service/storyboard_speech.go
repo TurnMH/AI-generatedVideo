@@ -104,6 +104,216 @@ func extractQuotedSpeech(text string) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+type characterQuote struct {
+	Speaker string
+	Quote   string
+}
+
+var speakerBeforeQuotePattern = regexp.MustCompile(`([\p{Han}A-Za-z·]{2,8})(?:[（(][^)）]{0,16}[）)])?(?:[^"「『"]{0,32})?(?:说|喊|叫|问|答|回应|道|唤|开口|低声|轻声|沉声|冷声|怒|笑)[^"「『"]{0,12}[“「『"]`)
+
+func extractCharacterQuotesFromScene(sceneText string, characters []string) []characterQuote {
+	sceneText = strings.TrimSpace(strings.ReplaceAll(sceneText, "\r\n", "\n"))
+	if sceneText == "" {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]characterQuote, 0, 4)
+	for _, m := range quotedSpeechPattern.FindAllStringSubmatchIndex(sceneText, -1) {
+		if len(m) < 4 {
+			continue
+		}
+		quote := strings.TrimSpace(sceneText[m[2]:m[3]])
+		if quote == "" || utf8.RuneCountInString(quote) > 120 {
+			continue
+		}
+		if looksLikeStoryboardVisualDescription(quote) || looksLikeSceneDescription(quote) {
+			continue
+		}
+		start := m[0]
+		prefixStart := start - 48
+		if prefixStart < 0 {
+			prefixStart = 0
+		}
+		before := sceneText[prefixStart:start]
+		speaker := inferSpeakerBeforeQuote(before, characters, quote)
+		if speaker == "" {
+			continue
+		}
+		key := speaker + "\x00" + quote
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, characterQuote{Speaker: speaker, Quote: quote})
+	}
+	return out
+}
+
+func inferSpeakerBeforeQuote(before string, characters []string, quote string) string {
+	before = strings.TrimSpace(before)
+	if before == "" {
+		return pickFallbackSpeaker(characters, quote)
+	}
+	if m := speakerBeforeQuotePattern.FindStringSubmatch(before); len(m) >= 2 {
+		if speaker := normalizeSpeakerLabel(m[1]); speaker != "" && speaker != quote {
+			return speaker
+		}
+	}
+	lastIdx := -1
+	lastName := ""
+	for _, name := range characters {
+		n := normalizeSpeakerLabel(name)
+		if n == "" || n == quote {
+			continue
+		}
+		if idx := strings.LastIndex(before, n); idx > lastIdx {
+			lastIdx = idx
+			lastName = n
+		}
+	}
+	if lastName != "" {
+		return lastName
+	}
+	return pickFallbackSpeaker(characters, quote)
+}
+
+func pickFallbackSpeaker(characters []string, quote string) string {
+	for _, name := range characters {
+		n := normalizeSpeakerLabel(name)
+		if n == "" || n == quote {
+			continue
+		}
+		return n
+	}
+	return ""
+}
+
+func dedupeSpeechLines(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		out = append(out, line)
+	}
+	return out
+}
+
+func formatStoryboardDubbingFromFields(dialogue, sceneDescription string, characters []string, commentary bool) string {
+	dialogue = strings.TrimSpace(strings.ReplaceAll(dialogue, "\r\n", "\n"))
+	sceneDescription = strings.TrimSpace(strings.ReplaceAll(sceneDescription, "\r\n", "\n"))
+	var parts []string
+
+	for _, line := range extractNarrationLinesFromDialogue(dialogue, commentary) {
+		parts = append(parts, "旁白："+line)
+	}
+	for _, line := range extractCharacterLinesFromDialogue(dialogue) {
+		parts = append(parts, line)
+	}
+	for _, q := range extractCharacterQuotesFromScene(sceneDescription, characters) {
+		line := q.Speaker + "：" + q.Quote
+		if containsSpeechLine(parts, line) {
+			continue
+		}
+		parts = append(parts, line)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return normalizeMislabeledNarrationSpeakers(strings.Join(parts, "\n"))
+}
+
+func containsSpeechLine(parts []string, want string) bool {
+	for _, part := range parts {
+		if part == want {
+			return true
+		}
+	}
+	return false
+}
+
+func extractNarrationLinesFromDialogue(dialogue string, commentary bool) []string {
+	if dialogue == "" {
+		return nil
+	}
+	if narr := extractSubtitleTagNarration(dialogue); narr != "" {
+		return dedupeSpeechLines(strings.Split(narr, "\n"))
+	}
+	if commentary {
+		var lines []string
+		for _, rawLine := range strings.Split(dialogue, "\n") {
+			line := strings.TrimSpace(rawLine)
+			if line == "" {
+				continue
+			}
+			if m := speakerLinePattern.FindStringSubmatch(line); len(m) == 3 {
+				speaker := normalizeSpeakerLabel(m[1])
+				content := strings.TrimSpace(m[2])
+				if speaker != "" && content != "" && isLikelySpeakerLabel(speaker) {
+					for _, hint := range autoVoiceNarratorHints {
+						if strings.Contains(speaker, hint) {
+							lines = append(lines, content)
+							break
+						}
+					}
+				}
+				continue
+			}
+			if looksLikeStoryboardVisualDescription(line) || looksLikeSceneDescription(line) {
+				continue
+			}
+			if utf8.RuneCountInString(line) >= 6 && extractQuotedSpeech(line) == "" {
+				lines = append(lines, line)
+			}
+		}
+		return dedupeSpeechLines(lines)
+	}
+	return dedupeSpeechLines([]string{strings.TrimSpace(extractStoryboardSpeechText(dialogue))})
+}
+
+func extractCharacterLinesFromDialogue(dialogue string) []string {
+	if dialogue == "" {
+		return nil
+	}
+	var lines []string
+	for _, rawLine := range strings.Split(dialogue, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		m := speakerLinePattern.FindStringSubmatch(line)
+		if len(m) != 3 {
+			continue
+		}
+		speaker := normalizeSpeakerLabel(m[1])
+		content := strings.TrimSpace(m[2])
+		if speaker == "" || content == "" || !isLikelySpeakerLabel(speaker) {
+			continue
+		}
+		isNarrator := false
+		for _, hint := range autoVoiceNarratorHints {
+			if strings.Contains(speaker, hint) {
+				isNarrator = true
+				break
+			}
+		}
+		if isNarrator || looksLikeSpeakerVisualStaging(content) {
+			continue
+		}
+		lines = append(lines, speaker+"："+content)
+	}
+	return dedupeSpeechLines(lines)
+}
+
 // extractStoryboardSpeechText pulls speakable narration from mixed storyboard dialogue fields.
 func extractStoryboardSpeechText(text string) string {
 	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
@@ -242,6 +452,10 @@ func cleanPerClipDialogue(text string) string {
 }
 
 func cleanPerClipDialogueForMode(text string, commentary bool) string {
+	if strings.Contains(text, "：") && speakerLinePattern.MatchString(text) {
+		text = normalizeMislabeledNarrationSpeakers(text)
+		return strings.TrimSpace(cleanScriptForSpeech(text))
+	}
 	text = ensureSpeakerLabelsForStoryboardDubbing(text)
 	text = normalizeMislabeledNarrationSpeakers(text)
 	if commentary {

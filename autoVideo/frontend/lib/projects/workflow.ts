@@ -291,7 +291,7 @@ export function buildProjectOverview({
   } else if (!hasAssets && assetActive === 0) {
     nextAction = {
       title: '建议先提取项目资源',
-      description: '资源提取是镜头拆分与出图的统一起点，完成后系统会自动推进后续阶段。',
+      description: '识别资源条目后，可在各集点击「自动处理本集」或在工作台手动生成资源图与拆分分镜。',
       cta: '开始资源提取',
       type: 'extract_assets',
     }

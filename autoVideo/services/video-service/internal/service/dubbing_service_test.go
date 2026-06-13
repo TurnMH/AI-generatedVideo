@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestBuildDubbingChunksAutoAssignsDistinctVoices(t *testing.T) {
 	chunks := buildDubbingChunks("旁白：清晨的阳光照进卧室。\n女主：我先去洗漱。\n男主：我等你。", autoVoiceModel)
@@ -52,5 +55,18 @@ func TestParseSpeakerSegmentsIgnoresStageDirectionLabels(t *testing.T) {
 	}
 	if segments[2].Speaker != "" {
 		t.Fatalf("expected camera direction to stay unlabeled, got %q", segments[2].Speaker)
+	}
+}
+
+func TestBuildDubbingChunksDefaultVoiceStripsSpeakerLabels(t *testing.T) {
+	chunks := buildDubbingChunks("旁白：我在德聚楼掌勺三十年，却被老板遣退", "default")
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0].Text != "我在德聚楼掌勺三十年，却被老板遣退" {
+		t.Fatalf("expected speaker label stripped, got %q", chunks[0].Text)
+	}
+	if strings.Contains(chunks[0].Text, "旁白") {
+		t.Fatalf("TTS text must not contain speaker label, got %q", chunks[0].Text)
 	}
 }

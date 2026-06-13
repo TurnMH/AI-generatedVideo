@@ -71,7 +71,8 @@ export function getEpisodePipelineRunningLabel(input: {
   if (episode.review_status === 'reviewing') return '剧本审查中…'
   if (assetExtracting) return '资源提取中…'
   if (assetGenerating) return '资源生成中…'
-  if (episode.status === 'scene_splitting' || storyboardGenerating) return '分镜拆分中…'
+  if (episode.status === 'scene_splitting') return '分镜拆分中…'
+  if (storyboardGenerating) return '分镜出图中…'
   return '自动处理中…'
 }
 

@@ -1,9 +1,16 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/autovideo/project-service/internal/scriptsplit"
+)
 
 func TestResolveStructuralEpisodeSplit_PrefersChaptersOverKeywords(t *testing.T) {
-	script := "前言内容。\n第一章 开端\n第一段。\n第二章 转折\n第二段。"
+	chapterBody := strings.Repeat("这是第一章的正文内容，人物开始行动。", 8)
+	chapterBody2 := strings.Repeat("这是第二章的正文内容，剧情继续推进。", 8)
+	script := "前言内容。\n第一章 开端\n" + chapterBody + "\n第二章 转折\n" + chapterBody2
 	keywords := []string{"第一章 开端", "第二章 转折"}
 
 	episodes, method := resolveStructuralEpisodeSplit(script, script, keywords)
@@ -16,7 +23,9 @@ func TestResolveStructuralEpisodeSplit_PrefersChaptersOverKeywords(t *testing.T)
 }
 
 func TestResolveStructuralEpisodeSplit_FallsBackToOriginalScriptChapters(t *testing.T) {
-	original := "第一章 开端\n第一段。\n第二章 转折\n第二段。"
+	chapterBody := strings.Repeat("这是第一章的正文内容，人物开始行动。", 8)
+	chapterBody2 := strings.Repeat("这是第二章的正文内容，剧情继续推进。", 8)
+	original := "第一章 开端\n" + chapterBody + "\n第二章 转折\n" + chapterBody2
 	optimized := "第一段。\n第二段。"
 
 	episodes, method := resolveStructuralEpisodeSplit(optimized, original, nil)
@@ -38,5 +47,33 @@ func TestResolveStructuralEpisodeSplit_UsesKeywordsWhenNoChapters(t *testing.T) 
 	}
 	if len(episodes) < 2 {
 		t.Fatalf("expected keyword split episodes, got %d", len(episodes))
+	}
+}
+
+func TestResolveStructuralEpisodeSplit_NumericChapters(t *testing.T) {
+	script := scriptsplit.NormalizeForEpisodeSplit(strings.TrimSpace(`
+【简介】
+这是一本关于包子铺逆袭的小说。
+
+【导语】
+天还没亮，包子铺里已经飘出麦香。王大发揉着面团，门外有人轻声唤他：“刘师傅。”
+
+01
+
+第一段正文，王大发把塑料桶往地上一墩，陈大鹏从后厨探出头，两人开始准备开门营业。
+
+02
+
+第二段正文，门外排队的人渐渐多了起来，包子铺的蒸汽弥漫整条街。`)).Text
+
+	episodes, method := resolveStructuralEpisodeSplit(script, script, nil)
+	if method != "chapters" {
+		t.Fatalf("expected chapters split for numeric markers, got method=%q", method)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected 2 chapter episodes, got %d", len(episodes))
+	}
+	if !strings.Contains(episodes[0].Excerpt, "刘师傅") {
+		t.Fatalf("prologue should merge into first episode")
 	}
 }

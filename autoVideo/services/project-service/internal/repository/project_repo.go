@@ -138,6 +138,13 @@ func (r *ProjectRepo) UpdateKeywordLibrary(id uint64, keywordLibrary json.RawMes
 		Update("keyword_library", keywordLibrary).Error
 }
 
+// UpdateDescription updates only the description column for a project.
+func (r *ProjectRepo) UpdateDescription(id uint64, description string) error {
+	return r.db.Model(&model.Project{}).
+		Where("id = ?", id).
+		Update("description", description).Error
+}
+
 // SoftDelete —— 按 ID 和用户 ID 软删除项目
 // SoftDelete soft-deletes a project by ID with ownership check.
 func (r *ProjectRepo) SoftDelete(id, userID uint64) error {

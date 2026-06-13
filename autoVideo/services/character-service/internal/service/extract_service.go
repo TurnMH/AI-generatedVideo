@@ -162,19 +162,6 @@ func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) 
 	return resumed, nil
 }
 
-type extractContextKey string
-
-const skipStoryboardTriggerContextKey extractContextKey = "skipStoryboardTrigger"
-
-func WithSkipStoryboardTrigger(ctx context.Context) context.Context {
-	return context.WithValue(ctx, skipStoryboardTriggerContextKey, true)
-}
-
-func shouldSkipStoryboardTrigger(ctx context.Context) bool {
-	skip, _ := ctx.Value(skipStoryboardTriggerContextKey).(bool)
-	return skip
-}
-
 type extractedAsset struct {
 	Type        string  `json:"type"`
 	Name        string  `json:"name"`
@@ -299,80 +286,6 @@ func (s *ExtractService) upsertExtractedAsset(projectID uint64, assetType, name,
 		return nil, createErr
 	}
 	return asset, nil
-}
-
-func (s *ExtractService) triggerStoryboardExtraction(ctx context.Context, projectID uint64, episodeID *uint64, jwtToken string) error {
-	if strings.TrimSpace(s.projectServiceURL) == "" {
-		return nil
-	}
-
-	path := fmt.Sprintf("/api/v1/projects/%d/episodes/extract-storyboards", projectID)
-	fields := []zap.Field{zap.Uint64("project_id", projectID), zap.Bool("single_episode", episodeID != nil)}
-	if episodeID != nil {
-		path = fmt.Sprintf("/api/v1/projects/%d/episodes/%d/extract-storyboards", projectID, *episodeID)
-		fields = append(fields, zap.Uint64("episode_id", *episodeID))
-	}
-
-	url := s.projectServiceURL + path
-	client := &http.Client{Timeout: 20 * time.Minute}
-	const maxAttempts = 5
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(jwtToken) != "" {
-			req.Header.Set("Authorization", "Bearer "+jwtToken)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if episodeID != nil {
-			req.Header.Set("X-Autovideo-Skip-Asset-Refresh", "true")
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-		} else {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode < http.StatusBadRequest {
-				lastErr = nil
-				break
-			}
-			lastErr = fmt.Errorf("trigger storyboard extraction failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
-			if resp.StatusCode < http.StatusInternalServerError {
-				return lastErr
-			}
-		}
-
-		if attempt == maxAttempts {
-			break
-		}
-		backoff := time.Duration(attempt) * 2 * time.Second
-		if s.logger != nil {
-			retryFields := append([]zap.Field{}, fields...)
-			retryFields = append(retryFields,
-				zap.Int("attempt", attempt),
-				zap.Duration("backoff", backoff),
-				zap.Error(lastErr),
-			)
-			s.logger.Warn("storyboard extraction callback failed; retrying", retryFields...)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-
-	if s.logger != nil {
-		s.logger.Info("triggered storyboard extraction after asset extraction", fields...)
-	}
-	return nil
 }
 
 // ExtractFromProject —— 从项目剧本和分集内容中通过 LLM 提取资源（角色/场景/道具），支持分块并行提取和去重
@@ -545,28 +458,9 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 		zap.Int("count", len(created)),
 	)
 
-	triggered, err := s.assetSvc.GenerateAll(projectID, nil, "", nil, "", nil, false)
-	if err != nil {
-		s.logger.Warn("auto trigger project asset generation after extraction failed",
-			zap.Uint64("project_id", projectID),
-			zap.Error(err),
-		)
-	} else if triggered > 0 {
-		s.logger.Info("auto triggered project asset generation after extraction",
-			zap.Uint64("project_id", projectID),
-			zap.Int("triggered", triggered),
-		)
-	}
-
 	// Auto-match voices for all project assets after extraction
 	if _, err := s.assetSvc.AutoMatchVoices(projectID); err != nil {
 		s.logger.Warn("auto-match voices after project extraction", zap.Error(err))
-	}
-	if err := s.triggerStoryboardExtraction(ctx, projectID, nil, jwtToken); err != nil {
-		s.logger.Warn("auto trigger project storyboard extraction after asset extraction failed",
-			zap.Uint64("project_id", projectID),
-			zap.Error(err),
-		)
 	}
 
 	return created, nil
@@ -671,40 +565,9 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 		zap.Int("count", len(created)),
 	)
 
-	triggered, err := s.assetSvc.GenerateAll(projectID, &episodeID, "", nil, "", nil, false)
-	if err != nil {
-		s.logger.Warn("auto trigger episode asset generation after extraction failed",
-			zap.Uint64("project_id", projectID),
-			zap.Uint64("episode_id", episodeID),
-			zap.Error(err),
-		)
-	} else if triggered > 0 {
-		s.logger.Info("auto triggered episode asset generation after extraction",
-			zap.Uint64("project_id", projectID),
-			zap.Uint64("episode_id", episodeID),
-			zap.Int("triggered", triggered),
-		)
-	}
-
 	// Auto-match voices after episode extraction
 	if _, err := s.assetSvc.AutoMatchVoices(projectID); err != nil {
 		s.logger.Warn("auto-match voices after episode extraction", zap.Error(err))
-	}
-	if shouldSkipStoryboardTrigger(ctx) {
-		if s.logger != nil {
-			s.logger.Info("skip storyboard extraction callback after episode asset extraction",
-				zap.Uint64("project_id", projectID),
-				zap.Uint64("episode_id", episodeID),
-			)
-		}
-		return created, nil
-	}
-	if err := s.triggerStoryboardExtraction(ctx, projectID, &episodeID, jwtToken); err != nil {
-		s.logger.Warn("auto trigger episode storyboard extraction after asset extraction failed",
-			zap.Uint64("project_id", projectID),
-			zap.Uint64("episode_id", episodeID),
-			zap.Error(err),
-		)
 	}
 
 	return created, nil

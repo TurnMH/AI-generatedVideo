@@ -127,7 +127,7 @@ export function deriveVideoPipelineSnapshot(input: PipelineInput): VideoPipeline
 
   const progressMessage = formatProgressMessage(progress)
   const nextStepHint = progress?.next_step?.trim()
-    || (splitDone && !storyboardDone ? '分集已完成。系统已自动处理第 1 集作为示范，其余分集请在左侧列表点击「自动处理」。' : '上传剧本后会自动开始分集。')
+    || (splitDone && !storyboardDone ? '分集已完成。可在各集列表点击「自动处理本集」，或进入各集工作台手动提取资源与拆分分镜。' : '上传剧本后会自动开始分集。')
 
   const episodeSplitTotal = progress?.episode_split?.total ?? episodes.length
   const episodeSplitCompleted = progress?.episode_split?.completed ?? (splitDone ? episodes.length : 0)
