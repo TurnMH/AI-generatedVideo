@@ -7,7 +7,9 @@ import {
   Film, ImageIcon, LayoutGrid, Layers, Pause, Play,
   RefreshCw, Sparkles, Video, Zap,
 } from 'lucide-react'
-import { pipelineAPI, projectAPI, scriptAPI, storyboardAPI, videoAPI } from '@/lib/api'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
+import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
+import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
 import type { Project, Storyboard } from '@/types'
 import { TaskQueue } from '@/components/task/TaskQueue'
 import { Button } from '@/components/ui/button'
@@ -212,6 +214,7 @@ export default function GeneratePage() {
   }
 
   const buildVideoLaunchPlan = (storyboards: Storyboard[]): VideoLaunchPlan => {
+    const isCommentary = detectCommentaryProject(project)
     const ordered = [...storyboards].sort((a, b) => a.sequence_number - b.sequence_number)
     const serialGroups = new Map<string, Storyboard[]>()
     const eligibleSbs: Storyboard[] = []
@@ -266,8 +269,8 @@ export default function GeneratePage() {
       }
       const bucket = byEpisode.get(episodeId)!
       bucket.imageUrls.push(sb.image_url || '')
-      bucket.descriptions.push(sb.prompt_used || sb.scene_description || '')
-      bucket.dialogues.push(sb.dialogue || '')
+      bucket.descriptions.push(buildVideoSceneDescription(sb))
+      bucket.dialogues.push(formatStoryboardSpeechForVideo(sb, { isCommentary, project }))
       bucket.durations.push(sb.duration || 0)
       bucket.cameras.push(sb.camera_movement || '')
       bucket.moods.push(sb.mood || '')

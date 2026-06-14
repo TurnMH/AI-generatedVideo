@@ -251,7 +251,7 @@ func (r *StoryboardRepo) FindByProjectAndStatuses(projectID uint64, episodeID *u
 func (r *StoryboardRepo) ResetEpisodeCompletedToPending(projectID, episodeID uint64) (int64, error) {
 	result := r.db.Model(&model.Storyboard{}).
 		Where("project_id = ? AND episode_id = ? AND status = ? AND is_voided = ?", projectID, episodeID, "completed", false).
-		Updates(map[string]interface{}{"status": "pending", "image_url": "", "error_message": ""})
+		Updates(map[string]interface{}{"status": "pending", "image_url": "", "error_msg": ""})
 	return result.RowsAffected, result.Error
 }
 

@@ -4,12 +4,14 @@ import "fmt"
 
 // SceneSplitParams carries shared inputs for scene-split prompt construction.
 type SceneSplitParams struct {
-	EpisodeNum      int
-	Content         string
-	RefDuration     int
-	ModelDuration   string
-	VisualHint      string
-	SpeechHint      string
+	EpisodeNum    int
+	Content       string
+	RefDuration   int
+	ModelDuration string
+	VisualHint    string
+	SpeechHint    string
+	StylePreset   string
+	StyleHint     string
 }
 
 // SceneSplitUserPrompt returns the user prompt for a single scene-split LLM call.
@@ -77,8 +79,13 @@ func comicsSceneSplitPrompt(p SceneSplitParams) string {
 }
 
 func adSceneSplitPrompt(p SceneSplitParams) string {
+	styleBlock := SceneSplitStyleBlock(p)
+	styleSection := ""
+	if styleBlock != "" {
+		styleSection = "\n" + styleBlock + "\n"
+	}
 	return fmt.Sprintf(`你是一位专业的分镜师和摄影指导。请将以下第 %d 集的内容按"台词 / 口播为主、画面辅助承载"的原则拆分为适合广告成片的分镜。
-
+%s
 **核心原则：以台词 / 口播拆分为主，时长优先。**
 当前目标是优先按单分镜时长判断一段台词 / 口播能否在一个镜头内完整承载，而不是追求"最小视觉单位"。如果同一段口播、同一段卖点说明在当前目标时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜，不要过度拆镜。
 
@@ -113,12 +120,17 @@ func adSceneSplitPrompt(p SceneSplitParams) string {
 ]}
 
 第 %d 集内容：
-%s`, p.EpisodeNum, p.ModelDuration, p.VisualHint, p.SpeechHint, p.RefDuration, p.EpisodeNum, p.Content)
+%s`, p.EpisodeNum, styleSection, p.ModelDuration, p.VisualHint, p.SpeechHint, p.RefDuration, p.EpisodeNum, p.Content)
 }
 
 func commentarySceneSplitPrompt(p SceneSplitParams) string {
+	styleBlock := SceneSplitStyleBlock(p)
+	styleSection := ""
+	if styleBlock != "" {
+		styleSection = "\n" + styleBlock + "\n"
+	}
 	return fmt.Sprintf(`你是一位专业的解说漫分镜师。请将以下第 %d 集的内容拆分为适合旁白驱动漫画风视频的分镜。
-
+%s
 **核心原则：旁白段落优先，画面配合叙事，宁多勿少。**
 - 以旁白/解说句群为拆分主轴：每当旁白进入新信息点、新人物、新剧情段、新场景或新情绪节点，优先拆成新分镜
 - 不要把多段无关旁白硬合并到一个镜头；也不要为了凑时长把完整旁白段拆得过碎
@@ -152,12 +164,17 @@ func commentarySceneSplitPrompt(p SceneSplitParams) string {
 ]}
 
 第 %d 集内容：
-%s`, p.EpisodeNum, p.ModelDuration, p.VisualHint, p.SpeechHint, p.RefDuration, p.EpisodeNum, p.Content)
+%s`, p.EpisodeNum, styleSection, p.ModelDuration, p.VisualHint, p.SpeechHint, p.RefDuration, p.EpisodeNum, p.Content)
 }
 
 func scriptDramaSceneSplitPrompt(p SceneSplitParams) string {
+	styleBlock := SceneSplitStyleBlock(p)
+	styleSection := ""
+	if styleBlock != "" {
+		styleSection = "\n" + styleBlock + "\n"
+	}
 	return fmt.Sprintf(`你是一位专业的影视分镜师和摄影指导。请将以下第 %d 集的内容拆分为适合短剧/剧本视频制作的分镜。
-
+%s
 **核心原则：按可视叙事节拍拆分，不是广告口播合并，也不是漫画格最小化。**
 - 以场景切换、人物动作链、对白回合、情绪转折、冲突升级为拆分依据
 - 同一连续动作链可拆成 2-4 个递进分镜，保持动作前后承接
@@ -184,7 +201,7 @@ func scriptDramaSceneSplitPrompt(p SceneSplitParams) string {
 ]}
 
 第 %d 集内容：
-%s`, p.EpisodeNum, p.ModelDuration, p.VisualHint, p.RefDuration, p.EpisodeNum, p.Content)
+%s`, p.EpisodeNum, styleSection, p.ModelDuration, p.VisualHint, p.RefDuration, p.EpisodeNum, p.Content)
 }
 
 func comicsSceneSplitSystemPrompt() string {

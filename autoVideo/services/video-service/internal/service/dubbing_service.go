@@ -1538,6 +1538,19 @@ func spokenTextWithoutSpeakerLabels(text string) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+// SpokenTextForPlayback strips routing labels such as "旁白：" before native audio,
+// subtitle burn-in, or prompt embedding. Labels remain useful upstream for voice routing.
+func SpokenTextForPlayback(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if text == "" {
+		return ""
+	}
+	if out := spokenTextWithoutSpeakerLabels(text); out != "" {
+		return out
+	}
+	return text
+}
+
 func buildDubbingChunks(text, voiceModel string) []dubbingChunk {
 	return buildDubbingChunksWithCharVoices(text, voiceModel, nil)
 }

@@ -102,6 +102,13 @@ export function EpisodeWorkspace({
           sbPauseTrigger={ws.sbPauseTrigger}
           sbResumeTrigger={ws.sbResumeTrigger}
           sbAuditTrigger={ws.sbAuditTrigger}
+          onSbGenerateTriggerConsumed={() => ws.setSbGenerateTrigger(0)}
+          onSbRegenerateTriggerConsumed={() => ws.setSbRegenerateTrigger(0)}
+          onSbPauseTriggerConsumed={() => ws.setSbPauseTrigger(0)}
+          onSbResumeTriggerConsumed={() => ws.setSbResumeTrigger(0)}
+          onSbAuditTriggerConsumed={() => ws.setSbAuditTrigger(0)}
+          onGenerateTriggerConsumed={() => ws.setGenerateTrigger(0)}
+          onRegenerateTriggerConsumed={() => ws.setRegenerateTrigger(0)}
           onExtractAssets={ws.handleExtractAssets}
           onExtractStoryboards={ws.handleExtractStoryboards}
         />

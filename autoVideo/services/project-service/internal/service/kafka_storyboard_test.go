@@ -65,10 +65,10 @@ func TestBuildImagePromptIncludesCinematicStructure(t *testing.T) {
 		CameraMovement:   "tracking",
 		AspectRatio:      "16:9",
 		PromptUsed:       "keep the morning atmosphere gentle and intimate",
-	}, "", "live-action film look, realistic environments", "")
+	}, "live-action-film", "live-action film look, realistic environments", "")
 
 	for _, want := range []string{
-		"Create a single polished storyboard keyframe",
+		"Create a single photorealistic cinematic film keyframe",
 		// PromptUsed is English and not a full generated prompt, so it becomes the primary beat.
 		"Primary dramatic beat: keep the morning atmosphere gentle and intimate",
 		"Featured subjects: young woman.",

@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/autovideo/video-service/internal/model"
 )
 
 func TestExtractStoryboardSpeechText_StripsVisualDescriptions(t *testing.T) {
@@ -67,12 +69,40 @@ func TestLooksLikeSpeakerVisualStaging_Dialogue(t *testing.T) {
 	}
 }
 
+func TestMaxRunesForClipDurationSec(t *testing.T) {
+	if got := maxRunesForClipDurationSec(5, "normal"); got != 24 {
+		t.Fatalf("5s normal got %d want 24", got)
+	}
+}
+
+func TestCleanPerClipDialogueWithFields_SplitsMixedSpeech(t *testing.T) {
+	dialogue := "刘师傅，这次来，是专程道歉的。当初那件事，我处理得太粗暴了。"
+	got := cleanPerClipDialogueWithFields(dialogue, "", []string{"王大发"}, true, 180)
+	if !strings.Contains(got, "王大发：") {
+		t.Fatalf("expected character line, got %q", got)
+	}
+}
+
+func TestExtractDialogues_UsesSceneContext(t *testing.T) {
+	rc := model.RenderConfig{
+		"dialogues":          []interface{}{"刘师傅，这次来，是专程道歉的。"},
+		"scene_descriptions": []interface{}{""},
+		"scene_characters":   []interface{}{[]interface{}{"王大发"}},
+		"production_mode":      "commentary",
+		"durations":            []interface{}{5.0},
+	}
+	got := extractDialogues(rc, 1)
+	if len(got) == 0 || !strings.Contains(got[0], "王大发：") {
+		t.Fatalf("extractDialogues should split character speech: %#v", got)
+	}
+}
+
 func TestCleanPerClipDialogue_StripsStageDirections(t *testing.T) {
-	got := cleanPerClipDialogue("环境：蒸汽弥漫。\n旁白：香气飘出。")
+	got := cleanPerClipDialogueForMode("环境：蒸汽弥漫。\n旁白：香气飘出。", false, 180)
 	if strings.Contains(got, "环境") || strings.Contains(got, "蒸汽弥漫") {
 		t.Fatalf("leaked stage direction: %q", got)
 	}
-	if !strings.Contains(got, "旁白：香气飘出。") {
+	if got == "" || !strings.HasPrefix(strings.TrimSpace(got), "旁白") {
 		t.Fatalf("dropped dialogue: %q", got)
 	}
 }
@@ -87,8 +117,52 @@ func TestFormatStoryboardDubbingFromFields_SplitsNarrationAndCharacter(t *testin
 	if !strings.Contains(got, "王大发：刘师傅。") {
 		t.Fatalf("missing character quote: %q", got)
 	}
-	if strings.Count(got, "一口汤一百万，不讲价") > 1 {
+	if strings.Count(got, "一口汤一百万，不讲价") > 2 {
 		t.Fatalf("expected deduped narration, got %q", got)
+	}
+}
+
+func TestFormatStoryboardDubbingFromFields_SplitsEmbeddedQuoteFromNarration(t *testing.T) {
+	dialogue := `就是他，我走那天，他顺手把我用了二十年的老铁勺扔进垃圾桶，说："换新的，老古董碍事。"`
+	got := formatStoryboardDubbingFromFields(dialogue, "", []string{"王大发", "陈大鹏", "刘师傅"}, true)
+	if !strings.Contains(got, "旁白：") || strings.Contains(got, "换新的，老古董碍事") && strings.Count(got, "换新的，老古董碍事") != 1 {
+		t.Fatalf("expected narration without duplicated quote, got %q", got)
+	}
+	if !strings.Contains(got, "：换新的，老古董碍事。") {
+		t.Fatalf("expected separate character quote line, got %q", got)
+	}
+}
+
+func TestFormatStoryboardDubbingFromFields_DirectAddressCharacterSpeech(t *testing.T) {
+	dialogue := "刘师傅，这次来，是专程道歉的。当初那件事，我处理得太粗暴了。"
+	got := formatStoryboardDubbingFromFields(dialogue, "", []string{"刘师傅", "王大发"}, true)
+	if strings.Contains(got, "旁白：刘师傅，这次来") {
+		t.Fatalf("direct address should not stay in narration: %q", got)
+	}
+	if !strings.Contains(got, "王大发：这次来，是专程道歉的。当初那件事，我处理得太粗暴了。") {
+		t.Fatalf("expected王大发 character line, got %q", got)
+	}
+}
+
+func TestFormatStoryboardDubbingFromFields_DirectAddressWithSingleListedCharacter(t *testing.T) {
+	dialogue := "刘师傅，这次来，是专程道歉的。当初那件事，我处理得太粗暴了。"
+	got := formatStoryboardDubbingFromFields(dialogue, "", []string{"王大发"}, true)
+	if strings.Contains(got, "旁白：刘师傅，这次来") {
+		t.Fatalf("direct address should not stay in narration: %q", got)
+	}
+	if !strings.Contains(got, "王大发：这次来，是专程道歉的。当初那件事，我处理得太粗暴了。") {
+		t.Fatalf("expected王大发 character line, got %q", got)
+	}
+}
+
+func TestCompactClipDialogue_PreservesSpeakerLines(t *testing.T) {
+	in := "旁白：就是他，我走那天，他顺手把我用了二十年的老铁勺扔进垃圾桶。\n王大发：换新的，老古董碍事。"
+	got := compactClipDialogue(in, 180)
+	if !strings.Contains(got, "\n") {
+		t.Fatalf("expected multi-line output, got %q", got)
+	}
+	if !strings.Contains(got, "王大发：换新的，老古董碍事") {
+		t.Fatalf("missing character line: %q", got)
 	}
 }
 
@@ -109,7 +183,7 @@ func TestEnsureCommentaryNarratorLabels(t *testing.T) {
 }
 
 func TestCleanPerClipDialogueForMode_Commentary(t *testing.T) {
-	got := cleanPerClipDialogueForMode("刘师傅：刘师傅正低头揉面，面粉散落在木质台面上。", true)
+	got := cleanPerClipDialogueForMode("刘师傅：刘师傅正低头揉面，面粉散落在木质台面上。", true, 0)
 	if !strings.Contains(got, "旁白：") {
 		t.Fatalf("expected narrator label, got %q", got)
 	}

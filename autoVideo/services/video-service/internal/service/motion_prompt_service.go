@@ -214,6 +214,10 @@ func (s *MotionPromptService) buildSystemPrompt(useChinese bool, motionMode, sty
 ✗ 同场景内人物左右站位、前后景层次、关键锚点位置无缘由跳变
 ✗ 在视觉描述中加入台词或内心独白
 
+【剧情忠实度 — 最高优先级】
+输入场景中的核心剧情动作、人物行为、物件互动、空间关系必须完整保留，不得改写成与原文无关的空镜或纯运镜描述。
+你输出的是“在原文剧情之上补充镜头运动”，不是重写剧情。
+
 每条描述不超过80字，现在时态，动词开头。
 只输出合法JSON数组，每个片段一个字符串，不附加任何说明文字：
 ["第0片段运动描述", "第1片段运动描述", ...]`, mode, motionMode, stylePreset)
@@ -275,6 +279,9 @@ FORBIDDEN:
 ✗ More than 2 consecutive fully static clips
 ✗ Camera motion direction directly opposing subject movement direction
 ✗ Including dialogue or inner monologue in motion descriptions
+
+STORY FIDELITY — HIGHEST PRIORITY:
+Preserve the core story action, character behavior, object interaction, and spatial relationships from each input scene. Do not rewrite into unrelated b-roll or camera-only descriptions. Your output supplements camera motion on top of the original story beat.
 
 Max 60 words per clip. Present tense, verb-first. Clips form a coherent narrative.
 Output ONLY a valid JSON array of strings, one entry per clip, no additional text:

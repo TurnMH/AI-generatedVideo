@@ -18,7 +18,7 @@ var (
 	classicChapterLineRe = regexp.MustCompile(
 		`(?m)^[　 \t]*(` +
 			`第[零一二三四五六七八九十百千万\d]+[回章节集卷幕]` +
-			`|【?第[零一二三四五六七八九十百千万\d]+[回章节集卷幕】]?` +
+			`|【第[零一二三四五六七八九十百千万\d]+[回章节集卷幕]】` +
 			`|Chapter\s+\d+` +
 			`|CHAPTER\s+\d+` +
 			`|序[章言幕]` +
@@ -29,8 +29,14 @@ var (
 			`|番\s*外` +
 			`)[　 \t]*(.*)$`,
 	)
-	numericChapterLineRe = regexp.MustCompile(`(?m)^[　 \t]*(\d{1,3})[　 \t]*$`)
+	numericChapterLineRe = regexp.MustCompile(`(?m)^[　 \t]*(0?\d{1,3})[　 \t]*$`)
+	numberedChapterTitleLineRe = regexp.MustCompile(`(?m)^[　 \t]*(0?\d{1,3})[　 \t]+(\S.{0,48})$`)
 )
+
+// HasChapterMarkers reports whether the text contains enough chapter headings to split by.
+func HasChapterMarkers(text string) bool {
+	return len(findChapterMarkers(text)) >= 1
+}
 
 type chapterMarker struct {
 	pos   int
@@ -71,6 +77,18 @@ func findChapterMarkers(text string) []chapterMarker {
 			}
 			markers = append(markers, chapterMarker{pos: loc[0], title: strings.TrimSpace(titleLine)})
 		}
+	}
+
+	for _, loc := range numberedChapterTitleLineRe.FindAllStringSubmatchIndex(text, -1) {
+		lineEnd := strings.IndexByte(text[loc[0]:], '\n')
+		titleLine := text[loc[0]:]
+		if lineEnd >= 0 {
+			titleLine = titleLine[:lineEnd]
+		}
+		if !isLikelyChapterHeadingLine(titleLine) {
+			continue
+		}
+		markers = append(markers, chapterMarker{pos: loc[0], title: strings.TrimSpace(titleLine)})
 	}
 
 	if len(markers) == 0 {
@@ -171,6 +189,10 @@ func validateChapterSplit(episodes []DraftEpisode) []DraftEpisode {
 	if len(episodes) == 0 {
 		return nil
 	}
+	episodes = trimTinyTailChapterEpisodes(episodes)
+	if len(episodes) == 0 {
+		return nil
+	}
 	total := 0
 	for _, ep := range episodes {
 		total += utf8.RuneCountInString(strings.TrimSpace(ep.Excerpt))
@@ -184,6 +206,24 @@ func validateChapterSplit(episodes []DraftEpisode) []DraftEpisode {
 		}
 	}
 	return episodes
+}
+
+// trimTinyTailChapterEpisodes merges orphan tail fragments (e.g. a lone "够了。" pseudo-chapter).
+func trimTinyTailChapterEpisodes(episodes []DraftEpisode) []DraftEpisode {
+	const minTailRunes = 20
+	out := append([]DraftEpisode(nil), episodes...)
+	for len(out) > 1 {
+		last := strings.TrimSpace(out[len(out)-1].Excerpt)
+		if utf8.RuneCountInString(last) >= minTailRunes {
+			break
+		}
+		prev := strings.TrimSpace(out[len(out)-2].Excerpt)
+		if last != "" && utf8.RuneCountInString(prev) > 0 {
+			out[len(out)-2] = mergeDraftEpisodes(out[len(out)-2], out[len(out)-1])
+		}
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 func shouldAttachPreambleToFirstEpisode(preamble string) bool {

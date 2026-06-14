@@ -562,8 +562,8 @@ export const videoAPI = {
     api.post('/api/v1/videos/generate', data),
   generateBatch: (projectId: number, data: VideoGenerateBatchRequest) =>
     api.post(`/api/v1/projects/${projectId}/videos/generate-batch`, data),
-  retry: (projectId: number, videoId: number, modelName?: string) =>
-    api.post(`/api/v1/projects/${projectId}/videos/${videoId}/retry`, { model_name: modelName }),
+  retry: (projectId: number, videoId: number, options?: { model_name?: string; scene_descriptions?: string[]; dialogues?: string[] }) =>
+    api.post(`/api/v1/projects/${projectId}/videos/${videoId}/retry`, options ?? {}),
   retryClip: (projectId: number, videoId: number, clipId: number, modelName?: string) =>
     api.post(`/api/v1/projects/${projectId}/videos/${videoId}/clips/${clipId}/retry`, { model_name: modelName }),
   retryFailed: (projectId: number, modelName?: string) =>
@@ -586,8 +586,8 @@ export const videoAPI = {
   cancelVideoTask: (taskId: number) =>
     api.delete(`/api/v1/videos/tasks/${taskId}`),
   /** Retry a failed task via POST /api/v1/projects/:pid/videos/:vid/retry */
-  retryVideoTask: (projectId: number, taskId: number, modelName?: string) =>
-    api.post(`/api/v1/projects/${projectId}/videos/${taskId}/retry`, { model_name: modelName }),
+  retryVideoTask: (projectId: number, taskId: number, options?: { model_name?: string; scene_descriptions?: string[]; dialogues?: string[] }) =>
+    api.post(`/api/v1/projects/${projectId}/videos/${taskId}/retry`, options ?? {}),
   compose: (taskId: number) =>
     api.post(`/api/v1/videos/tasks/${taskId}/compose`),
   composeAdVideo: (taskIds: number[]) =>

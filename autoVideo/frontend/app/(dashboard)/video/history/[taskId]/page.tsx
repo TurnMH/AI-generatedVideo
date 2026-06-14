@@ -184,7 +184,7 @@ export default function ManualVideoHistoryDetailPage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {task.project_id > 0 && (
-                  <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('retry', () => videoAPI.retryVideoTask(task.project_id, task.id, task.requested_model || task.model_name), '已触发重试')}>
+                  <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction('retry', () => videoAPI.retryVideoTask(task.project_id, task.id, { model_name: task.requested_model || task.model_name }), '已触发重试')}>
                     {busyAction === 'retry' ? '重试中…' : '重试任务'}
                   </Button>
                 )}

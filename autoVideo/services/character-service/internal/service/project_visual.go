@@ -402,14 +402,20 @@ func buildProjectImageNegativePrompt(profile *projectVisualProfile, assetType st
 	}
 
 	switch stylepreset.Canonical(projectImageStylePreset(profile)) {
-	case "anime-2d", "anime-3d":
+	case "anime-2d":
 		parts = append(parts,
 			"photorealistic skin", "live-action photography", "raw camera snapshot",
 			"realistic photo", "hyperrealistic",
-			// Anime-specific artifacts to suppress
 			"motion blur", "low frame rate blur", "oversaturated colors", "color bleeding",
 			"3D CGI render", "video game render", "photo filter effect",
 			"low resolution anime", "poorly drawn", "bad proportions",
+		)
+	case "anime-3d":
+		parts = append(parts,
+			"photorealistic skin", "live-action photography", "raw camera snapshot",
+			"realistic photo", "hyperrealistic",
+			"flat cel shading only", "2D line art only", "paper cutout", "hand-drawn sketch",
+			"low resolution", "poorly modeled", "bad proportions",
 		)
 	case "live-action-film", "live-action-short":
 		parts = append(parts,

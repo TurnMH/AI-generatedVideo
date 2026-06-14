@@ -58,6 +58,14 @@ func TestParseSpeakerSegmentsIgnoresStageDirectionLabels(t *testing.T) {
 	}
 }
 
+func TestSpokenTextForPlayback_StripsNarratorLabel(t *testing.T) {
+	got := SpokenTextForPlayback("旁白：我在德聚楼掌勺三十年，却被老板遣退")
+	want := "我在德聚楼掌勺三十年，却被老板遣退"
+	if got != want {
+		t.Fatalf("SpokenTextForPlayback() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildDubbingChunksDefaultVoiceStripsSpeakerLabels(t *testing.T) {
 	chunks := buildDubbingChunks("旁白：我在德聚楼掌勺三十年，却被老板遣退", "default")
 	if len(chunks) != 1 {

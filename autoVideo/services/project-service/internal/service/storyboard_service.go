@@ -20,7 +20,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/autovideo/project-service/internal/model"
+	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/repository"
+	"github.com/autovideo/project-service/internal/speechtext"
 )
 
 const (
@@ -732,6 +734,7 @@ func (s *StoryboardService) Create(projectID uint64, req CreateStoryboardReq) (*
 		AgentHistory:     datatypes.JSON([]byte("[]")),
 		AssetIDs:         pq.Int64Array(req.AssetIDs),
 	}
+	s.fitStoryboardDialogue(sb)
 	if err := s.repo.Create(sb); err != nil {
 		return nil, err
 	}
@@ -858,12 +861,52 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 			sb.AssetIDs = pq.Int64Array(ids)
 		}
 	}
+	if _, ok := updates["dialogue"]; ok {
+		s.fitStoryboardDialogue(sb)
+	} else if _, ok := updates["duration"]; ok {
+		s.fitStoryboardDialogue(sb)
+	}
 	sb.UpdatedAt = time.Now()
 
 	if err := s.repo.Update(sb); err != nil {
 		return nil, err
 	}
 	return sb, nil
+}
+
+func (s *StoryboardService) fitStoryboardDialogue(sb *model.Storyboard) {
+	if sb == nil || strings.TrimSpace(sb.Dialogue) == "" {
+		return
+	}
+	project, err := s.projectRepo.FindByIDNoAuth(sb.ProjectID)
+	if err != nil || project == nil {
+		return
+	}
+	clipDuration := 5
+	speechPace := "normal"
+	if len(project.StoryboardConfig) > 0 {
+		var cfg map[string]interface{}
+		if json.Unmarshal(project.StoryboardConfig, &cfg) == nil {
+			if raw, ok := cfg["duration"]; ok {
+				if num, ok := toInt(raw); ok && num > 0 {
+					clipDuration = num
+				}
+			}
+			if raw, ok := cfg["speech_pace"].(string); ok && strings.TrimSpace(raw) != "" {
+				speechPace = strings.TrimSpace(raw)
+			}
+		}
+	}
+	duration := sb.Duration
+	if duration <= 0 {
+		duration = clipDuration
+	}
+	sb.Dialogue = speechtext.FitStoryboardDialogue(
+		sb.Dialogue,
+		duration,
+		speechPace,
+		productionmode.ResolveProfile(project).IsCommentaryComic(),
+	)
 }
 
 // Generate —— 触发单个分镜的图片生成，创建新版本并发布 Kafka 消息

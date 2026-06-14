@@ -126,7 +126,7 @@ import { CharacterPanelStrip } from '@/components/projects/detail/CharacterPanel
 import { StoryboardDubbingPanel } from '@/components/projects/detail/StoryboardDubbingPanel'
 import { VoicePickerDialog } from '@/components/projects/detail/VoicePickerDialog'
 import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
-import { formatStoryboardDubbingText, extractStoryboardSpeechText, hasSpeakableStoryboardText } from '@/lib/projects/storyboard-dubbing'
+import { formatStoryboardDubbingText, extractStoryboardSpeechText, hasSpeakableStoryboardText, resolveStoryboardSpeechLimit } from '@/lib/projects/storyboard-dubbing'
 
 type TabKey = WorkflowStepKey
 
@@ -320,6 +320,10 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const subtitleDoneCount = [...subtitleTaskByStoryboard.values()].filter((t) => t.status === 'succeeded').length
 
   const isCommentaryProject = useMemo(() => detectCommentaryProject(project), [project])
+  const storyboardSpeechOptions = (sb: Pick<Storyboard, 'duration'>) => ({
+    isCommentary: isCommentaryProject,
+    maxRunes: resolveStoryboardSpeechLimit(sb, project),
+  })
 
   const pickEpisodeTextSource = (ep: Episode) => {
     const candidates = isCommentaryProject
@@ -493,8 +497,8 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
       }
       const aggregated = storyboards
         .map((sb) => formatStoryboardDubbingText(
-          { dialogue: sb.dialogue || '', characters: sb.characters || [], scene_description: sb.scene_description || '' },
-          { isCommentary: isCommentaryProject },
+          { dialogue: sb.dialogue || '', characters: sb.characters || [], scene_description: sb.scene_description || '', duration: sb.duration },
+          storyboardSpeechOptions(sb),
         ))
         .filter(Boolean)
         .join('\n')
@@ -516,7 +520,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const handleRetryTask = async (task: DubbingTask, label: '配音' | '字幕') => {
     const storyboard = allStoryboards.find((sb) => sb.id === task.storyboard_id)
     const fallbackText = storyboard
-      ? formatStoryboardDubbingText(storyboard, { isCommentary: isCommentaryProject })
+      ? formatStoryboardDubbingText(storyboard, storyboardSpeechOptions(storyboard))
       : undefined
     setRetryingTaskIds((prev) => prev.includes(task.id) ? prev : [...prev, task.id])
     try {
@@ -549,7 +553,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
         uniqueTasks.map((task) => {
           const storyboard = allStoryboards.find((sb) => sb.id === task.storyboard_id)
           const fallbackText = storyboard
-            ? formatStoryboardDubbingText(storyboard, { isCommentary: isCommentaryProject })
+            ? formatStoryboardDubbingText(storyboard, storyboardSpeechOptions(storyboard))
             : undefined
           return { task_id: task.id, text: fallbackText }
         })
@@ -623,7 +627,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
         (sb) => !hasSpeakableStoryboardText(sb, { isCommentary: isCommentaryProject }),
       ).length
       const eligible = allStoryboards.filter((sb) => {
-        const text = formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+        const text = formatStoryboardDubbingText(sb, storyboardSpeechOptions(sb))
         if (!text || !sb.episode_id) return false
         const existing = dubbingTaskByStoryboard.get(sb.id)
         return !(existing && (existing.status === 'succeeded' || existing.status === 'processing' || existing.status === 'pending'))
@@ -641,7 +645,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
       let failed = 0
       for (const sb of eligible) {
         const episodeVoiceOptions = getEpisodeVoiceOptions(sb.episode_id!)
-        const text = formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+        const text = formatStoryboardDubbingText(sb, storyboardSpeechOptions(sb))
         try {
           await dubbingAPI.generateForStoryboard(
             projectId,
@@ -682,7 +686,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
         (sb) => !hasSpeakableStoryboardText(sb, { isCommentary: isCommentaryProject }),
       ).length
       const eligible = allStoryboards.filter((sb) => {
-        const text = formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+        const text = formatStoryboardDubbingText(sb, storyboardSpeechOptions(sb))
         if (!text || !sb.episode_id) return false
         const existing = subtitleTaskByStoryboard.get(sb.id)
         return !(existing && (existing.status === 'succeeded' || existing.status === 'processing' || existing.status === 'pending'))
@@ -700,7 +704,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
       let failed = 0
       for (const sb of eligible) {
         const episodeVoiceOptions = getEpisodeVoiceOptions(sb.episode_id!)
-        const text = formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+        const text = formatStoryboardDubbingText(sb, storyboardSpeechOptions(sb))
         try {
           await dubbingAPI.generateSubtitleForStoryboard(
             projectId,

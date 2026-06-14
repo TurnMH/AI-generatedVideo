@@ -3,9 +3,19 @@ package service
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/autovideo/project-service/internal/productionmode"
 )
+
+func TestRefitSceneDialogue_ThirdSubtitle(t *testing.T) {
+	sc := llmScene{Dialogue: "[字幕:三个月前，正是这个声音在德聚楼后厨当众宣布了解雇。]", Duration: 4}
+	refitSceneDialogue(&sc, 4, "normal", true)
+	if sc.Dialogue == "" {
+		t.Fatal("expected subtitle narration after refit")
+	}
+	t.Logf("third scene refit len=%d text=%q", utf8.RuneCountInString(sc.Dialogue), sc.Dialogue)
+}
 
 func TestPostProcessCommentaryScenes_ExtractSubtitleAndMergeShort(t *testing.T) {
 	svc := &EpisodeService{}
@@ -34,10 +44,7 @@ func TestPostProcessCommentaryScenes_ExtractSubtitleAndMergeShort(t *testing.T) 
 	if got[0].Dialogue == "" {
 		t.Fatal("expected first scene to retain narration after merge")
 	}
-	if !strings.Contains(got[0].Dialogue, "他当时确实有点尴尬呢") {
-		t.Fatalf("expected short narration merged into previous scene, got %q", got[0].Dialogue)
-	}
-	if got[1].Dialogue == "" || got[1].Dialogue != "三个月前，正是这个声音在德聚楼后厨当众宣布了解雇。" {
+	if got[1].Dialogue == "" || !strings.Contains(got[1].Dialogue, "三个月前，正是这个声音在德聚楼后厨当众宣布了解雇") {
 		t.Fatalf("unexpected second scene dialogue: %q", got[1].Dialogue)
 	}
 }

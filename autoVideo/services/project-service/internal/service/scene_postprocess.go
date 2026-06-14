@@ -10,12 +10,48 @@ import (
 
 func (s *EpisodeService) postProcessScenes(scenes []llmScene, clipDuration int, speechPace string, profile productionmode.Profile) []llmScene {
 	if profile.ShouldPostProcessMergeScenes() {
-		return s.postProcessAdScenes(scenes, clipDuration)
+		return s.postProcessAdScenes(scenes, clipDuration, speechPace)
 	}
 	if profile.IsCommentaryComic() {
 		return postProcessCommentaryScenes(scenes, clipDuration, speechPace)
 	}
 	return postProcessRhythmicScenes(scenes, clipDuration, speechPace)
+}
+
+func sceneSpeechMaxRunes(scene llmScene, clipDuration int, speechPace string) int {
+	duration := scene.Duration
+	if duration <= 0 {
+		duration = clipDuration
+	}
+	if duration <= 0 {
+		duration = 5
+	}
+	return speechtext.MaxRunesForClipDuration(duration, speechPace)
+}
+
+func refitSceneDialogue(scene *llmScene, clipDuration int, speechPace string, commentary bool) {
+	if scene == nil {
+		return
+	}
+	syncSceneDurationFromDialogue(scene, clipDuration, speechPace)
+	maxRunes := sceneSpeechMaxRunes(*scene, clipDuration, speechPace)
+	if commentary {
+		scene.Dialogue = speechtext.FinalizeCommentaryDialogueWithLimit(scene.Dialogue, maxRunes)
+		return
+	}
+	scene.Dialogue = speechtext.CompactClipDialogue(strings.TrimSpace(speechtext.SanitizeForSpeech(scene.Dialogue)), maxRunes)
+}
+
+func syncSceneDurationFromDialogue(scene *llmScene, clipDuration int, speechPace string) {
+	if scene == nil {
+		return
+	}
+	inferred := inferSceneDurationFromDialogue(scene.Dialogue, clipDuration, speechPace)
+	if scene.Duration <= 0 || inferred > scene.Duration {
+		scene.Duration = inferred
+	} else {
+		scene.Duration = clampDuration(scene.Duration, 2, 12)
+	}
 }
 
 func sanitizeStoryboardDialogue(text string) string {
@@ -30,6 +66,7 @@ func postProcessRhythmicScenes(scenes []llmScene, clipDuration int, speechPace s
 	copy(out, scenes)
 	for i := range out {
 		out[i].Dialogue = strings.TrimSpace(speechtext.SanitizeForSpeech(out[i].Dialogue))
+		refitSceneDialogue(&out[i], clipDuration, speechPace, false)
 		out[i].Description = sanitizeUserSceneDescription(out[i].Description)
 		if out[i].Duration <= 0 {
 			out[i].Duration = inferSceneDurationFromDialogue(out[i].Dialogue, clipDuration, speechPace)
@@ -85,6 +122,11 @@ func postProcessCommentaryScenes(scenes []llmScene, clipDuration int, speechPace
 		}
 		merged = append(merged, scene)
 	}
+	for i := range merged {
+		syncSceneDurationFromDialogue(&merged[i], clipDuration, speechPace)
+		refitSceneDialogue(&merged[i], clipDuration, speechPace, true)
+		syncSceneDurationFromDialogue(&merged[i], clipDuration, speechPace)
+	}
 	return merged
 }
 
@@ -113,6 +155,11 @@ func (s *EpisodeService) postProcessAndAlignCommentaryScenes(
 	scenes = s.postProcessScenes(scenes, clipDuration, speechPace, profile)
 	if profile.IsCommentaryComic() {
 		scenes = alignCommentaryScenesWithSource(episodeContent, scenes)
+		for i := range scenes {
+			syncSceneDurationFromDialogue(&scenes[i], clipDuration, speechPace)
+			refitSceneDialogue(&scenes[i], clipDuration, speechPace, true)
+			syncSceneDurationFromDialogue(&scenes[i], clipDuration, speechPace)
+		}
 	}
 	return scenes
 }

@@ -694,7 +694,7 @@ func modelQualitySuffix(modelName, stylePreset string) string {
 
 // storyboardOpeningSentence returns a style-aware opening instruction for the storyboard prompt.
 func storyboardOpeningSentence(stylePreset string) string {
-	switch stylePreset {
+	switch stylepreset.Canonical(stylePreset) {
 	case "live-action-film":
 		return "Create a single photorealistic cinematic film keyframe for professional video production. No anime, no cartoon, no illustration style."
 	case "live-action-short":

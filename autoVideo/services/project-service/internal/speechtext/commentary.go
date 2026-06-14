@@ -30,6 +30,11 @@ func ExtractSubtitleSegments(text string) []string {
 
 // FinalizeCommentaryDialogue normalizes a single storyboard dialogue field for commentary TTS.
 func FinalizeCommentaryDialogue(dialogue string) string {
+	return FinalizeCommentaryDialogueWithLimit(dialogue, DefaultMaxClipDialogueRunes)
+}
+
+// FinalizeCommentaryDialogueWithLimit normalizes commentary dialogue and caps it to maxRunes.
+func FinalizeCommentaryDialogueWithLimit(dialogue string, maxRunes int) string {
 	dialogue = strings.TrimSpace(dialogue)
 	if dialogue == "" {
 		return ""
@@ -43,7 +48,7 @@ func FinalizeCommentaryDialogue(dialogue string) string {
 		LooksLikeStoryboardVisualDescription(extracted) {
 		return ""
 	}
-	return extracted
+	return CompactClipDialogue(extracted, maxRunes)
 }
 
 func dialogueNeedsSourceRepair(dialogue string) bool {

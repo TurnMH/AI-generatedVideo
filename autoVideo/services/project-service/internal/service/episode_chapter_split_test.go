@@ -22,6 +22,24 @@ func TestResolveStructuralEpisodeSplit_PrefersChaptersOverKeywords(t *testing.T)
 	}
 }
 
+func TestResolveStructuralEpisodeSplit_PrefersOriginalChaptersOverOptimized(t *testing.T) {
+	chapterBody := strings.Repeat("这是第一章的正文内容，人物开始行动。", 8)
+	chapterBody2 := strings.Repeat("这是第二章的正文内容，剧情继续推进。", 8)
+	original := "第一章 开端\n" + chapterBody + "\n第二章 转折\n" + chapterBody2
+	optimized := "第一章 开端\n" + strings.Repeat("优化后改写的第一章内容。", 20) + "\n第二章 转折\n" + strings.Repeat("优化后改写的第二章内容。", 20)
+
+	episodes, method := resolveStructuralEpisodeSplit(optimized, original, nil)
+	if method != "chapters_original" {
+		t.Fatalf("expected chapters_original, got method=%q", method)
+	}
+	if len(episodes) != 2 {
+		t.Fatalf("expected 2 chapter episodes from original script, got %d", len(episodes))
+	}
+	if !strings.Contains(episodes[0].Excerpt, "人物开始行动") {
+		t.Fatalf("expected original chapter body, got %q", episodes[0].Excerpt)
+	}
+}
+
 func TestResolveStructuralEpisodeSplit_FallsBackToOriginalScriptChapters(t *testing.T) {
 	chapterBody := strings.Repeat("这是第一章的正文内容，人物开始行动。", 8)
 	chapterBody2 := strings.Repeat("这是第二章的正文内容，剧情继续推进。", 8)

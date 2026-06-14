@@ -29,12 +29,39 @@ const SPEAKER_BEFORE_QUOTE =
 
 export type StoryboardVoiceRole = 'narrator' | 'character' | 'mixed'
 
+const SPEECH_PACE_CHARS_PER_10_SEC: Record<string, number> = {
+  normal: 48,
+  slightly_fast: 56,
+  with_pauses: 38,
+  very_fast: 66,
+  medium_fast: 52,
+  medium_steady: 42,
+}
+
+/** Estimate speakable character budget from clip duration and speech pace. */
+export function resolveSpeechMaxRunesForClip(durationSec: number, speechPace?: string): number {
+  const duration = Math.max(3, Math.min(20, durationSec > 0 ? durationSec : 5))
+  const pace = speechPace?.trim() || 'normal'
+  const charsPer10Sec = SPEECH_PACE_CHARS_PER_10_SEC[pace] ?? 48
+  return Math.max(16, Math.min(120, Math.round(charsPer10Sec * duration / 10)))
+}
+
+export function resolveStoryboardSpeechLimit(
+  storyboard: Pick<Storyboard, 'duration'>,
+  project?: { storyboard_config?: { duration?: number; speech_pace?: string } },
+): number {
+  const duration = storyboard.duration > 0
+    ? storyboard.duration
+    : (project?.storyboard_config?.duration || 5)
+  return resolveSpeechMaxRunesForClip(duration, project?.storyboard_config?.speech_pace)
+}
+
 export type CharacterQuote = {
   speaker: string
   quote: string
 }
 
-export type StoryboardSpeechInput = Pick<Storyboard, 'dialogue' | 'characters' | 'scene_description'>
+export type StoryboardSpeechInput = Pick<Storyboard, 'dialogue' | 'characters' | 'scene_description' | 'duration'>
 
 export function hasExplicitSpeakerLabel(text: string): boolean {
   const trimmed = text.trim()
@@ -146,14 +173,21 @@ export function extractCharacterQuotesFromScene(
   sceneText: string,
   characters: string[] = [],
 ): CharacterQuote[] {
-  const text = sceneText.trim()
+  return extractCharacterQuotesFromText(sceneText, characters)
+}
+
+/** Extract quoted character lines from dialogue or scene text. */
+export function extractCharacterQuotesFromText(
+  text: string,
+  characters: string[] = [],
+): CharacterQuote[] {
   if (!text) return []
 
   const results: CharacterQuote[] = []
   const seen = new Set<string>()
   for (const match of text.matchAll(QUOTED_SPEECH)) {
     const quote = match[1]?.trim()
-    if (!quote || quote.length > 120) continue
+    if (!quote || quote.length > 120 || [...quote].length < 4) continue
     if (looksLikeStoryboardVisualDescription(quote) || looksLikeSceneDescription(quote)) continue
 
     const start = match.index ?? 0
@@ -169,6 +203,71 @@ export function extractCharacterQuotesFromScene(
   return results
 }
 
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function removeQuotedSpeechFromText(text: string, quotes: CharacterQuote[]): string {
+  let out = text
+  for (const { quote } of quotes) {
+    const trimmed = quote.trim()
+    if (!trimmed) continue
+    const patterns = [
+      `[“「『"]${escapeRegex(trimmed)}[”」』"]`,
+      `"${escapeRegex(trimmed)}"`,
+    ]
+    for (const pattern of patterns) {
+      out = out.replace(new RegExp(pattern, 'g'), ' ')
+    }
+  }
+  return stripTrailingSpeechLead(out.replace(/\s{2,}/g, ' ').trim())
+}
+
+function stripTrailingSpeechLead(text: string): string {
+  return text.replace(/(?:，|,)?(?:说|问|答|道|喊|叫)[：:]\s*$/u, '').trim()
+}
+
+function removeQuoteMentionsFromText(text: string, quotes: CharacterQuote[]): string {
+  let out = text
+  for (const { quote } of quotes) {
+    const trimmed = quote.trim().replace(/[。！？!?]+$/u, '')
+    if (!trimmed || [...trimmed].length < 4) continue
+    out = out.replace(new RegExp(escapeRegex(trimmed) + `[。！？!?]?`, 'gu'), ' ')
+  }
+  return out.replace(/\s{2,}/g, ' ').trim()
+}
+
+const FIRST_PERSON_NARRATOR =
+  /^(?:我|咱|没抬头|我正在|我坐直|我把|我看|我认出来|我老了|我给您|我没等)/
+
+function inferDirectAddressSpeech(
+  text: string,
+  characters: string[],
+  isCommentary?: boolean,
+): CharacterQuote | null {
+  if (!isCommentary || characters.length < 1) return null
+  const trimmed = text.replace(/\r\n?/g, ' ').trim()
+  if (!trimmed) return null
+  const match = trimmed.match(/^([\u4e00-\u9fffA-Za-z·]{2,8})[，,]\s*(.+)$/u)
+  if (!match?.[1] || !match?.[2]) return null
+  if (FIRST_PERSON_NARRATOR.test(trimmed)) return null
+  const addressee = normalizeCharacterName(match[1])
+  const quote = match[2].trim()
+  if (!quote || [...quote].length < 4) return null
+  const normalizedChars = characters.map(normalizeCharacterName).filter(Boolean)
+  if (normalizedChars.length === 1) {
+    const sole = normalizedChars[0]
+    if (sole && addressee && sole !== addressee && !sole.includes(addressee) && !addressee.includes(sole)) {
+      return { speaker: sole, quote }
+    }
+    return null
+  }
+  if (!normalizedChars.some((name) => name === addressee || name.includes(addressee))) return null
+  const speaker = normalizedChars.find((name) => name !== addressee && !name.includes(addressee) && !addressee.includes(name))
+  if (!speaker) return null
+  return { speaker, quote }
+}
+
 function dedupeSpeechLines(lines: string[]): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -181,13 +280,83 @@ function dedupeSpeechLines(lines: string[]): string[] {
   return out
 }
 
+function normalizeSpeechKey(text: string): string {
+  return text.replace(/[\s　“”「」『』"'']/gu, '')
+}
+
+function dedupeSpeechUnits(text: string): string {
+  const units = text
+    .replace(/\r\n?/g, '\n')
+    .split(/[。！？!?；;\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const unit of units) {
+    const key = normalizeSpeechKey(unit)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(unit)
+  }
+  if (out.length === 0) return text.trim()
+  if (out.length === 1) return out[0]
+  return `${out.join('。')}。`
+}
+
+function firstSpeakableSentence(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  const match = trimmed.match(/^[^。！？!?；;\n]+[。！？!?]?/)
+  return match?.[0]?.trim() || trimmed
+}
+
+function compactSingleSpeechBody(text: string, maxRunes: number): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+
+  const subtitleParts = [...trimmed.matchAll(SUBTITLE_TAG)]
+    .map((match) => match[1]?.trim())
+    .filter(Boolean) as string[]
+  let working = subtitleParts.length > 0 ? subtitleParts[0] : trimmed
+
+  if ([...working].length > maxRunes) {
+    const quoted = extractQuotedSpeechLines(working)
+    if (quoted) working = quoted.split('\n')[0]?.trim() || working
+  }
+
+  working = dedupeSpeechUnits(working)
+  if ([...working].length > maxRunes) {
+    const slice = [...working].slice(0, maxRunes).join('')
+    const cut = slice.lastIndexOf('，') >= maxRunes / 3 ? slice.slice(0, slice.lastIndexOf('，')) : slice
+    working = `${cut.trim()}。`
+  }
+  return working.trim()
+}
+
+export function compactClipDialogue(text: string, maxRunes = 180): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+
+  const lines = trimmed.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean)
+  if (lines.length > 1 || lines.some((line) => SPEAKER_LINE.test(line))) {
+    const perLine = Math.max(12, Math.floor(maxRunes / Math.max(lines.length, 1)))
+    return lines
+      .map((line) => compactSingleSpeechBody(line, perLine))
+      .filter(Boolean)
+      .join('\n')
+  }
+  return compactSingleSpeechBody(trimmed, maxRunes)
+}
+
 function extractNarrationFromDialogue(raw: string, isCommentary?: boolean): string[] {
   const text = raw.trim()
   if (!text) return []
 
   const subtitleNarration = extractSubtitleTagNarration(text)
   if (subtitleNarration) {
-    return dedupeSpeechLines(subtitleNarration.split('\n').map((line) => line.trim()).filter(Boolean))
+    const lines = dedupeSpeechLines(subtitleNarration.split('\n').map((line) => line.trim()).filter(Boolean))
+    if (isCommentary && lines.length > 1) return lines.slice(0, 1)
+    return lines
   }
 
   if (isCommentary) {
@@ -203,7 +372,7 @@ function extractNarrationFromDialogue(raw: string, isCommentary?: boolean): stri
         return line.length >= 6 && !looksLikeStoryboardVisualDescription(line)
       })
     if (narrationLines.length > 0) {
-      return dedupeSpeechLines(narrationLines)
+      return dedupeSpeechLines(narrationLines).slice(0, 1)
     }
   }
 
@@ -322,40 +491,102 @@ function normalizeMislabeledNarrationSpeakers(text: string): string {
 /** Format storyboard dialogue for TTS: narration as 旁白, quoted character lines with speaker labels. */
 export function formatStoryboardDubbingText(
   storyboard: StoryboardSpeechInput,
-  options?: { isCommentary?: boolean },
+  options?: { isCommentary?: boolean; maxRunes?: number; project?: { storyboard_config?: { duration?: number; speech_pace?: string } } },
 ): string {
+  const maxRunes = options?.maxRunes ?? resolveStoryboardSpeechLimit(storyboard, options?.project)
   const chars = (storyboard.characters || []).map((name) => name.trim()).filter(Boolean)
   const rawDialogue = (storyboard.dialogue || '').trim()
+  const directSpeech = inferDirectAddressSpeech(rawDialogue, chars, options?.isCommentary)
+
+  const quoteMap = new Map<string, CharacterQuote>()
+  for (const quote of [
+    ...extractCharacterQuotesFromText(rawDialogue, chars),
+    ...extractCharacterQuotesFromScene(storyboard.scene_description || '', chars),
+  ]) {
+    quoteMap.set(`${quote.speaker}\0${quote.quote}`, quote)
+  }
+  const embeddedQuotes = [...quoteMap.values()]
+
+  const narrationSource = directSpeech
+    ? ''
+    : removeQuoteMentionsFromText(
+        removeQuotedSpeechFromText(rawDialogue, embeddedQuotes),
+        embeddedQuotes,
+      )
   const parts: string[] = []
 
-  const narrationLines = extractNarrationFromDialogue(rawDialogue, options?.isCommentary)
+  const narrationLines = extractNarrationFromDialogue(narrationSource, options?.isCommentary)
   for (const line of narrationLines) {
     parts.push(`旁白：${line}`)
   }
 
   const dialogueCharacterLines = extractCharacterLinesFromDialogue(rawDialogue)
-  const sceneQuotes = extractCharacterQuotesFromScene(storyboard.scene_description || '', chars)
+  const sceneQuotes = embeddedQuotes
 
   const characterLines = [...dialogueCharacterLines]
+  if (directSpeech) {
+    characterLines.push(`${directSpeech.speaker}：${directSpeech.quote}`)
+  }
   for (const { speaker, quote } of sceneQuotes) {
     const labeled = `${speaker}：${quote}`
     if (characterLines.includes(labeled)) continue
-    if (narrationLines.some((line) => line.includes(quote))) continue
     characterLines.push(labeled)
   }
 
   parts.push(...characterLines)
 
+  let result = ''
   if (parts.length === 0) {
     const quoted = extractQuotedSpeechLines(rawDialogue)
     if (quoted) {
-      if (!options?.isCommentary && chars.length === 1) return `${chars[0]}：${quoted}`
-      return `旁白：${quoted}`
+      if (!options?.isCommentary && chars.length === 1) result = `${chars[0]}：${quoted}`
+      else result = `旁白：${quoted}`
     }
-    return ''
+  } else {
+    result = normalizeMislabeledNarrationSpeakers(parts.join('\n'))
   }
+  if (options?.isCommentary && maxRunes <= 120 && !result.includes('\n') && result.startsWith('旁白：')) {
+    const narratorOnly = result.replace(/^旁白：/, '')
+    const first = firstSpeakableSentence(narratorOnly)
+    if (first) result = `旁白：${first}`
+  }
+  return compactClipDialogue(result, maxRunes)
+}
 
-  return normalizeMislabeledNarrationSpeakers(parts.join('\n'))
+/** Remove routing labels like "旁白：" / "角色名：" before video native audio or subtitles. */
+export function stripSpeakerLabelsForSpeech(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+
+  const parts: string[] = []
+  for (const rawLine of trimmed.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const match = line.match(SPEAKER_LINE)
+    if (match?.[1] && match?.[2]) {
+      const speaker = match[1].trim().replace(/\s+/g, '')
+      const content = match[2].trim()
+      if (content && (NARRATOR_SPEAKER.test(speaker) || speaker.length <= 16)) {
+        parts.push(content)
+        continue
+      }
+    }
+    parts.push(line)
+  }
+  return parts.join('\n').trim()
+}
+
+/** Compact speakable text for video generation without routing labels. */
+export function formatStoryboardSpeechForVideo(
+  storyboard: StoryboardSpeechInput & Pick<Storyboard, 'duration'>,
+  options?: {
+    isCommentary?: boolean
+    maxRunes?: number
+    project?: { storyboard_config?: { duration?: number; speech_pace?: string } }
+  },
+): string {
+  const maxRunes = options?.maxRunes ?? resolveStoryboardSpeechLimit(storyboard, options?.project)
+  return stripSpeakerLabelsForSpeech(formatStoryboardDubbingText(storyboard, { isCommentary: options?.isCommentary, maxRunes }))
 }
 
 export function getStoryboardVoiceRoleLabel(role: StoryboardVoiceRole): string {

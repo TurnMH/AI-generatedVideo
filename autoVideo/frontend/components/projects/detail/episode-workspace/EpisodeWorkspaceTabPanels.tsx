@@ -24,6 +24,13 @@ export function EpisodeWorkspaceTabPanels({
   sbPauseTrigger,
   sbResumeTrigger,
   sbAuditTrigger,
+  onSbGenerateTriggerConsumed,
+  onSbRegenerateTriggerConsumed,
+  onSbPauseTriggerConsumed,
+  onSbResumeTriggerConsumed,
+  onSbAuditTriggerConsumed,
+  onGenerateTriggerConsumed,
+  onRegenerateTriggerConsumed,
   onExtractAssets,
   onExtractStoryboards,
 }: {
@@ -42,6 +49,13 @@ export function EpisodeWorkspaceTabPanels({
   sbPauseTrigger: number
   sbResumeTrigger: number
   sbAuditTrigger: number
+  onSbGenerateTriggerConsumed: () => void
+  onSbRegenerateTriggerConsumed: () => void
+  onSbPauseTriggerConsumed: () => void
+  onSbResumeTriggerConsumed: () => void
+  onSbAuditTriggerConsumed: () => void
+  onGenerateTriggerConsumed: () => void
+  onRegenerateTriggerConsumed: () => void
   onExtractAssets: () => void
   onExtractStoryboards: () => void
 }) {
@@ -57,6 +71,8 @@ export function EpisodeWorkspaceTabPanels({
             isExtractingEpisodeAssets={resourceButtonDisabled}
             generateTrigger={generateTrigger}
             regenerateTrigger={regenerateTrigger}
+            onGenerateTriggerConsumed={onGenerateTriggerConsumed}
+            onRegenerateTriggerConsumed={onRegenerateTriggerConsumed}
             hideActionBar
           />
         </div>
@@ -77,6 +93,11 @@ export function EpisodeWorkspaceTabPanels({
             sbPauseTrigger={sbPauseTrigger}
             sbResumeTrigger={sbResumeTrigger}
             sbAuditTrigger={sbAuditTrigger}
+            onSbGenerateTriggerConsumed={onSbGenerateTriggerConsumed}
+            onSbRegenerateTriggerConsumed={onSbRegenerateTriggerConsumed}
+            onSbPauseTriggerConsumed={onSbPauseTriggerConsumed}
+            onSbResumeTriggerConsumed={onSbResumeTriggerConsumed}
+            onSbAuditTriggerConsumed={onSbAuditTriggerConsumed}
           />
         </div>
       </TabsContent>

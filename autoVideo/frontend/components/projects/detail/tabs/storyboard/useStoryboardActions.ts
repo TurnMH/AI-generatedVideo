@@ -1,15 +1,23 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useOneShotTriggerEffect } from '@/lib/projects/use-one-shot-trigger'
 import { storyboardAPI, videoAPI, dubbingAPI, assetAPI, type DubbingTask } from '@/lib/api'
 import { normalizeVideoStylePreset, VIDEO_STYLE_COMPACT_OPTIONS, VIDEO_GENERATION_PRESETS } from '@/lib/video-style-config'
 import { FALLBACK_VOICE_OPTIONS } from '@/lib/projects/constants'
-import { formatStoryboardDubbingText } from '@/lib/projects/storyboard-dubbing'
+import { formatStoryboardSpeechForVideo, formatStoryboardDubbingText, resolveStoryboardSpeechLimit } from '@/lib/projects/storyboard-dubbing'
 import { canTriggerStoryboardImage, triggerStoryboardImageGeneration } from '@/lib/projects/storyboard-image'
 import { resolveStoryboardClipDurationSec, resolveStoryboardClipDurations } from '@/lib/projects/video-clip-duration'
 import { commentaryProductionModeValue } from '@/lib/projects/commentary-project'
 import { getApiErrorMessage } from '@/lib/projects/get-api-error-message'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
 import { filterReadyVideoStoryboards, isStoryboardSerialCandidate } from '@/lib/projects/storyboard-video-filter'
+import {
+  persistStoryboardRuntimeConfig,
+  storyboardMotionModePatch,
+  storyboardStylePresetPatch,
+} from '@/lib/projects/persist-storyboard-runtime-config'
+import { buildProjectVideoRenderConfig } from '@/lib/projects/storyboard-runtime-config'
 import type { ImageModelOption } from '@/lib/model-display'
 import type { VideoModelCapability } from '@/lib/video-style-config'
 import type { Episode, Project, Storyboard } from '@/types'
@@ -51,6 +59,11 @@ export function useStoryboardActions({
   sbPauseTrigger,
   sbResumeTrigger,
   sbAuditTrigger,
+  onSbGenerateTriggerConsumed,
+  onSbRegenerateTriggerConsumed,
+  onSbPauseTriggerConsumed,
+  onSbResumeTriggerConsumed,
+  onSbAuditTriggerConsumed,
   toast,
 }: {
   projectId: number
@@ -81,6 +94,11 @@ export function useStoryboardActions({
   sbPauseTrigger?: number
   sbResumeTrigger?: number
   sbAuditTrigger?: number
+  onSbGenerateTriggerConsumed?: () => void
+  onSbRegenerateTriggerConsumed?: () => void
+  onSbPauseTriggerConsumed?: () => void
+  onSbResumeTriggerConsumed?: () => void
+  onSbAuditTriggerConsumed?: () => void
   toast: ToastFn
 }) {
   const {
@@ -95,7 +113,7 @@ export function useStoryboardActions({
   const storyboardResumeBlockedText = storyboardAssetsBlockingReason || `请先完成资源图生成后再继续${storyboardGenerateLabel}`
 
   const speakableDialogue = (sb: Storyboard) =>
-    formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+    formatStoryboardSpeechForVideo(sb, { isCommentary: isCommentaryProject, project })
 
   const [pausingGeneration, setPausingGeneration] = useState(false)
   const [resumingGeneration, setResumingGeneration] = useState(false)
@@ -180,16 +198,16 @@ export function useStoryboardActions({
         setSelectedEpisodeVideoModel(savedModel)
       }
       const savedStyle = normalizeVideoStylePreset(window.localStorage.getItem(episodeVideoStyleStorageKey) ?? '')
-      if (VIDEO_STYLE_COMPACT_OPTIONS.some((style) => style.key === savedStyle)) {
-        setSelectedEpisodeVideoStyle(savedStyle)
-      } else if (VIDEO_STYLE_COMPACT_OPTIONS.some((style) => style.key === projectConfiguredVideoStyle)) {
+      if (VIDEO_STYLE_COMPACT_OPTIONS.some((style) => style.key === projectConfiguredVideoStyle)) {
         setSelectedEpisodeVideoStyle(projectConfiguredVideoStyle)
+      } else if (VIDEO_STYLE_COMPACT_OPTIONS.some((style) => style.key === savedStyle)) {
+        setSelectedEpisodeVideoStyle(savedStyle)
       }
       const savedMotion = window.localStorage.getItem(episodeVideoMotionStorageKey)
-      if (savedMotion && savedMotion in VIDEO_MOTION_LABELS) {
-        setSelectedEpisodeVideoMotionMode(savedMotion as VideoMotionKey)
-      } else if (projectConfiguredVideoMotion && projectConfiguredVideoMotion in VIDEO_MOTION_LABELS) {
+      if (projectConfiguredVideoMotion && projectConfiguredVideoMotion in VIDEO_MOTION_LABELS) {
         setSelectedEpisodeVideoMotionMode(projectConfiguredVideoMotion as VideoMotionKey)
+      } else if (savedMotion && savedMotion in VIDEO_MOTION_LABELS) {
+        setSelectedEpisodeVideoMotionMode(savedMotion as VideoMotionKey)
       }
     } catch {}
   }
@@ -205,10 +223,25 @@ export function useStoryboardActions({
       window.localStorage.setItem(episodeVideoStyleStorageKey, selectedEpisodeVideoStyle)
       window.localStorage.setItem(episodeVideoMotionStorageKey, selectedEpisodeVideoMotionMode)
     } catch {}
+    if (selectedEpisodeVideoModel && project.storyboard_config?.video_model !== selectedEpisodeVideoModel) {
+      persistStoryboardRuntimeConfig(projectId, project.storyboard_config, {
+        video_model: selectedEpisodeVideoModel,
+      }).catch(() => {})
+    }
+    const stylePatch = storyboardStylePresetPatch(project.storyboard_config, selectedEpisodeVideoStyle)
+    if (stylePatch) {
+      persistStoryboardRuntimeConfig(projectId, project.storyboard_config, stylePatch).catch(() => {})
+    }
+    const motionPatch = storyboardMotionModePatch(project.storyboard_config, selectedEpisodeVideoMotionMode)
+    if (motionPatch) {
+      persistStoryboardRuntimeConfig(projectId, project.storyboard_config, motionPatch).catch(() => {})
+    }
   }, [
     episodeVideoModelStorageKey,
     episodeVideoMotionStorageKey,
     episodeVideoStyleStorageKey,
+    project.storyboard_config,
+    projectId,
     selectedEpisodeVideoModel,
     selectedEpisodeVideoMotionMode,
     selectedEpisodeVideoStyle,
@@ -236,7 +269,7 @@ export function useStoryboardActions({
     const completedSbs = ((await storyboardAPI.listAll(projectId, { episode_id: episodeId, status: 'completed' })) as { data?: Storyboard[] }).data ?? []
     const sortedSbs = filterReadyVideoStoryboards(completedSbs)
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
-    const sceneDescriptions = sortedSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
+    const sceneDescriptions = sortedSbs.map((sb) => buildVideoSceneDescription(sb))
     const modelName = options?.modelName || 'wan'
     const defaultClipDuration = (() => {
       const durSel = videoParamSelections[modelName]?.duration
@@ -282,15 +315,14 @@ export function useStoryboardActions({
         clip_duration_sec: defaultClipDuration,
         serial_scene: isSerialScene || undefined,
         scene_group_keys: isSerialScene && sceneGroupKeys.some(Boolean) ? sceneGroupKeys : undefined,
-        render_config: {
+        render_config: buildProjectVideoRenderConfig(project, {
           frame_size: options?.frameSize || selectedEpisodeVideoFrameSize,
           subject_size: options?.subjectSize || selectedEpisodeVideoSubjectSize,
           clarity: options?.clarity || selectedEpisodeVideoClarity,
           transition: selectedEpisodeTransition === 'none' ? undefined : selectedEpisodeTransition,
           transition_duration: selectedEpisodeTransition !== 'none' ? parseFloat(selectedEpisodeTransitionDuration) : undefined,
-          production_mode: commentaryProductionModeValue(project),
           ...(videoParamSelections[modelName] ?? {}),
-        },
+        }),
       })
       const ep = episodes.find(e => e.id === episodeId)
       const label = vtVideoModelOptions.find(m => m.key === modelName)?.label || modelName
@@ -355,7 +387,7 @@ export function useStoryboardActions({
         byEpisodeSceneGroupKeys.set(epId, [])
       }
       byEpisode.get(epId)!.push(sb.image_url)
-      byEpisodeDesc.get(epId)!.push(sb.prompt_used || sb.scene_description || '')
+      byEpisodeDesc.get(epId)!.push(buildVideoSceneDescription(sb))
       byEpisodeDialogue.get(epId)!.push(speakableDialogue(sb))
       byEpisodeDuration.get(epId)!.push(
         resolveStoryboardClipDurationSec(sb, {
@@ -715,15 +747,15 @@ export function useStoryboardActions({
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (sbGenerateTrigger) handleGenerateAll(undefined) }, [sbGenerateTrigger])
+  useOneShotTriggerEffect(sbGenerateTrigger, () => handleGenerateAll(undefined), onSbGenerateTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (sbRegenerateTrigger) handleForceGenerateEpisode(undefined) }, [sbRegenerateTrigger])
+  useOneShotTriggerEffect(sbRegenerateTrigger, () => handleForceGenerateEpisode(undefined), onSbRegenerateTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (sbPauseTrigger) handlePauseGeneration() }, [sbPauseTrigger])
+  useOneShotTriggerEffect(sbPauseTrigger, () => handlePauseGeneration(), onSbPauseTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (sbResumeTrigger) handleResumeGeneration() }, [sbResumeTrigger])
+  useOneShotTriggerEffect(sbResumeTrigger, () => handleResumeGeneration(), onSbResumeTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (sbAuditTrigger) handleAuditContinuity() }, [sbAuditTrigger])
+  useOneShotTriggerEffect(sbAuditTrigger, () => handleAuditContinuity(), onSbAuditTriggerConsumed)
 
   const handleVoid = async (id: number, selectedSb: Storyboard | null, setSelectedSb: (sb: Storyboard | null) => void) => {
     try {
@@ -802,7 +834,10 @@ export function useStoryboardActions({
     setGeneratingSbVoice(true)
     try {
       if (sbVoiceScope === 'single') {
-        const text = formatStoryboardDubbingText(selectedSb, { isCommentary: isCommentaryProject })
+        const text = formatStoryboardDubbingText(selectedSb, {
+          isCommentary: isCommentaryProject,
+          maxRunes: resolveStoryboardSpeechLimit(selectedSb, project),
+        })
         if (!text) {
           toast({ title: '该分镜暂无台词，无法生成语音', variant: 'destructive' })
           return
@@ -818,14 +853,20 @@ export function useStoryboardActions({
         const allSbsRes = await storyboardAPI.listAll(projectId, { episode_id: selectedSb.episode_id }) as { data?: Storyboard[] }
         const eligible = (allSbsRes?.data ?? [])
           .sort((a, b) => a.sequence_number - b.sequence_number)
-          .filter((sb) => formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject }))
+          .filter((sb) => formatStoryboardDubbingText(sb, {
+            isCommentary: isCommentaryProject,
+            maxRunes: resolveStoryboardSpeechLimit(sb, project),
+          }))
         if (eligible.length === 0) {
           toast({ title: '当前集暂无台词，无法生成语音', variant: 'destructive' })
           return
         }
         let submitted = 0
         for (const sb of eligible) {
-          const text = formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+          const text = formatStoryboardDubbingText(sb, {
+            isCommentary: isCommentaryProject,
+            maxRunes: resolveStoryboardSpeechLimit(sb, project),
+          })
           if (!sb.episode_id || !text) continue
           try {
             await dubbingAPI.generateForStoryboard(projectId, sb.id, sb.episode_id, text, sbVoiceModel, {

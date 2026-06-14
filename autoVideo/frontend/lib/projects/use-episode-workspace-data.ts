@@ -118,6 +118,13 @@ export function useEpisodeWorkspaceData({
     autoSwitchedRef.current = false
     setAwaitingAutoStoryboard(initialAwaitingAutoStoryboard || autoPipelineActive)
     setActiveTab(initialTab)
+    setGenerateTrigger(0)
+    setRegenerateTrigger(0)
+    setSbGenerateTrigger(0)
+    setSbRegenerateTrigger(0)
+    setSbPauseTrigger(0)
+    setSbResumeTrigger(0)
+    setSbAuditTrigger(0)
   }, [episodeId, initialTab, initialAwaitingAutoStoryboard, autoPipelineActive])
 
   useEffect(() => {

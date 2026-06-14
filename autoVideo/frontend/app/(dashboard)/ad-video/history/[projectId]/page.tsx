@@ -12,7 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { assetAPI, modelAPI, projectAPI, storyboardAPI, storageAPI, videoAPI } from '@/lib/api'
-import type { AdCopyOptimizationState, Asset, Episode, Project, Storyboard } from '@/types'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
+import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
+import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
 
 type VideoTaskClip = {
   id: number
@@ -380,7 +382,7 @@ function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
 function buildEpisodeVideoPayload(
   storyboards: Storyboard[],
   episodeId: number | undefined,
-  options?: { serialScene?: boolean },
+  options?: { serialScene?: boolean; isCommentary?: boolean; project?: Project },
 ) {
   const serialScene = options?.serialScene !== false
   const sorted = storyboards
@@ -391,32 +393,10 @@ function buildEpisodeVideoPayload(
 
   const firstImageIndex = sorted.findIndex((item) => resolveFrameImage(item))
   const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
-  const pickStoryboardPrompt = (storyboard: Storyboard) => {
-    const sceneDescription = String(storyboard.scene_description || '').trim()
-    const promptUsed = String(storyboard.prompt_used || '').trim()
-    const hasSceneCharacters = Array.isArray(storyboard.characters) && storyboard.characters.length > 0
-    const hasBoundAssets = Array.isArray(storyboard.asset_ids) && storyboard.asset_ids.length > 0
-
-    if (!promptUsed) return sceneDescription
-    if (!sceneDescription) return promptUsed
-
-    const normalizedPrompt = promptUsed.toLowerCase()
-    const looksForeignToScene = (
-      normalizedPrompt.includes('lakeside')
-      || normalizedPrompt.includes('pine trees')
-      || normalizedPrompt.includes('mist rising over calm water')
-      || normalizedPrompt.includes('pastel sky')
-    )
-
-    if (looksForeignToScene && (hasSceneCharacters || hasBoundAssets)) {
-      return sceneDescription
-    }
-
-    return promptUsed
-  }
-
-  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(pickStoryboardPrompt(item)))
-  const dialogues = serialStoryboards.map((item) => softenDialogueText(item.dialogue || ''))
+  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(buildVideoSceneDescription(item)))
+  const dialogues = serialStoryboards.map((item) => softenDialogueText(
+    formatStoryboardSpeechForVideo(item, { isCommentary: options?.isCommentary, project: options?.project }),
+  ))
   const durations = serialStoryboards.map((item) => item.duration || 0)
   const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
   const moods = serialStoryboards.map((item) => item.mood || '')
@@ -1689,7 +1669,11 @@ ${paceBlock}`
 
     setGenerationAction('video-start')
     try {
-      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, { serialScene: isSerialMode })
+      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, {
+        serialScene: isSerialMode,
+        isCommentary: project ? detectCommentaryProject(project) : false,
+        project: project ?? undefined,
+      })
       const renderConfigBase: Record<string, unknown> = {
         aspect_ratio: selectedStep3AspectRatio,
         resolution: selectedStep3Resolution,

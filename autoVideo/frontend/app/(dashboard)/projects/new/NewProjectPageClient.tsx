@@ -27,6 +27,7 @@ import {
   VIDEO_STYLE_PRESETS,
   VIDEO_MOTION_OPTIONS,
 } from '@/lib/video-style-config'
+import { storyboardConfigFromProjectCreate } from '@/lib/projects/storyboard-runtime-config'
 import type { Model, Project } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -613,18 +614,18 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         }
       }
       if (display.showStoryboardConfig) {
-        payload.storyboard_config = {
+        payload.storyboard_config = storyboardConfigFromProjectCreate({
           aspect_ratio: form.storyboard_aspect_ratio,
           resolution: form.storyboard_resolution,
-          ...(display.showStoryboardDuration ? { duration: form.storyboard_duration } : {}),
-          ...(display.showVideoMode ? { video_mode: form.video_mode } : {}),
-          ...(display.showVideoStyle ? { style_preset: form.video_style_preset } : {}),
-          ...(display.showVideoMotion ? { motion_mode: form.video_motion_mode } : {}),
-          ...(isVideoCreateFlow ? { production_mode: form.production_mode } : {}),
-          ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_region ? { region: form.liveaction_region.trim() } : {}),
-          ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_era ? { era: form.liveaction_era.trim() } : {}),
-          ...(display.showVideoStyle && isLiveActionStyle(form.video_style_preset) && form.liveaction_ethnicity ? { ethnicity: form.liveaction_ethnicity.trim() } : {}),
-        }
+          duration: display.showStoryboardDuration ? form.storyboard_duration : undefined,
+          video_mode: display.showVideoMode ? form.video_mode : undefined,
+          style_preset: display.showVideoStyle ? form.video_style_preset : 'anime-2d',
+          motion_mode: display.showVideoMotion ? form.video_motion_mode : undefined,
+          production_mode: isVideoCreateFlow ? form.production_mode : undefined,
+          region: display.showVideoStyle && isLiveActionStyle(form.video_style_preset) ? form.liveaction_region.trim() : undefined,
+          era: display.showVideoStyle && isLiveActionStyle(form.video_style_preset) ? form.liveaction_era.trim() : undefined,
+          ethnicity: display.showVideoStyle && isLiveActionStyle(form.video_style_preset) ? form.liveaction_ethnicity.trim() : undefined,
+        })
       }
       if (display.showConsistency) {
         payload.consistency_strength = form.consistency_strength / 100
@@ -638,7 +639,10 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
       // can apply model-specific duration constraints (Kling: 5/10s, Vidu: 4/8s, etc.).
       if (videoRuntimeKey && display.showStoryboardConfig) {
         await projectAPI.update(projectId, {
-          storyboard_config: { ...(payload.storyboard_config ?? {}), video_model: videoRuntimeKey },
+          storyboard_config: {
+            ...(payload.storyboard_config ?? {}),
+            video_model: videoRuntimeKey,
+          },
         } as Partial<Project>)
       }
       const uploadableScriptFile = form.scriptFile

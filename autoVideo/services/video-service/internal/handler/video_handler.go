@@ -219,7 +219,7 @@ func firstNonEmptyString(vals ...string) string {
 
 func buildNativeAudioSubmissionText(prompt, voiceText string, generateAudio bool) string {
 	prompt = strings.TrimSpace(prompt)
-	voiceText = strings.TrimSpace(voiceText)
+	voiceText = service.SpokenTextForPlayback(voiceText)
 	if !generateAudio || voiceText == "" {
 		return prompt
 	}
@@ -1508,11 +1508,22 @@ func (h *VideoHandler) RetryVideo(c *gin.Context) {
 	}
 
 	var req struct {
-		ModelName string `json:"model_name"`
+		ModelName         string   `json:"model_name"`
+		SceneDescriptions []string `json:"scene_descriptions"`
+		Dialogues         []string `json:"dialogues"`
 	}
 	_ = c.ShouldBindJSON(&req)
+	applySpeechSanitization(&req.Dialogues, nil)
 
-	if err := h.svc.RetryTask(c.Request.Context(), vid, req.ModelName); err != nil {
+	var overrides *service.VideoTaskRenderOverrides
+	if len(req.SceneDescriptions) > 0 || len(req.Dialogues) > 0 {
+		overrides = &service.VideoTaskRenderOverrides{
+			SceneDescriptions: req.SceneDescriptions,
+			Dialogues:         req.Dialogues,
+		}
+	}
+
+	if err := h.svc.RetryTask(c.Request.Context(), vid, req.ModelName, overrides); err != nil {
 		h.logger.Error("retry video", zap.Int64("vid", vid), zap.Error(err))
 		response.InternalError(c, err.Error())
 		return

@@ -234,7 +234,7 @@ export default function ManualVideoHistoryPage() {
                       <Link href={`/video/history/${task.id}`}>详情</Link>
                     </Button>
                     {task.project_id > 0 && (
-                      <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction(`retry-${task.id}`, () => videoAPI.retryVideoTask(task.project_id, task.id, task.requested_model || task.model_name), '已触发重试')}>
+                      <Button variant="outline" disabled={busyAction !== ''} onClick={() => runAction(`retry-${task.id}`, () => videoAPI.retryVideoTask(task.project_id, task.id, { model_name: task.requested_model || task.model_name }), '已触发重试')}>
                         {busyAction === `retry-${task.id}` ? '处理中…' : '重试'}
                       </Button>
                     )}

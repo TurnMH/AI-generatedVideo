@@ -17,6 +17,7 @@ import (
 	"github.com/autovideo/project-service/internal/model"
 	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/speechtext"
+	"github.com/autovideo/project-service/internal/storyboardprompt"
 	"github.com/lib/pq"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
@@ -210,12 +211,22 @@ func (s *StoryboardService) TriggerAutoVideoIfReady(ctx context.Context, project
 		payload := episodePayload{EpisodeID: epID}
 		for _, sb := range rows {
 			payload.ImageURLs = append(payload.ImageURLs, sb.ImageURL)
-			desc := strings.TrimSpace(sb.PromptUsed)
-			if desc == "" {
-				desc = strings.TrimSpace(sb.SceneDescription)
+			payload.SceneDescriptions = append(payload.SceneDescriptions, storyboardprompt.VideoSceneDescription(
+				sb.SceneDescription,
+				sb.PromptUsed,
+				"",
+			))
+			duration := int(sb.Duration)
+			if duration <= 0 {
+				duration = 5
 			}
-			payload.SceneDescriptions = append(payload.SceneDescriptions, desc)
-			payload.Dialogues = append(payload.Dialogues, strings.TrimSpace(speechtext.SanitizeForSpeech(sb.Dialogue)))
+			dialogue := speechtext.FitStoryboardDialogue(
+				speechtext.SanitizeForSpeech(sb.Dialogue),
+				duration,
+				storyboardConfigString(project.StoryboardConfig, "speech_pace"),
+				productionmode.ResolveProfile(project).IsCommentaryComic(),
+			)
+			payload.Dialogues = append(payload.Dialogues, dialogue)
 			if sb.Duration > 0 {
 				payload.Durations = append(payload.Durations, float64(sb.Duration))
 			} else {
@@ -253,6 +264,11 @@ func (s *StoryboardService) TriggerAutoVideoIfReady(ctx context.Context, project
 		}
 	}
 
+	speechPace := storyboardConfigString(project.StoryboardConfig, "speech_pace")
+	if speechPace == "" {
+		speechPace = productionmode.DefaultSpeechPace(stylePreset)
+	}
+
 	reqBody := batchRequest{
 		Episodes:        episodes,
 		ModelName:       modelName,
@@ -264,6 +280,9 @@ func (s *StoryboardService) TriggerAutoVideoIfReady(ctx context.Context, project
 		RenderConfig: map[string]interface{}{
 			"allow_incomplete_compose": true,
 			"auto_triggered":           true,
+			"style_preset":             stylePreset,
+			"speech_pace":              speechPace,
+			"production_mode":          productionmode.ResolveProfile(project).Mode,
 		},
 	}
 	if storyboardConfigBool(project.StoryboardConfig, "generate_audio", false) {

@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect, useMemo } from 'react'
+import { useOneShotTriggerEffect } from '@/lib/projects/use-one-shot-trigger'
 import { useParams, useRouter } from 'next/navigation'
 import useSWR, { mutate as globalMutate } from 'swr'
 import {
@@ -144,7 +145,7 @@ function buildAssetStoryboardUsageMap(storyboards: Storyboard[]): Map<number, St
 }
 
 
-export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAssets, isExtractingEpisodeAssets, generateTrigger, regenerateTrigger, hideActionBar }: { projectId: number; project: Project; episodeId?: number; onExtractEpisodeAssets?: () => void; isExtractingEpisodeAssets?: boolean; generateTrigger?: number; regenerateTrigger?: number; hideActionBar?: boolean }) {
+export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAssets, isExtractingEpisodeAssets, generateTrigger, regenerateTrigger, onGenerateTriggerConsumed, onRegenerateTriggerConsumed, hideActionBar }: { projectId: number; project: Project; episodeId?: number; onExtractEpisodeAssets?: () => void; isExtractingEpisodeAssets?: boolean; generateTrigger?: number; regenerateTrigger?: number; onGenerateTriggerConsumed?: () => void; onRegenerateTriggerConsumed?: () => void; hideActionBar?: boolean }) {
   const { toast } = useToast()
   const sharedEpisode = useProjectEpisodeFilter()
   const [filter, setFilter] = useState<AssetType | 'all'>('all')
@@ -468,9 +469,9 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const handleRegenerateAll = () => openBatchGenDialog(episodeId !== undefined ? { kind: 'episode', episodeId, force: true } : { kind: 'all', force: true })
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if ((generateTrigger ?? 0) > 0) handleGenerateAll() }, [generateTrigger])
+  useOneShotTriggerEffect(generateTrigger, () => handleGenerateAll(), onGenerateTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if ((regenerateTrigger ?? 0) > 0) handleRegenerateAll() }, [regenerateTrigger])
+  useOneShotTriggerEffect(regenerateTrigger, () => handleRegenerateAll(), onRegenerateTriggerConsumed)
 
   const executeBatchGenerate = async () => {
     setBatchGenRunning(true)

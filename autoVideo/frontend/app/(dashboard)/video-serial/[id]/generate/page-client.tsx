@@ -7,7 +7,9 @@ import {
   Film, ImageIcon, LayoutGrid, Layers, Pause, Play,
   RefreshCw, Sparkles, Video, Zap,
 } from 'lucide-react'
-import { pipelineAPI, projectAPI, scriptAPI, storyboardAPI, videoAPI } from '@/lib/api'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
+import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
+import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
 import type { Project, Storyboard } from '@/types'
 import { TaskQueue } from '@/components/task/TaskQueue'
 import { Button } from '@/components/ui/button'
@@ -222,6 +224,7 @@ export default function SerialGeneratePage() {
   }
 
   const buildSerialVideoLaunchPlan = (storyboards: Storyboard[]): SerialVideoLaunchPlan => {
+    const isCommentary = detectCommentaryProject(project)
     const ordered = [...storyboards].sort((a, b) => a.sequence_number - b.sequence_number)
     const byEpisode = new Map<number, {
       imageUrls: string[]
@@ -262,8 +265,8 @@ export default function SerialGeneratePage() {
     const appendStoryboard = (sb: Storyboard) => {
       const episodeBucket = ensureEpisode(sb.episode_id ?? 0)
       episodeBucket.imageUrls.push(sb.image_url || '')
-      episodeBucket.descriptions.push(sb.prompt_used || sb.scene_description || '')
-      episodeBucket.dialogues.push(sb.dialogue || '')
+      episodeBucket.descriptions.push(buildVideoSceneDescription(sb))
+      episodeBucket.dialogues.push(formatStoryboardSpeechForVideo(sb, { isCommentary, project }))
       episodeBucket.durations.push(sb.duration || 0)
       episodeBucket.cameras.push(sb.camera_movement || '')
       episodeBucket.moods.push(sb.mood || '')

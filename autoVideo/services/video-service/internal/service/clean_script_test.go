@@ -93,7 +93,10 @@ func TestJoinDialogues_CleansEachLine(t *testing.T) {
 	if strings.Contains(out, "内景") || strings.Contains(out, "环境") || strings.Contains(out, "蒸汽弥漫") {
 		t.Fatalf("joinDialogues leaked stage directions: %q", out)
 	}
-	if !strings.Contains(out, "刘师傅：开火。") || !strings.Contains(out, "旁白：香气飘出。") {
+	if !strings.Contains(out, "开火") || !strings.Contains(out, "香气飘出") {
 		t.Fatalf("joinDialogues dropped dialogue: %q", out)
+	}
+	if strings.Contains(out, "旁白") || strings.Contains(out, "刘师傅：") {
+		t.Fatalf("joinDialogues should strip routing labels: %q", out)
 	}
 }

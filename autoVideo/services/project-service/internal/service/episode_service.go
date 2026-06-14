@@ -25,6 +25,7 @@ import (
 	"github.com/autovideo/project-service/internal/model"
 	"github.com/autovideo/project-service/internal/productionmode"
 	"github.com/autovideo/project-service/internal/repository"
+	"github.com/autovideo/project-service/internal/scriptpreserve"
 	"github.com/autovideo/project-service/internal/scriptsplit"
 	"github.com/autovideo/project-service/internal/speechtext"
 	"github.com/autovideo/project-service/internal/stylepreset"
@@ -1004,6 +1005,7 @@ type storyboardRuntimeConfig struct {
 	Duration                   int    `json:"duration"`
 	VideoModel                 string `json:"video_model"`
 	StylePreset                string `json:"style_preset"`
+	MotionMode                 string `json:"motion_mode"`
 	AspectRatio                string `json:"aspect_ratio"`
 	Resolution                 string `json:"resolution"`
 	SpeechPace                 string `json:"speech_pace"`
@@ -1055,10 +1057,17 @@ func parseStoryboardRuntimeConfig(project *model.Project) storyboardRuntimeConfi
 	}
 	_ = json.Unmarshal(project.StoryboardConfig, &cfg)
 	cfg.VideoModel = strings.TrimSpace(cfg.VideoModel)
-	cfg.StylePreset = strings.TrimSpace(cfg.StylePreset)
+	cfg.StylePreset = stylepreset.Canonical(strings.TrimSpace(cfg.StylePreset))
+	cfg.MotionMode = strings.TrimSpace(cfg.MotionMode)
 	cfg.AspectRatio = strings.TrimSpace(cfg.AspectRatio)
 	cfg.Resolution = strings.TrimSpace(cfg.Resolution)
 	cfg.SpeechPace = canonicalSpeechPace(cfg.SpeechPace)
+	if cfg.SpeechPace == "" {
+		cfg.SpeechPace = productionmode.DefaultSpeechPace(cfg.StylePreset)
+	}
+	if cfg.SpeechPace == "" {
+		cfg.SpeechPace = "normal"
+	}
 	return cfg
 }
 
@@ -1810,9 +1819,17 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project
 	if prepSkillHints != "" {
 		systemPrompt += "\n\n本项目专属分镜预处理指引：\n" + prepSkillHints
 	}
+	runtimeCfg := parseStoryboardRuntimeConfig(project)
+	systemPrompt += "\n\n" + productionmode.ScriptPrepRuntimeContext(
+		runtimeCfg.StylePreset,
+		runtimeCfg.MotionMode,
+		runtimeCfg.Duration,
+		runtimeCfg.SpeechPace,
+	)
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += "\n\n" + bible + "\n所有标注中的人物姓名和场景描述必须与以上一致性词库保持一致。"
 	}
+	systemPrompt += "\n\n" + dialoguePreservationPromptBlock(content)
 
 	reqBody := map[string]interface{}{
 		"model": llmCfg.Model,
@@ -1864,7 +1881,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project
 	if len(optimized) < 50 {
 		return content
 	}
-	return optimized
+	return s.preserveDialogueFromSource(content, optimized)
 }
 
 func (s *EpisodeService) fetchProductionSkillHints(ctx context.Context, projectID uint64) string {
@@ -1973,6 +1990,7 @@ func (s *EpisodeService) callLLMPolish(ctx context.Context, project *model.Proje
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += bible
 	}
+	systemPrompt += "\n\n" + dialoguePreservationPromptBlock(ep.ScriptExcerpt)
 
 	userContent := fmt.Sprintf("第%d集《%s》\n\n【当前简介】\n%s\n\n【当前内容】\n%s",
 		ep.EpisodeNumber,
@@ -2027,6 +2045,9 @@ func (s *EpisodeService) callLLMPolish(ctx context.Context, project *model.Proje
 	var result polishedEpisode
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("parse polished JSON: %w", err)
+	}
+	if result.ScriptExcerpt != "" {
+		result.ScriptExcerpt = s.preserveDialogueFromSource(ep.ScriptExcerpt, result.ScriptExcerpt)
 	}
 	return &result, nil
 }
@@ -2777,7 +2798,7 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	// ══════════════════════════════════════════════════════════════════════════
 	s.updateProgress(projectID, ProgressInfo{
 		Stage:        "episode_splitting",
-		Message:      "正在按优化后文案自动拆分剧本为集数…",
+		Message:      "正在按原文章节优先拆分剧本为集数…",
 		EpisodeSplit: &StageProgress{Status: "running"},
 		AutoSplit:    &autoSplitProgress,
 	})
@@ -2794,6 +2815,8 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			zap.Bool("success", chapterSplit),
 			zap.Int("episodes_found", len(episodes)),
 			zap.Int("script_length", utf8.RuneCountInString(optimizedScriptText)),
+			zap.Int("original_script_length", utf8.RuneCountInString(normalizedOriginalScript)),
+			zap.Bool("original_has_chapter_markers", scriptsplit.HasChapterMarkers(normalizedOriginalScript)),
 			zap.Int("requested_target_episodes", project.TargetEpisodes),
 			zap.Int("runtime_duration", runtimeCfg.Duration),
 			zap.String("runtime_video_model", runtimeCfg.VideoModel),
@@ -3075,13 +3098,21 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 	// The template is used to produce PromptUsed for each storyboard at creation time.
 	var storyboardPromptTemplate string
 	projectVisualEra := ""
+	projectStylePreset := stylepreset.Default
+	projectMotionMode := ""
 	productionProfile := productionmode.Profile{Mode: productionmode.ModeScriptDrama}
 	serialSceneEnabled := strings.TrimSpace(projectType) == "video_serial"
 	assetRefs := s.fetchAssetReferences(ctx, projectID, nil)
 	if project, err := s.projectRepo.FindByIDNoAuth(projectID); err == nil {
 		productionProfile = productionmode.ResolveProfile(project)
+		runtimeCfg := parseStoryboardRuntimeConfig(project)
+		projectStylePreset = runtimeCfg.StylePreset
+		if projectStylePreset == "" {
+			projectStylePreset = stylepreset.Default
+		}
+		projectMotionMode = runtimeCfg.MotionMode
 		serialSceneEnabled = shouldEnableSceneSerial(projectType)
-		sk := storyboardStyleKey(storyboardStylePreset(project))
+		sk := storyboardStyleKey(projectStylePreset)
 		storyboardPromptTemplate = s.fetchStoryboardPromptTemplate(ctx, sk)
 		if productionProfile.IsAd() {
 			adDirective := productionmode.AdWorkbenchDirective()
@@ -3182,7 +3213,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			}
 
 			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, productionProfile, customStoryboardSplitPrompt)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, productionProfile, customStoryboardSplitPrompt, projectStylePreset, projectMotionMode)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -3273,7 +3304,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 		// kwLib provides character/location appearance profiles for visual consistency across prompts.
 		// crossEpisodePrevPrompt seeds the first batch with the last scene from the previous episode.
 		episodeAssets := filterAssetReferencesByEpisode(assetRefs, epID)
-		refinedPrompts := s.refineScenePrompts(ctx, scenes, storyboardHints, storyboardPromptTemplate, kwLib, ep.EpisodeNumber, projectType, crossEpisodePrevPrompt)
+		refinedPrompts := s.refineScenePrompts(ctx, scenes, storyboardHints, storyboardPromptTemplate, kwLib, ep.EpisodeNumber, projectType, crossEpisodePrevPrompt, projectStylePreset)
 		if s.logger != nil {
 			s.logger.Info("episode prompt refinement completed",
 				zap.Uint64("project_id", projectID),
@@ -3353,10 +3384,8 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				})
 			}
 
+			storyboardDuration := clampDuration(scene.Duration, 2, 12)
 			storyboardDialogue := scene.Dialogue
-			if productionProfile.IsCommentaryComic() {
-				storyboardDialogue = speechtext.FinalizeCommentaryDialogue(storyboardDialogue)
-			}
 			if quotes := speechtext.ExtractCharacterQuotesFromScene(desc, chars); len(quotes) > 0 {
 				var extras []string
 				for _, q := range quotes {
@@ -3364,6 +3393,12 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				}
 				storyboardDialogue = strings.TrimSpace(storyboardDialogue + "\n" + strings.Join(extras, "\n"))
 			}
+			storyboardDialogue = speechtext.FitStoryboardDialogue(
+				storyboardDialogue,
+				storyboardDuration,
+				speechPace,
+				productionProfile.IsCommentaryComic(),
+			)
 
 			_, err := s.storyboardSvc.Create(projectID, CreateStoryboardReq{
 				EpisodeID:        &epID,
@@ -3371,7 +3406,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				SceneDescription: desc,
 				Characters:       chars,
 				Location:         scene.Location,
-				Duration:         clampDuration(scene.Duration, 2, 12),
+				Duration:         storyboardDuration,
 				Dialogue:         storyboardDialogue,
 				CameraMovement:   shotTypeToCameraMovement(scene.ShotType),
 				Mood:             scene.Mood,
@@ -3406,7 +3441,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
 	}
@@ -3436,7 +3471,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 			}
 		}
 
-		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
+		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 		if len(scenes) > 0 {
 			return s.postProcessAndAlignCommentaryScenes(episodeContent, scenes, clipDuration, speechPace, profile)
 		}
@@ -3452,7 +3487,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 // callLLMSceneSplit —— 调用 LLM 将剧集内容拆分为原子场景，支持长文本分块
 // callLLMSceneSplit splits episode content into atomic scenes via LLM.
 // Supports up to 100k chars; automatically chunks long texts at paragraph boundaries.
-func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
 	const maxChars = 100000
 	if runeLen := utf8.RuneCountInString(episodeContent); runeLen > maxChars {
 		episodeContent = string([]rune(episodeContent)[:maxChars])
@@ -3461,15 +3496,15 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 	// For long texts (>30k chars), split into chunks at paragraph boundaries
 	const chunkLimit = 30000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
-		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
+		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 	}
 
-	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
+	return s.sceneSplitSingle(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 }
 
 // sceneSplitChunked —— 将长文本按段落边界分块后逐块调用 LLM 拆分场景
 // sceneSplitChunked splits long content into paragraph-aligned chunks and processes each via LLM.
-func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, episodeNum int, chunkLimit int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
 	paragraphs := splitIntoParagraphs(content)
 
 	var chunks []string
@@ -3508,7 +3543,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 			return allScenes
 		default:
 		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt)
+		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 		if s.logger != nil {
 			s.logger.Info("chunk scene split done",
 				zap.Int("episode", episodeNum),
@@ -3524,7 +3559,7 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 
 // sceneSplitSingle —— 单次 LLM 调用将内容拆分为原子视觉场景
 // sceneSplitSingle makes a single LLM call to split content into atomic scenes.
-func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string) []llmScene {
+func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
 	// clipDuration is the user-selected target clip length for ad storyboards.
 	// Scene splitting should follow that fixed per-clip duration instead of
 	// letting each storyboard land on a different saved duration.
@@ -3544,10 +3579,14 @@ func (s *EpisodeService) sceneSplitSingle(ctx context.Context, content string, e
 		ModelDuration: modelDurationHint,
 		VisualHint:    visualHint,
 		SpeechHint:    speechHint,
+		StylePreset:   stylepreset.Canonical(stylePreset),
+		StyleHint:     productionmode.StyleSplitVisualHint(stylePreset, motionMode),
 	}
 	prompt := productionmode.SceneSplitUserPrompt(profile.Mode, splitParams)
 	sceneSystemPrompt := productionmode.SceneSplitSystemPrompt(profile.Mode)
-
+	if styleBlock := productionmode.RefinePromptStyleBlock(stylePreset); styleBlock != "" {
+		sceneSystemPrompt += "\n\n" + styleBlock
+	}
 	if styleHint := videoModelStyleHint(videoModel); styleHint != "" {
 		sceneSystemPrompt += "\n\n" + styleHint
 	}
@@ -3728,7 +3767,7 @@ func normalizeAdSceneDuration(duration int, clipDuration int) int {
 	return 5
 }
 
-func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int) []llmScene {
+func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
 	if len(scenes) == 0 {
 		return scenes
 	}
@@ -3867,6 +3906,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 	}
 	for i := range processed {
 		processed[i].Duration = normalizeAdSceneDuration(processed[i].Duration, clipDuration)
+		refitSceneDialogue(&processed[i], clipDuration, speechPace, false)
 	}
 	return processed
 }
@@ -3878,7 +3918,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 // After generation, all prompts are audited: sensitive words replaced, near-duplicates
 // diversified, and flagged prompts rewritten by an LLM reviewer.
 // Returns a slice of the same length as scenes; empty strings mean caller should fallback.
-func (s *EpisodeService) refineScenePrompts(ctx context.Context, scenes []llmScene, skillHints string, promptTemplate string, kwLib *KeywordLibrary, episodeNum int, projectType string, prevEpisodeContext string) []string {
+func (s *EpisodeService) refineScenePrompts(ctx context.Context, scenes []llmScene, skillHints string, promptTemplate string, kwLib *KeywordLibrary, episodeNum int, projectType string, prevEpisodeContext string, stylePreset string) []string {
 	if len(scenes) == 0 {
 		return nil
 	}
@@ -3893,7 +3933,7 @@ func (s *EpisodeService) refineScenePrompts(ctx context.Context, scenes []llmSce
 			end = len(scenes)
 		}
 		batch := scenes[start:end]
-		prompts := s.refineScenePromptsBatch(ctx, batch, skillHints, promptTemplate, kwLib, episodeNum, start, prevPrompt, projectType)
+		prompts := s.refineScenePromptsBatch(ctx, batch, skillHints, promptTemplate, kwLib, episodeNum, start, prevPrompt, projectType, stylePreset)
 		if len(prompts) == len(batch) {
 			copy(results[start:end], prompts)
 			prevPrompt = prompts[len(prompts)-1]
@@ -3916,7 +3956,7 @@ func (s *EpisodeService) refineScenePrompts(ctx context.Context, scenes []llmSce
 // refineScenePromptsBatch makes a single LLM call to produce optimized image prompts
 // for one batch of scenes, ensuring visual continuity from the previous batch.
 // kwLib injects character appearance descriptions and location profiles as a consistency bible.
-func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []llmScene, skillHints string, promptTemplate string, kwLib *KeywordLibrary, episodeNum int, offset int, prevContext string, projectType string) []string {
+func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []llmScene, skillHints string, promptTemplate string, kwLib *KeywordLibrary, episodeNum int, offset int, prevContext string, projectType string, stylePreset string) []string {
 	// Build per-character appearance lookup (prefer English for image generation).
 	charAppearance := map[string]string{}
 	// Build per-location visual profile lookup (prefer English).
@@ -4126,6 +4166,9 @@ Rules:
 16. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
+	if styleBlock := productionmode.RefinePromptStyleBlock(stylePreset); styleBlock != "" {
+		systemPrompt += "\n\n" + styleBlock
+	}
 	if skillHints != "" {
 		systemPrompt += "\n\n**Project art style and visual skill guidelines (MUST follow):**\n" + skillHints
 	}
@@ -5386,15 +5429,25 @@ func (s *EpisodeService) fillExcerptsFromBoundaries(scriptText string, episodes 
 	}
 }
 
-// resolveStructuralEpisodeSplit prefers chapter headings, then user-provided split keywords.
+// resolveStructuralEpisodeSplit prefers chapter headings from the original manuscript,
+// then optimized script, then user-provided split keywords.
 func resolveStructuralEpisodeSplit(optimizedScript, originalScript string, splitKeywords []string) ([]llmEpisode, string) {
-	if episodes := draftEpisodesToLLM(scriptsplit.SplitByChapters(optimizedScript)); len(episodes) > 0 {
-		return episodes, "chapters"
-	}
 	originalScript = strings.TrimSpace(originalScript)
-	if originalScript != "" && originalScript != strings.TrimSpace(optimizedScript) {
+	optimizedScript = strings.TrimSpace(optimizedScript)
+
+	// Prefer chapter markers from the normalized original; LLM polish may strip 01/02 headings.
+	if originalScript != "" {
 		if episodes := draftEpisodesToLLM(scriptsplit.SplitByChapters(originalScript)); len(episodes) > 0 {
-			return episodes, "chapters_original"
+			method := "chapters"
+			if optimizedScript != "" && optimizedScript != originalScript {
+				method = "chapters_original"
+			}
+			return episodes, method
+		}
+	}
+	if optimizedScript != "" && optimizedScript != originalScript {
+		if episodes := draftEpisodesToLLM(scriptsplit.SplitByChapters(optimizedScript)); len(episodes) > 0 {
+			return episodes, "chapters_optimized"
 		}
 	}
 	if episodes := splitByUserKeywords(optimizedScript, splitKeywords); len(episodes) > 0 {
@@ -5437,6 +5490,29 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func dialoguePreservationPromptBlock(source string) string {
+	block := scriptpreserve.DialoguePreservationDirective()
+	if locked := scriptpreserve.FormatLockedDialoguePromptBlock(scriptpreserve.ExtractLockedDialogues(source)); locked != "" {
+		block += "\n\n" + locked
+	}
+	return block
+}
+
+func (s *EpisodeService) preserveDialogueFromSource(source, rewritten string) string {
+	source = strings.TrimSpace(source)
+	rewritten = strings.TrimSpace(rewritten)
+	if source == "" || rewritten == "" || source == rewritten {
+		return rewritten
+	}
+	enforced, restored := scriptpreserve.EnforceLockedDialogues(source, rewritten)
+	if restored > 0 && s.logger != nil {
+		s.logger.Info("restored locked dialogues after script rewrite",
+			zap.Int("restored_count", restored),
+		)
+	}
+	return enforced
 }
 
 // splitByUserKeywords —— 按用户提供的分集关键词在文本中定位并拆分为剧集
@@ -6106,6 +6182,7 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += bible
 	}
+	systemPrompt += "\n\n" + dialoguePreservationPromptBlock(ep.ScriptExcerpt)
 
 	userContent := fmt.Sprintf("第%d集《%s》\n\n【当前简介】\n%s\n\n【原始文本】\n%s",
 		ep.EpisodeNumber, ep.Title, ep.Summary, ep.ScriptExcerpt)
@@ -6161,6 +6238,9 @@ func (s *EpisodeService) callLLMOptimize(ctx context.Context, ep *model.Episode,
 	var result OptimizedEpisode
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("parse optimized JSON: %w", err)
+	}
+	if result.OptimizedText != "" {
+		result.OptimizedText = s.preserveDialogueFromSource(ep.ScriptExcerpt, result.OptimizedText)
 	}
 	return &result, nil
 }
@@ -6751,6 +6831,8 @@ func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, r
 	if bible := buildConsistencyBibleBlock(kwLib); bible != "" {
 		systemPrompt += bible
 	}
+	dialogueSource := firstNonEmpty(ep.OriginalExcerpt, ep.ScriptExcerpt)
+	systemPrompt += "\n\n" + dialoguePreservationPromptBlock(dialogueSource)
 
 	userContent := fmt.Sprintf("第%d集《%s》\n\n【审查发现的问题（需修复）】\n%s\n\n【当前综合评分】完整度%d 完善度%d 一致性%d 衔接%d 台词%d\n\n【需修改的剧本正文】\n%s",
 		ep.EpisodeNumber, ep.Title,
@@ -6809,6 +6891,9 @@ func (s *EpisodeService) callLLMRepair(ctx context.Context, ep *model.Episode, r
 	var result OptimizedEpisode
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("parse repair JSON: %w", err)
+	}
+	if result.OptimizedText != "" {
+		result.OptimizedText = s.preserveDialogueFromSource(dialogueSource, result.OptimizedText)
 	}
 	return &result, nil
 }

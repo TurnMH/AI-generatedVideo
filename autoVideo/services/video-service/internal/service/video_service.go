@@ -334,38 +334,39 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	sceneGroupKeys := []string(task.SceneGroupKeys)
 	assetAnchors := s.fetchAssetPromptAnchors(ctx, task.ProjectID, assetAnchorLookupIDs(task.RenderConfig, perClipAssetIDs))
 	// opt-p7: merge Kafka-provided motion descriptions (storyboard camera text) into
-	// per-clip prompts, overriding RenderConfig entries when present.
+	// per-clip prompts when they add new information.
 	for i, md := range motionDescs {
-		if i < len(perClipDescs) && strings.TrimSpace(md) != "" {
-			if perClipDescs[i] == "" {
-				perClipDescs[i] = md
-			} else {
-				perClipDescs[i] = perClipDescs[i] + ". " + md
-			}
+		md = strings.TrimSpace(md)
+		if i >= len(perClipDescs) || md == "" {
+			continue
 		}
+		if perClipDescs[i] == "" {
+			perClipDescs[i] = md
+			continue
+		}
+		if strings.Contains(perClipDescs[i], md) || strings.Contains(md, perClipDescs[i]) {
+			continue
+		}
+		perClipDescs[i] = perClipDescs[i] + ". " + md
 	}
 
-	// opt-motion-llm: LLM pass — replace rule-based motion prompts with holistic,
-	// scene-aware camera directions that consider the full clip sequence.
-	if s.motionPromptSvc != nil {
-		family := videoModelFamily(resolvedModelName)
-		if refined := s.motionPromptSvc.RefineBatch(
-			ctx,
-			perClipDescs,
-			family,
-			resolvedMotionMode,
-			resolvedStylePreset,
-			charDescriptions,
-			sceneGroupKeys,
-			perClipCameras,
-			perClipMoods,
-			perClipSpatialAnchors,
-			perClipSubjectPositions,
-			perClipTransitionNotes,
-		); len(refined) > 0 {
-			perClipDescs = refined
-		}
-	}
+	storyDescs := preparePerClipStoryDescriptions(perClipDescs, perClipDialogues)
+	// opt-motion-llm: refine camera/motion language, but always preserve story beats.
+	perClipDescs = applyMotionPromptRefinement(
+		s.motionPromptSvc,
+		ctx,
+		storyDescs,
+		videoModelFamily(resolvedModelName),
+		resolvedMotionMode,
+		resolvedStylePreset,
+		charDescriptions,
+		sceneGroupKeys,
+		perClipCameras,
+		perClipMoods,
+		perClipSpatialAnchors,
+		perClipSubjectPositions,
+		perClipTransitionNotes,
+	)
 
 	// Delete stale clips from any previous attempt
 	if err := s.repo.DeleteClipsByTaskID(ctx, taskID); err != nil {
@@ -467,10 +468,13 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 				if !gen.SupportsNativeAudio() {
 					return ""
 				}
+				var raw string
 				if c.ClipOrder < len(perClipDialogues) && perClipDialogues[c.ClipOrder] != "" {
-					return perClipDialogues[c.ClipOrder]
+					raw = perClipDialogues[c.ClipOrder]
+				} else {
+					raw = task.SubtitleText
 				}
-				return task.SubtitleText
+				return SpokenTextForPlayback(raw)
 			}(),
 			Resolution:       renderConfigString(task.RenderConfig, "resolution"),
 			AspectRatio:      renderConfigString(task.RenderConfig, "aspect_ratio"),
@@ -1508,11 +1512,12 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	retryClipCharacterAssetRefs := perClipCharacterAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	retryClipAssetRefs := perClipAssetReferenceImages(perClipAssetIDs, retryAssetAnchors, clip.ClipOrder)
 	if s.motionPromptSvc != nil {
-		family := videoModelFamily(resolvedModelName)
-		if refined := s.motionPromptSvc.RefineBatch(
+		storyDescs := preparePerClipStoryDescriptions(perClipDescs, perClipDialogues)
+		perClipDescs = applyMotionPromptRefinement(
+			s.motionPromptSvc,
 			ctx,
-			perClipDescs,
-			family,
+			storyDescs,
+			videoModelFamily(resolvedModelName),
 			task.MotionMode,
 			task.StylePreset,
 			charDescriptions,
@@ -1522,9 +1527,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 			perClipSpatialAnchors,
 			perClipSubjectPositions,
 			perClipTransitionNotes,
-		); len(refined) > 0 {
-			perClipDescs = refined
-		}
+		)
 	}
 
 	retryProjectIdentityRefs := identityCharacterReferences(task.RenderConfig, retryAssetAnchors)
@@ -1546,11 +1549,13 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 
 	retryVoiceText := ""
 	if gen.SupportsNativeAudio() {
+		var raw string
 		if clip.ClipOrder < len(perClipDialogues) && perClipDialogues[clip.ClipOrder] != "" {
-			retryVoiceText = perClipDialogues[clip.ClipOrder]
+			raw = perClipDialogues[clip.ClipOrder]
 		} else {
-			retryVoiceText = task.SubtitleText
+			raw = task.SubtitleText
 		}
+		retryVoiceText = SpokenTextForPlayback(raw)
 	}
 
 	// 串行链感知：重试时只要当前 clip 属于非首帧串行片段，就应重新获取上一 clip 的末帧作为首帧。
@@ -2083,9 +2088,15 @@ func (s *VideoService) ResumePendingTasks(ctx context.Context) {
 	}
 }
 
-// RetryTask —— 重试单个失败任务，可选更换模型
+// VideoTaskRenderOverrides carries optional per-clip text overrides for a retry.
+type VideoTaskRenderOverrides struct {
+	SceneDescriptions []string
+	Dialogues         []string
+}
+
+// RetryTask —— 重试单个失败任务，可选更换模型或覆盖 render_config 中的镜头文本
 // RetryTask retries a single failed task, optionally with a different model.
-func (s *VideoService) RetryTask(ctx context.Context, taskID int64, modelName string) error {
+func (s *VideoService) RetryTask(ctx context.Context, taskID int64, modelName string, overrides *VideoTaskRenderOverrides) error {
 	task, err := s.repo.GetTask(ctx, taskID)
 	if err != nil {
 		return err
@@ -2095,6 +2106,17 @@ func (s *VideoService) RetryTask(ctx context.Context, taskID int64, modelName st
 	}
 	if modelName != "" {
 		task.ModelName = modelName
+	}
+	if overrides != nil {
+		if task.RenderConfig == nil {
+			task.RenderConfig = model.RenderConfig{}
+		}
+		if len(overrides.SceneDescriptions) > 0 {
+			task.RenderConfig["scene_descriptions"] = overrides.SceneDescriptions
+		}
+		if len(overrides.Dialogues) > 0 {
+			task.RenderConfig["dialogues"] = overrides.Dialogues
+		}
 	}
 	task.Status = model.StatusPending
 	task.ErrorMsg = ""
@@ -2117,7 +2139,7 @@ func (s *VideoService) RetryBatchFailed(ctx context.Context, projectID int64, mo
 	}
 	count := 0
 	for _, t := range tasks {
-		if err := s.RetryTask(ctx, t.ID, modelName); err != nil {
+		if err := s.RetryTask(ctx, t.ID, modelName, nil); err != nil {
 			s.logger.Warn("retry batch item", zap.Int64("id", t.ID), zap.Error(err))
 			continue
 		}
@@ -3120,12 +3142,12 @@ func extractSceneDescriptions(renderConfig model.RenderConfig, n int) []string {
 	switch v := raw.(type) {
 	case []string:
 		for i := 0; i < n && i < len(v); i++ {
-			result[i] = v[i]
+			result[i] = compactVideoSceneDescription(v[i])
 		}
 	case []interface{}:
 		for i := 0; i < n && i < len(v); i++ {
 			if s, ok := v[i].(string); ok {
-				result[i] = s
+				result[i] = compactVideoSceneDescription(s)
 			}
 		}
 	}
@@ -3144,15 +3166,34 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 		return result
 	}
 	commentary := isCommentaryProductionMode(renderConfigString(renderConfig, "production_mode"))
+	durations := extractDurations(renderConfig, n)
+	globalDuration := renderConfigFloat(renderConfig, "clip_duration_sec")
+	speechPace := renderConfigString(renderConfig, "speech_pace")
+	sceneDescs := extractSceneDescriptions(renderConfig, n)
+	sceneChars := extractSceneCharacters(renderConfig, n)
 	switch v := raw.(type) {
 	case []string:
 		for i := 0; i < n && i < len(v); i++ {
-			result[i] = cleanPerClipDialogueForMode(v[i], commentary)
+			maxRunes := maxRunesForClipDurationSec(perClipDurationSec(durations, i, globalDuration), speechPace)
+			result[i] = cleanPerClipDialogueWithFields(
+				v[i],
+				stringSliceValue(sceneDescs, i),
+				clipScenePersons(sceneChars, i),
+				commentary,
+				maxRunes,
+			)
 		}
 	case []interface{}:
 		for i := 0; i < n && i < len(v); i++ {
 			if s, ok := v[i].(string); ok {
-				result[i] = cleanPerClipDialogueForMode(s, commentary)
+				maxRunes := maxRunesForClipDurationSec(perClipDurationSec(durations, i, globalDuration), speechPace)
+				result[i] = cleanPerClipDialogueWithFields(
+					s,
+					stringSliceValue(sceneDescs, i),
+					clipScenePersons(sceneChars, i),
+					commentary,
+					maxRunes,
+				)
 			}
 		}
 	}
@@ -3163,7 +3204,7 @@ func extractDialogues(renderConfig model.RenderConfig, n int) []string {
 func joinDialogues(dialogues []string) string {
 	var parts []string
 	for _, d := range dialogues {
-		cleaned := cleanPerClipDialogue(d)
+		cleaned := SpokenTextForPlayback(cleanScriptForSpeech(strings.TrimSpace(d)))
 		if cleaned != "" {
 			parts = append(parts, cleaned)
 		}
@@ -4869,10 +4910,32 @@ func hasMeaningfulChinese(s string) bool {
 	return false
 }
 
+func looksLikeImageGenerationPrompt(desc string) bool {
+	lower := strings.ToLower(strings.TrimSpace(desc))
+	if lower == "" {
+		return false
+	}
+	markers := []string{
+		"create a single",
+		"storyboard keyframe",
+		"toon-shaded",
+		"cinematic portrait",
+		"8k resolution",
+		"masterpiece",
+		"best quality",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildVideoScenePrompt converts a storyboard scene description into a concise
 // video generation prompt fragment.
 //
-// When the input is an English description (e.g. a pre-refined prompt_used),
+// When the input is an English description unrelated to image generation,
 // it is returned directly (truncated to 300 chars) — no parsing is needed.
 //
 // When the input is a Chinese structured storyboard description, it extracts
@@ -4886,6 +4949,11 @@ func hasMeaningfulChinese(s string) bool {
 func buildVideoScenePrompt(sceneDescription string) string {
 	desc := strings.TrimSpace(sceneDescription)
 	if desc == "" {
+		return ""
+	}
+
+	// English image-generation prompts must not enter the video motion path.
+	if looksLikeImageGenerationPrompt(desc) {
 		return ""
 	}
 
@@ -4974,6 +5042,20 @@ func buildVideoScenePrompt(sceneDescription string) string {
 		if scene != "" {
 			parts = append(parts, "scene: "+scene)
 		}
+	}
+
+	// 6. Commentary / annotated scripts: preserve [字幕:] and [动作:] story beats.
+	if tags := extractInlineStoryTags(desc); len(tags) > 0 {
+		parts = append(parts, "story beat: "+strings.Join(tags, " / "))
+	}
+
+	if len(parts) == 0 {
+		cleaned := strings.TrimSpace(desc)
+		if utf8.RuneCountInString(cleaned) > 220 {
+			runes := []rune(cleaned)
+			cleaned = string(runes[:220]) + "..."
+		}
+		return cleaned
 	}
 
 	return strings.Join(parts, ", ")

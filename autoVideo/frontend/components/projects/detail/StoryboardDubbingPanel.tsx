@@ -15,6 +15,7 @@ import {
   getStoryboardVoiceRoleLabel,
   hasSpeakableStoryboardText,
   looksLikeStoryboardVisualDescription,
+  resolveStoryboardSpeechLimit,
 } from '@/lib/projects/storyboard-dubbing'
 
 type VoiceOptions = {
@@ -26,7 +27,7 @@ type VoiceOptions = {
 
 type StoryboardDubbingPanelProps = {
   projectId: number
-  project: Pick<Project, 'enable_dubbing' | 'enable_subtitle'>
+  project: Pick<Project, 'enable_dubbing' | 'enable_subtitle' | 'storyboard_config'>
   episodeId: number
   episodeNumber: number
   isCommentaryProject: boolean
@@ -69,7 +70,10 @@ export function StoryboardDubbingPanel({
   )
 
   const getFormattedText = (sb: Storyboard) =>
-    formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+    formatStoryboardDubbingText(sb, {
+      isCommentary: isCommentaryProject,
+      maxRunes: resolveStoryboardSpeechLimit(sb, project),
+    })
 
   const getSubmitText = (sb: Storyboard) => {
     const draft = drafts[sb.id]

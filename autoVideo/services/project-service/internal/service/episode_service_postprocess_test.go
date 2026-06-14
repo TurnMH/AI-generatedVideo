@@ -20,7 +20,7 @@ func TestPostProcessAdScenes_MergesShortDialogueWithoutStructuralShift(t *testin
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 1 {
 		t.Fatalf("expected 1 merged scene, got %d", len(got))
 	}
@@ -47,7 +47,7 @@ func TestPostProcessAdScenes_KeepsStructuralShiftBoundary(t *testing.T) {
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 2 {
 		t.Fatalf("expected structural shift boundary preserved as 2 scenes, got %d", len(got))
 	}
@@ -81,7 +81,7 @@ func TestPostProcessAdScenes_MergesShortLeadIntoFollowingSameStructureScene(t *t
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 2 {
 		t.Fatalf("expected short warehouse lead merged into following same-structure scene, got %d", len(got))
 	}
@@ -108,7 +108,7 @@ func TestPostProcessAdScenes_MergesEmptyDialogueIntoPrevious(t *testing.T) {
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 1 {
 		t.Fatalf("expected empty-dialogue scene merged, got %d scenes", len(got))
 	}
@@ -132,7 +132,7 @@ func TestPostProcessAdScenes_MergesShortLeadIntoFollowingScene(t *testing.T) {
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 1 {
 		t.Fatalf("expected short lead merged into following scene, got %d scenes", len(got))
 	}
@@ -156,7 +156,7 @@ func TestPostProcessAdScenes_NormalizesAllDurationsToSelectedClipDuration(t *tes
 			Duration:    8,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 6)
+	got := svc.postProcessAdScenes(scenes, 6, "normal")
 	if len(got) != 2 {
 		t.Fatalf("expected 2 scenes kept, got %d", len(got))
 	}
@@ -192,7 +192,7 @@ func TestPostProcessAdScenes_RebalancesShortMiddleIntoLongFollowingScene(t *test
 			Duration:    5,
 		},
 	}
-	got := svc.postProcessAdScenes(scenes, 5)
+	got := svc.postProcessAdScenes(scenes, 5, "normal")
 	if len(got) != 2 {
 		t.Fatalf("expected short middle scene merged for rebalance, got %d scenes", len(got))
 	}

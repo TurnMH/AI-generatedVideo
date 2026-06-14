@@ -57,6 +57,34 @@ func TestSplitByChapters_NumericMarkersAndPrologueMerge(t *testing.T) {
 	}
 }
 
+func TestSplitByChapters_NumberedChapterTitleLine(t *testing.T) {
+	body1 := strings.Repeat("王大发在包子铺里揉面，陈大鹏在后厨忙活。", 12)
+	body2 := strings.Repeat("门外排队的人渐渐多了起来，蒸汽弥漫整条街。", 12)
+	script := "01 开端\n" + body1 + "\n02 转折\n" + body2
+
+	episodes := SplitByChapters(script)
+	if len(episodes) != 2 {
+		t.Fatalf("expected 2 chapter episodes, got %d", len(episodes))
+	}
+	if episodes[0].Title != "01 开端" {
+		t.Fatalf("unexpected first title: %q", episodes[0].Title)
+	}
+}
+
+func TestSplitByChapters_MergesTinyTailFragment(t *testing.T) {
+	body1 := strings.Repeat("王大发在包子铺里揉面，陈大鹏在后厨忙活。", 12)
+	body2 := strings.Repeat("门外排队的人渐渐多了起来，蒸汽弥漫整条街。", 12)
+	script := "01\n" + body1 + "\n02\n" + body2 + "\n03\n够了。"
+
+	episodes := SplitByChapters(script)
+	if len(episodes) != 2 {
+		t.Fatalf("expected tail fragment merged into previous chapter, got %d episodes", len(episodes))
+	}
+	if !strings.Contains(episodes[1].Excerpt, "够了") {
+		t.Fatalf("tail fragment should merge into last chapter")
+	}
+}
+
 func TestRepairSplit_MergesSummaryTrailerEpisode(t *testing.T) {
 	episodes := []DraftEpisode{
 		{

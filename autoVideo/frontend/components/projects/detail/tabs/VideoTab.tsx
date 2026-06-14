@@ -128,12 +128,20 @@ import { TabSkeleton } from '@/components/projects/detail/TabSkeleton'
 import { CharacterPanelStrip } from '@/components/projects/detail/CharacterPanelStrip'
 import { EpisodeStoryboardList } from '@/components/projects/detail/EpisodeStoryboardList'
 import { commentaryProductionModeValue, isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
-import { formatStoryboardDubbingText } from '@/lib/projects/storyboard-dubbing'
+import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
+import { resolveVideoClipPreview } from '@/lib/projects/video-clip-preview'
 import {
   countDubbingAlignedClipDurations,
   resolveStoryboardClipDurationSec,
   resolveStoryboardClipDurations,
 } from '@/lib/projects/video-clip-duration'
+import {
+  persistStoryboardRuntimeConfig,
+  storyboardMotionModePatch,
+  storyboardStylePresetPatch,
+} from '@/lib/projects/persist-storyboard-runtime-config'
+import { buildProjectVideoRenderConfig } from '@/lib/projects/storyboard-runtime-config'
 
 type TabKey = WorkflowStepKey
 
@@ -165,8 +173,19 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
 
   const isCommentaryProject = useMemo(() => detectCommentaryProject(project), [project])
 
+  const buildEpisodeVideoRenderConfig = () => buildProjectVideoRenderConfig(project, {
+    ...(Object.keys(videoParamSelections[selectedVideoModel] ?? {}).length > 0 ? videoParamSelections[selectedVideoModel] : {}),
+    transition: vtTransition !== 'none' ? vtTransition : undefined,
+    transition_duration: vtTransition !== 'none' ? parseFloat(vtTransitionDuration) : undefined,
+    generate_mode: vtGenerateMode !== 'img2video' ? vtGenerateMode : undefined,
+    generate_audio: vtGenerateAudio || undefined,
+    attach_dubbing: (vtAttachDubbing || project.enable_dubbing) || undefined,
+    end_image_url: vtGenerateMode === 'startEnd2video' && vtEndImageURL ? vtEndImageURL : undefined,
+    start_image_url: vtStartImageURL ? vtStartImageURL : undefined,
+  })
+
   const speakableDialogue = (sb: Storyboard) =>
-    formatStoryboardDubbingText(sb, { isCommentary: isCommentaryProject })
+    formatStoryboardSpeechForVideo(sb, { isCommentary: isCommentaryProject, project })
 
   // Poll video tasks with clip progress
   const { data: tasksRaw, isLoading, mutate: mutateTasks } = useSWR(
@@ -315,30 +334,26 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     clip?: Pick<VClip, 'scene_group_key' | 'scene_seq'>,
   ): { promptUsed: string; sceneDescription: string } => {
     const episodeId = task.episode_id ? Number(task.episode_id) : NaN
+    let storyboard: Storyboard | undefined
     if (Number.isFinite(episodeId) && episodeId > 0) {
       const episodeStoryboards = episodeStoryboardsMap.get(episodeId) ?? []
-      const storyboard = clip?.scene_group_key
+      storyboard = clip?.scene_group_key
         ? episodeStoryboards.find((sb) => sb.scene_group_key === clip.scene_group_key)
         : episodeStoryboards.find((sb) => sb.sequence_number === clipOrder + 1)
-      if (storyboard) {
-        return {
-          promptUsed: storyboard.prompt_used || '',
-          sceneDescription: storyboard.scene_description || '',
-        }
-      }
     }
 
-    const renderConfig = task.render_config ?? {}
-    const sceneDescriptions = Array.isArray(renderConfig.scene_descriptions)
-      ? renderConfig.scene_descriptions.map((item) => String(item ?? '').trim())
-      : []
-    const motionDescs = Array.isArray(renderConfig.motion_descs)
-      ? renderConfig.motion_descs.map((item) => String(item ?? '').trim())
-      : []
-    const promptUsed = sceneDescriptions[clipOrder] ?? ''
-    const sceneDescription = motionDescs[clipOrder]
-      || (clipOrder === 0 ? String(task.scene_description ?? '').trim() : '')
-    return { promptUsed, sceneDescription }
+    const preview = resolveVideoClipPreview({
+      taskSceneDescription: task.scene_description,
+      renderConfig: task.render_config,
+      clipOrder,
+      storyboard,
+      voiceText: storyboard ? speakableDialogue(storyboard) : '',
+    })
+
+    return {
+      promptUsed: preview.videoPrompt,
+      sceneDescription: preview.voiceText,
+    }
   }
 
   // Fetch episodes for display
@@ -751,16 +766,16 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   }, [videoModelSelectionStorageKey, vtVideoModels, project.video_model_id, project.storyboard_config?.video_model])
 
   useEffect(() => {
+    if (VIDEO_MOTION_OPTIONS.some((option) => option.key === projectConfiguredVideoMotion)) {
+      setSelectedVideoMotionMode(projectConfiguredVideoMotion as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])
+      return
+    }
     try {
       const saved = window.localStorage.getItem(videoMotionSelectionStorageKey)
       if (saved && VIDEO_MOTION_OPTIONS.some((option) => option.key === saved)) {
         setSelectedVideoMotionMode(saved as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])
-        return
       }
     } catch {}
-    if (VIDEO_MOTION_OPTIONS.some((option) => option.key === projectConfiguredVideoMotion)) {
-      setSelectedVideoMotionMode(projectConfiguredVideoMotion as (typeof VIDEO_MOTION_OPTIONS)[number]['key'])
-    }
   }, [projectConfiguredVideoMotion, videoMotionSelectionStorageKey])
 
   useEffect(() => {
@@ -797,7 +812,19 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
 
   useEffect(() => {
     window.localStorage.setItem(videoStyleSelectionStorageKey, selectedVideoStyle)
-  }, [selectedVideoStyle, videoStyleSelectionStorageKey])
+    const patch = storyboardStylePresetPatch(project.storyboard_config, selectedVideoStyle)
+    if (patch) {
+      persistStoryboardRuntimeConfig(projectId, project.storyboard_config, patch).catch(() => {})
+    }
+  }, [project.storyboard_config, projectId, selectedVideoStyle, videoStyleSelectionStorageKey])
+
+  useEffect(() => {
+    window.localStorage.setItem(videoMotionSelectionStorageKey, selectedVideoMotionMode)
+    const patch = storyboardMotionModePatch(project.storyboard_config, selectedVideoMotionMode)
+    if (patch) {
+      persistStoryboardRuntimeConfig(projectId, project.storyboard_config, patch).catch(() => {})
+    }
+  }, [project.storyboard_config, projectId, selectedVideoMotionMode, videoMotionSelectionStorageKey])
 
   useEffect(() => {
     if (filteredVideoStyles.length === 0) return
@@ -915,8 +942,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     const episode = episodeMap.get(episodeId)
     const sortedSbs = getCachedEligibleStoryboards(episodeId)
     const imageUrls = sortedSbs.map((sb) => sb.image_url)
-    // Prefer LLM-refined prompt_used; fall back to raw scene_description for older storyboards.
-    const sceneDescriptions = sortedSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
+    // Story-aligned scene text for video (scene_description + dialogue, not image prompt_used).
+    const sceneDescriptions = sortedSbs.map((sb) => buildVideoSceneDescription(sb))
     const dialogues = sortedSbs.map((sb) => speakableDialogue(sb))
     const durations = resolveClipDurations(sortedSbs)
     const dubbingAligned = countDubbingAlignedClipDurations(sortedSbs, storyboardDubbingTaskMap)
@@ -961,17 +988,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         clip_duration_sec: defaultClipDurationSec,
         serial_scene: isSerial || undefined,
         scene_group_keys: isSerial && sceneGroupKeys.some(Boolean) ? sceneGroupKeys : undefined,
-        render_config: {
-            ...(Object.keys(videoParamSelections[selectedVideoModel] ?? {}).length > 0 ? videoParamSelections[selectedVideoModel] : {}),
-            production_mode: commentaryProductionModeValue(project),
-            transition: vtTransition !== 'none' ? vtTransition : undefined,
-            transition_duration: vtTransition !== 'none' ? parseFloat(vtTransitionDuration) : undefined,
-            generate_mode: vtGenerateMode !== 'img2video' ? vtGenerateMode : undefined,
-            generate_audio: vtGenerateAudio || undefined,
-            attach_dubbing: (vtAttachDubbing || project.enable_dubbing) || undefined,
-            end_image_url: vtGenerateMode === 'startEnd2video' && vtEndImageURL ? vtEndImageURL : undefined,
-            start_image_url: vtStartImageURL ? vtStartImageURL : undefined,
-          },
+        render_config: buildEpisodeVideoRenderConfig(),
       })
       toast({
         title: `第 ${episode?.episode_number ?? episodeId} 集视频生成已启动`,
@@ -1016,7 +1033,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
   const handleRetryTaskWithModel = async (taskId: number, modelName: string) => {
     const modelLabel = vtVideoModelOptions.find((item) => item.key === modelName)?.label ?? modelName
     try {
-      await videoAPI.retry(projectId, taskId, modelName)
+      await videoAPI.retry(projectId, taskId, { model_name: modelName })
       toast({ title: `已使用 ${modelLabel} 启动重试`, variant: 'success' })
       mutateTasks()
     } catch {
@@ -1035,17 +1052,43 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     }
   }
 
+  const asRenderConfigStringArray = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return []
+    return value.filter((item): item is string => typeof item === 'string')
+  }
+
+  const buildEditableVideoScenes = (
+    rows: Storyboard[],
+    renderConfig?: Record<string, unknown>,
+  ): EditableVideoScene[] => {
+    const rcDescs = asRenderConfigStringArray(renderConfig?.scene_descriptions)
+    const rcDialogues = asRenderConfigStringArray(renderConfig?.dialogues)
+    return rows.map((storyboard, index) => ({
+      storyboardId: storyboard.id,
+      sequenceNumber: storyboard.sequence_number,
+      sceneDescription: rcDialogues[index] ?? speakableDialogue(storyboard),
+      promptUsed: rcDescs[index] ?? buildVideoSceneDescription(storyboard),
+      status: storyboard.status,
+      imageUrl: storyboard.image_url,
+      location: storyboard.location,
+      cameraMovement: storyboard.camera_movement,
+      dialogue: storyboard.dialogue,
+    }))
+  }
+
   const openTaskDetail = async (task: VTask) => {
     setTaskDetailLoading(true)
+    let detailTask: VTask = task
     try {
       const detailRes = await videoAPI.getTask<VTask>(task.id)
       const detailPayload = detailRes.data?.data
       if (detailPayload?.task) {
-        setTaskDetailInfo({
+        detailTask = {
           ...detailPayload.task,
           task_debug_summary: detailPayload.task_debug_summary,
           clips_debug: detailPayload.clips_debug,
-        })
+        }
+        setTaskDetailInfo(detailTask)
       } else {
         setTaskDetailInfo(task)
       }
@@ -1054,27 +1097,17 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     } finally {
       setTaskDetailLoading(false)
     }
-    const episodeId = task.episode_id ? Number(task.episode_id) : NaN
+    const episodeId = detailTask.episode_id ? Number(detailTask.episode_id) : NaN
     if (!Number.isFinite(episodeId) || episodeId <= 0) {
       setTaskDetailScenes([])
       return
     }
 
+    const renderConfig = detailTask.render_config
+
     const cached = episodeStoryboardsMap.get(episodeId)
     if (cached && cached.length > 0) {
-      setTaskDetailScenes(
-        cached.map((storyboard) => ({
-          storyboardId: storyboard.id,
-          sequenceNumber: storyboard.sequence_number,
-          sceneDescription: storyboard.scene_description || '',
-          promptUsed: storyboard.prompt_used || '',
-          status: storyboard.status,
-          imageUrl: storyboard.image_url,
-          location: storyboard.location,
-          cameraMovement: storyboard.camera_movement,
-          dialogue: storyboard.dialogue,
-        }))
-      )
+      setTaskDetailScenes(buildEditableVideoScenes(cached, renderConfig))
       return
     }
 
@@ -1082,19 +1115,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     try {
       const res = await storyboardAPI.listAll(projectId, { episode_id: episodeId }) as { data?: Storyboard[] }
       const rows = (res.data ?? []).sort((a, b) => a.sequence_number - b.sequence_number)
-      setTaskDetailScenes(
-        rows.map((storyboard) => ({
-          storyboardId: storyboard.id,
-          sequenceNumber: storyboard.sequence_number,
-          sceneDescription: storyboard.scene_description || '',
-          promptUsed: storyboard.prompt_used || '',
-          status: storyboard.status,
-          imageUrl: storyboard.image_url,
-          location: storyboard.location,
-          cameraMovement: storyboard.camera_movement,
-          dialogue: storyboard.dialogue,
-        }))
-      )
+      setTaskDetailScenes(buildEditableVideoScenes(rows, renderConfig))
     } catch {
       setTaskDetailScenes([])
       toast({ title: '加载视频详情失败', description: '未能读取当前视频关联的分镜数据', variant: 'destructive' })
@@ -1119,10 +1140,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     setTaskDetailSaving(true)
     try {
       await Promise.all(taskDetailScenes.map((scene) => storyboardAPI.update(projectId, scene.storyboardId, {
-        scene_description: scene.sceneDescription,
-        prompt_used: scene.promptUsed,
+        dialogue: scene.sceneDescription,
       })))
-      toast({ title: '已保存视频详情中的提示词与描述', variant: 'success' })
+      toast({ title: '已保存对白/旁白', variant: 'success' })
       await globalMutate(['storyboards-for-video', projectId])
       return true
     } catch {
@@ -1139,7 +1159,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     if (!saved) return
     const modelName = taskDetailInfo.model_name || selectedVideoModel
     try {
-      await videoAPI.retry(projectId, taskDetailInfo.id, modelName)
+      await videoAPI.retry(projectId, taskDetailInfo.id, {
+        model_name: modelName,
+        scene_descriptions: taskDetailScenes.map((scene) => scene.promptUsed),
+        dialogues: taskDetailScenes.map((scene) => scene.sceneDescription),
+      })
       toast({ title: '已按修改后的提示词重新生成', description: '视频任务已重新提交', variant: 'success' })
       setTaskDetailInfo(null)
       mutateTasks()
@@ -1194,8 +1218,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         byEpisodeSceneGroupKeys.set(epId, [])
       }
       byEpisode.get(epId)!.push(sb.image_url)
-      // Prefer LLM-refined prompt_used; fall back to raw scene_description.
-      byEpisodeDesc.get(epId)!.push(sb.prompt_used || sb.scene_description || '')
+      // Compact scene_description for video; never use image prompt_used here.
+      byEpisodeDesc.get(epId)!.push(buildVideoSceneDescription(sb))
       byEpisodeDialogue.get(epId)!.push(speakableDialogue(sb))
       byEpisodeDuration.get(epId)!.push(
         resolveStoryboardClipDurationSec(sb, {
@@ -1258,7 +1282,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               video_mode: project.video_mode,
               clip_duration_sec: defaultClipDurationSec,
               serial_scene: isSerial || undefined,
-              render_config: { ...(videoParamSelections[selectedVideoModel] ?? {}), production_mode: commentaryProductionModeValue(project), transition: vtTransition !== 'none' ? vtTransition : undefined, transition_duration: vtTransition !== 'none' ? parseFloat(vtTransitionDuration) : undefined, generate_mode: vtGenerateMode !== 'img2video' ? vtGenerateMode : undefined, generate_audio: vtGenerateAudio || undefined, attach_dubbing: (vtAttachDubbing || project.enable_dubbing) || undefined, end_image_url: vtGenerateMode === 'startEnd2video' && vtEndImageURL ? vtEndImageURL : undefined, start_image_url: vtStartImageURL ? vtStartImageURL : undefined },
+              render_config: buildEpisodeVideoRenderConfig(),
             })
           }
           const noEpUrls = byEpisode.get(0)
@@ -1294,13 +1318,12 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               clip_duration_sec: defaultClipDurationSec,
               serial_scene: isSerial || undefined,
               scene_group_keys: isSerial && noEpSceneGroupKeys.some(Boolean) ? noEpSceneGroupKeys : undefined,
-              render_config: { ...(videoParamSelections[selectedVideoModel] ?? {}), production_mode: commentaryProductionModeValue(project), transition: vtTransition !== 'none' ? vtTransition : undefined, transition_duration: vtTransition !== 'none' ? parseFloat(vtTransitionDuration) : undefined, generate_mode: vtGenerateMode !== 'img2video' ? vtGenerateMode : undefined, generate_audio: vtGenerateAudio || undefined, attach_dubbing: (vtAttachDubbing || project.enable_dubbing) || undefined, end_image_url: vtGenerateMode === 'startEnd2video' && vtEndImageURL ? vtEndImageURL : undefined, start_image_url: vtStartImageURL ? vtStartImageURL : undefined },
+              render_config: buildEpisodeVideoRenderConfig(),
             })
           }
         } else {
           const allUrls = eligibleSbs.map((sb) => sb.image_url)
-          // Prefer LLM-refined prompt_used; fall back to raw scene_description.
-          const allDescs = eligibleSbs.map((sb) => sb.prompt_used || sb.scene_description || '')
+          const allDescs = eligibleSbs.map((sb) => buildVideoSceneDescription(sb))
           const allDlgs = eligibleSbs.map((sb) => speakableDialogue(sb))
           const allDurs = resolveClipDurations(eligibleSbs)
           const allCams = eligibleSbs.map((sb) => sb.camera_movement || '')
@@ -1333,7 +1356,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             clip_duration_sec: defaultClipDurationSec,
             serial_scene: isSerial || undefined,
             scene_group_keys: isSerial && allSceneGroupKeys.some(Boolean) ? allSceneGroupKeys : undefined,
-            render_config: { ...(videoParamSelections[selectedVideoModel] ?? {}), production_mode: commentaryProductionModeValue(project), transition: vtTransition !== 'none' ? vtTransition : undefined, transition_duration: vtTransition !== 'none' ? parseFloat(vtTransitionDuration) : undefined, generate_mode: vtGenerateMode !== 'img2video' ? vtGenerateMode : undefined, generate_audio: vtGenerateAudio || undefined, attach_dubbing: (vtAttachDubbing || project.enable_dubbing) || undefined, end_image_url: vtGenerateMode === 'startEnd2video' && vtEndImageURL ? vtEndImageURL : undefined, start_image_url: vtStartImageURL ? vtStartImageURL : undefined },
+            render_config: buildEpisodeVideoRenderConfig(),
           })
         }
        toast({ title: `已按“${selectedVideoStyleMeta.label} / ${VIDEO_MOTION_OPTIONS.find((item) => item.key === selectedVideoMotionMode)?.label ?? selectedVideoMotionMode}”启动生成`, variant: 'success' })
@@ -2631,11 +2654,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                           </div>
                                           <div className="grid gap-2 text-xs text-surface-500 md:grid-cols-2">
                                             <div className="rounded-md bg-white/80 px-2.5 py-2">
-                                              <p className="text-[10px] text-surface-400">提示词</p>
+                                              <p className="text-[10px] text-surface-400">视频提示词</p>
                                               <p className="mt-1 line-clamp-3 break-words text-surface-700">{scenePreview.promptUsed || '暂无'}</p>
                                             </div>
                                             <div className="rounded-md bg-white/80 px-2.5 py-2">
-                                              <p className="text-[10px] text-surface-400">描述</p>
+                                              <p className="text-[10px] text-surface-400">对白/旁白</p>
                                               <p className="mt-1 line-clamp-3 break-words text-surface-700">{scenePreview.sceneDescription || '暂无'}</p>
                                             </div>
                                           </div>
@@ -2793,21 +2816,21 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                       </div>
                       <div className="space-y-3">
                         <div>
-                          <Label className="mb-2 block text-xs text-surface-500">提示词</Label>
+                          <Label className="mb-2 block text-xs text-surface-500">视频提示词</Label>
                           <Textarea
                             value={scene.promptUsed}
                             onChange={(e) => updateTaskDetailScene(scene.storyboardId, 'promptUsed', e.target.value)}
                             className="min-h-[120px]"
-                            placeholder="请输入该视频镜头的提示词"
+                            placeholder="请输入该视频镜头的画面动作提示词"
                           />
                         </div>
                         <div>
-                          <Label className="mb-2 block text-xs text-surface-500">描述</Label>
+                          <Label className="mb-2 block text-xs text-surface-500">对白/旁白</Label>
                           <Textarea
                             value={scene.sceneDescription}
                             onChange={(e) => updateTaskDetailScene(scene.storyboardId, 'sceneDescription', e.target.value)}
                             className="min-h-[96px]"
-                            placeholder="请输入该视频镜头的描述"
+                            placeholder="请输入该视频镜头的对白或旁白"
                           />
                         </div>
                         {scene.dialogue ? (
