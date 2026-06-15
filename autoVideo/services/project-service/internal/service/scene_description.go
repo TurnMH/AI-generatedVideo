@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/autovideo/project-service/internal/speechtext"
 )
 
 var sceneDescriptionBoilerplatePrefixes = []string{
@@ -59,53 +61,5 @@ func isSceneDescriptionBoilerplate(seg string) bool {
 // inferSceneDurationFromDialogue estimates clip duration from speakable text length.
 // clipDuration is the project default; speechPace follows canonicalSpeechPace keys.
 func inferSceneDurationFromDialogue(dialogue string, clipDuration int, speechPace string) int {
-	dialogue = strings.TrimSpace(dialogue)
-	if dialogue == "" {
-		return normalizeAdSceneDuration(0, clipDuration)
-	}
-
-	charsPer10Sec := speechPaceCharsPer10Sec(speechPace)
-	runes := utf8.RuneCountInString(dialogue)
-	if runes <= 0 {
-		return normalizeAdSceneDuration(0, clipDuration)
-	}
-
-	needed := float64(runes) / float64(charsPer10Sec) * 10.0
-	needed += 0.45 // breathing room after last syllable
-
-	base := clipDuration
-	if base <= 0 {
-		base = 5
-	}
-
-	// Short narration should not inherit a long default clip.
-	if needed <= float64(base)*0.55 {
-		return clampDuration(int(needed+0.5), 2, base)
-	}
-	// Long narration needs a longer beat, capped for short-form video.
-	if needed >= float64(base)*1.25 {
-		maxDur := base + 4
-		if maxDur > 12 {
-			maxDur = 12
-		}
-		return clampDuration(int(needed+0.5), base, maxDur)
-	}
-	return clampDuration(base, 2, 12)
-}
-
-func speechPaceCharsPer10Sec(speechPace string) int {
-	switch canonicalSpeechPace(speechPace) {
-	case "slightly_fast":
-		return 56
-	case "with_pauses":
-		return 38
-	case "very_fast":
-		return 66
-	case "medium_fast":
-		return 52
-	case "medium_steady":
-		return 42
-	default:
-		return 48
-	}
+	return speechtext.InferClipDurationFromDialogue(dialogue, clipDuration, speechPace)
 }

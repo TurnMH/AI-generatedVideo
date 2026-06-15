@@ -18,16 +18,16 @@ func HasInlineScriptAnnotations(text string) bool {
 
 // ShouldSkipScriptPrepAfterAutoOptimize skips the extra storyboard-prep LLM when auto-optimize already produced annotated text.
 func ShouldSkipScriptPrepAfterAutoOptimize(optimizeStatus, reviewStatus, content string, mode Mode) bool {
+	if mode == ModeCommentaryComic {
+		// Commentary comic uses uploaded/original text directly for scene splitting.
+		return true
+	}
 	if strings.TrimSpace(optimizeStatus) != "done" {
 		return false
 	}
 	reviewStatus = strings.TrimSpace(reviewStatus)
 	if reviewStatus != "" && reviewStatus != "done" && reviewStatus != "failed" {
 		return false
-	}
-	if mode == ModeCommentaryComic {
-		// Commentary requires speakable [字幕:] tags, not only visual annotations.
-		return countSubtitleTags(content) >= 1 && HasInlineScriptAnnotations(content)
 	}
 	return HasInlineScriptAnnotations(content)
 }

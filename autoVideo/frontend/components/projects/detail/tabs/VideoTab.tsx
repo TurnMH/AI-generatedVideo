@@ -945,6 +945,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     // Story-aligned scene text for video (scene_description + dialogue, not image prompt_used).
     const sceneDescriptions = sortedSbs.map((sb) => buildVideoSceneDescription(sb))
     const dialogues = sortedSbs.map((sb) => speakableDialogue(sb))
+    const storyboardIds = sortedSbs.map((sb) => sb.id)
     const durations = resolveClipDurations(sortedSbs)
     const dubbingAligned = countDubbingAlignedClipDurations(sortedSbs, storyboardDubbingTaskMap)
     const cameraMovements = sortedSbs.map((sb) => sb.camera_movement || '')
@@ -971,6 +972,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         image_urls: imageUrls,
         scene_descriptions: sceneDescriptions,
         dialogues: dialogues.some(Boolean) ? dialogues : undefined,
+        storyboard_ids: storyboardIds.some(Boolean) ? storyboardIds : undefined,
         durations: durations.some(Boolean) ? durations : undefined,
         camera_movements: cameraMovements.some(Boolean) ? cameraMovements : undefined,
         moods: moods.some(Boolean) ? moods : undefined,
@@ -983,7 +985,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         style_preset: selectedVideoStyle,
         motion_mode: selectedVideoMotionMode,
         video_mode: project.video_mode,
-        audio_url: dubbingAudioMap.get(episodeId),
+        audio_url: dialogues.some(Boolean) ? undefined : dubbingAudioMap.get(episodeId),
         scene_description: sceneDescription || undefined,
         clip_duration_sec: defaultClipDurationSec,
         serial_scene: isSerial || undefined,
@@ -1041,16 +1043,24 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     }
   }
 
-  const handleRetryClipWithModel = async (taskId: number, clipId: number, clipOrder: number, modelName: string) => {
+  const handleRetryClipWithModel = async (taskId: number, clipId: number, clipOrder: number, modelName: string, regenerate = false) => {
     const modelLabel = vtVideoModelOptions.find((item) => item.key === modelName)?.label ?? modelName
     try {
       await videoAPI.retryClip(projectId, taskId, clipId, modelName)
-      toast({ title: `已使用 ${modelLabel} 重试分镜 ${clipOrder + 1}`, variant: 'success' })
+      toast({
+        title: regenerate
+          ? `已使用 ${modelLabel} 重新生成分镜 ${clipOrder + 1}`
+          : `已使用 ${modelLabel} 重试分镜 ${clipOrder + 1}`,
+        variant: 'success',
+      })
       mutateTasks()
     } catch {
-      toast({ title: '分镜重试失败', variant: 'destructive' })
+      toast({ title: regenerate ? '片段重新生成失败' : '分镜重试失败', variant: 'destructive' })
     }
   }
+
+  const canRegenerateClip = (clip: Pick<VClip, 'status'>, taskActive: boolean) =>
+    !taskActive && (clip.status === 'failed' || clip.status === 'succeeded')
 
   const asRenderConfigStringArray = (value: unknown): string[] => {
     if (!Array.isArray(value)) return []
@@ -1207,6 +1217,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     const byEpisodeChars = new Map<number, string[][]>()
     const byEpisodeAssetIds = new Map<number, number[][]>()
     const byEpisodeSceneGroupKeys = new Map<number, string[]>()
+    const byEpisodeStoryboardIds = new Map<number, number[]>()
     for (const sb of eligibleSbs) {
       const epId = sb.episode_id ?? 0
       if (!byEpisode.has(epId)) {
@@ -1216,11 +1227,13 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         byEpisodeChars.set(epId, [])
         byEpisodeAssetIds.set(epId, [])
         byEpisodeSceneGroupKeys.set(epId, [])
+        byEpisodeStoryboardIds.set(epId, [])
       }
       byEpisode.get(epId)!.push(sb.image_url)
       // Compact scene_description for video; never use image prompt_used here.
       byEpisodeDesc.get(epId)!.push(buildVideoSceneDescription(sb))
       byEpisodeDialogue.get(epId)!.push(speakableDialogue(sb))
+      byEpisodeStoryboardIds.get(epId)!.push(sb.id)
       byEpisodeDuration.get(epId)!.push(
         resolveStoryboardClipDurationSec(sb, {
           modelKey: selectedVideoModel,
@@ -1255,11 +1268,13 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
               const chars = byEpisodeChars.get(epId) ?? []
               const assetIds = byEpisodeAssetIds.get(epId) ?? []
               const sgKeys = byEpisodeSceneGroupKeys.get(epId) ?? []
+              const sbIds = byEpisodeStoryboardIds.get(epId) ?? []
               return {
                 episode_id: epId,
                 image_urls: urls,
                 scene_descriptions: byEpisodeDesc.get(epId),
                 dialogues: dlgs.some(Boolean) ? dlgs : undefined,
+                storyboard_ids: sbIds.some(Boolean) ? sbIds : undefined,
                 durations: durs.some(Boolean) ? durs : undefined,
                 camera_movements: cams.some(Boolean) ? cams : undefined,
                 moods: moods.some(Boolean) ? moods : undefined,
@@ -1268,7 +1283,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                 transition_notes: transitionNotes.some(Boolean) ? transitionNotes : undefined,
                 scene_characters: chars.some((arr) => arr.length > 0) ? chars : undefined,
                 scene_asset_ids: assetIds.some((arr) => arr.length > 0) ? assetIds : undefined,
-                audio_url: dubbingAudioMap.get(epId),
+                audio_url: dlgs.some(Boolean) ? undefined : dubbingAudioMap.get(epId),
                 scene_description: byEpisodeDesc.get(epId)?.filter(Boolean).join(' ') || undefined,
                 scene_group_keys: isSerial && sgKeys.some(Boolean) ? sgKeys : undefined,
               }
@@ -1298,10 +1313,12 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             const noEpChars = byEpisodeChars.get(0) ?? []
             const noEpAssetIds = byEpisodeAssetIds.get(0) ?? []
             const noEpSceneGroupKeys = byEpisodeSceneGroupKeys.get(0) ?? []
+            const noEpStoryboardIds = byEpisodeStoryboardIds.get(0) ?? []
             await videoAPI.generate(projectId, {
               image_urls: noEpUrls,
               scene_descriptions: noEpDescs,
               dialogues: noEpDlgs.some(Boolean) ? noEpDlgs : undefined,
+              storyboard_ids: noEpStoryboardIds.some(Boolean) ? noEpStoryboardIds : undefined,
               durations: noEpDurs.some(Boolean) ? noEpDurs : undefined,
               camera_movements: noEpCams.some(Boolean) ? noEpCams : undefined,
               moods: noEpMoods.some(Boolean) ? noEpMoods : undefined,
@@ -1334,11 +1351,13 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
           const allChars = eligibleSbs.map((sb) => sb.characters || [])
           const allAssetIds = eligibleSbs.map((sb) => sb.asset_ids || [])
           const allSceneGroupKeys = eligibleSbs.map((sb) => sb.scene_group_key || '')
+          const allStoryboardIds = eligibleSbs.map((sb) => sb.id)
           const firstAudio = dubbingAudioMap.values().next().value as string | undefined
           await videoAPI.generate(projectId, {
             image_urls: allUrls,
             scene_descriptions: allDescs,
             dialogues: allDlgs.some(Boolean) ? allDlgs : undefined,
+            storyboard_ids: allStoryboardIds.some(Boolean) ? allStoryboardIds : undefined,
             durations: allDurs.some(Boolean) ? allDurs : undefined,
             camera_movements: allCams.some(Boolean) ? allCams : undefined,
             moods: allMoods.some(Boolean) ? allMoods : undefined,
@@ -1351,7 +1370,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
             style_preset: selectedVideoStyle,
             motion_mode: selectedVideoMotionMode,
             video_mode: project.video_mode,
-            audio_url: firstAudio,
+            audio_url: allDlgs.some(Boolean) ? undefined : firstAudio,
             scene_description: allDescs.filter(Boolean).join(' ') || undefined,
             clip_duration_sec: defaultClipDurationSec,
             serial_scene: isSerial || undefined,
@@ -2387,11 +2406,11 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                 {clipsFailed > 0 && <span className="text-xs text-red-500">{clipsFailed} 失败</span>}
                               </div>
                             )}
-                            {t.status === 'failed' && (
+                            {(t.status === 'failed' || (t.status === 'succeeded' && clipsTotal === 1)) && !isActive && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                   <Button size="sm" variant="outline">
-                                    <RefreshCw className="mr-1 h-3.5 w-3.5" /> 选择模型重试
+                                    <RefreshCw className="mr-1 h-3.5 w-3.5" /> {t.status === 'failed' ? '选择模型重试' : '重新生成'}
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-80">
@@ -2593,6 +2612,14 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                   processing: '生成中',
                                   pending: '等待中',
                                 }
+                                const effectiveClipStatus =
+                                  t.status === 'failed' && (clip.status === 'pending' || clip.status === 'processing')
+                                    ? 'failed'
+                                    : clip.status
+                                const effectiveClipError =
+                                  effectiveClipStatus === 'failed' && clip.status !== 'failed'
+                                    ? (t.error_msg || '任务已中止，该片段未生成')
+                                    : clip.error_msg
                                 const scenePreview = resolveClipScenePreview(t, clip.clip_order, clip)
                                 const isChainBroken = clip.error_msg?.startsWith('serial chain broken')
                                 const clipDebug = t.clips_debug?.find((item) => item.clip_order === clip.clip_order)
@@ -2600,9 +2627,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                   <div
                                     key={clip.id}
                                     className={`rounded-lg border p-3 ${
-                                      clip.status === 'succeeded' ? 'border-green-200 bg-green-50/40' :
-                                      clip.status === 'failed' ? 'border-red-200 bg-red-50/40' :
-                                      clip.status === 'processing' ? 'border-blue-200 bg-blue-50/40' :
+                                      effectiveClipStatus === 'succeeded' ? 'border-green-200 bg-green-50/40' :
+                                      effectiveClipStatus === 'failed' ? 'border-red-200 bg-red-50/40' :
+                                      effectiveClipStatus === 'processing' ? 'border-blue-200 bg-blue-50/40' :
                                       'border-surface-200 bg-surface-50/70'
                                     }`}
                                   >
@@ -2627,9 +2654,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                             </div>
                                           )}
                                           <div className="absolute inset-0 flex items-center justify-center bg-black/25">
-                                            {clip.status === 'processing' ? (
+                                            {effectiveClipStatus === 'processing' ? (
                                               <Loader2 className="h-5 w-5 animate-spin text-white" />
-                                            ) : clip.status === 'failed' ? (
+                                            ) : effectiveClipStatus === 'failed' ? (
                                               isChainBroken ? <Link2Off className="h-5 w-5 text-white" /> : <AlertCircle className="h-5 w-5 text-white" />
                                             ) : (
                                               <Play className="h-5 w-5 text-white" />
@@ -2642,7 +2669,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                         <div className="min-w-0 flex-1 space-y-2">
                                           <div className="flex flex-wrap items-center gap-2">
                                             <span className="text-sm font-medium text-surface-800">片段 {clip.clip_order + 1}</span>
-                                            <VideoTaskStatusBadge status={clip.status} />
+                                            <VideoTaskStatusBadge status={effectiveClipStatus} />
                                             {isSerialClip && clip.scene_group_key ? (
                                               <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] text-indigo-600">
                                                 {clip.scene_group_key}{typeof clip.scene_seq === 'number' ? ` · 第 ${clip.scene_seq + 1} 帧` : ''}
@@ -2684,9 +2711,9 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                               ) : null}
                                             </div>
                                           ) : null}
-                                          {clip.error_msg ? (
-                                            <p className={`text-xs ${clip.status === 'failed' ? 'text-red-600' : 'text-surface-500'} break-all`}>
-                                              {clip.error_msg}
+                                          {effectiveClipError ? (
+                                            <p className={`text-xs ${effectiveClipStatus === 'failed' ? 'text-red-600' : 'text-surface-500'} break-all`}>
+                                              {effectiveClipError}
                                             </p>
                                           ) : null}
                                         </div>
@@ -2698,15 +2725,17 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                         <Button size="sm" variant="outline" onClick={() => openTaskDetail(t)}>
                                           <Pencil className="mr-1 h-3.5 w-3.5" /> 编辑提示词
                                         </Button>
-                                        {clip.status === 'failed' ? (
+                                        {canRegenerateClip(clip, isActive) ? (
                                           <DropdownMenu>
                                             <DropdownMenuTrigger asChild>
                                               <Button size="sm" variant="outline">
-                                                <RefreshCw className="mr-1 h-3.5 w-3.5" /> 重试片段
+                                                <RefreshCw className="mr-1 h-3.5 w-3.5" /> {clip.status === 'failed' ? '重试片段' : '重新生成'}
                                               </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end" className="w-80">
-                                              <DropdownMenuLabel className="text-[10px] text-surface-400">选择模型重试该分镜</DropdownMenuLabel>
+                                              <DropdownMenuLabel className="text-[10px] text-surface-400">
+                                                {clip.status === 'failed' ? '选择模型重试该分镜' : '选择模型重新生成该片段'}
+                                              </DropdownMenuLabel>
                                               <DropdownMenuSeparator />
                                               {vtVideoModelOptions.map((item) => {
                                                 const avail = videoModelAvailability[item.key]
@@ -2714,7 +2743,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                                   <DropdownMenuItem
                                                     key={item.key}
                                                     className={`cursor-pointer px-3 py-2 ${avail === false ? 'opacity-50' : ''}`}
-                                                    onClick={() => handleRetryClipWithModel(t.id, clip.id, clip.clip_order, item.key)}
+                                                    onClick={() => handleRetryClipWithModel(t.id, clip.id, clip.clip_order, item.key, clip.status === 'succeeded')}
                                                   >
                                                     <div className="flex items-center gap-2">
                                                       <span>{item.icon}</span>
@@ -2737,7 +2766,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                           </Button>
                                         ) : null}
                                         <span className="text-[11px] text-surface-400">
-                                          状态：{clipStatusLabel[clip.status] ?? clip.status}{clip.duration_sec > 0 ? ` · ${clip.duration_sec}s` : ''}
+                                          状态：{clipStatusLabel[effectiveClipStatus] ?? effectiveClipStatus}{clip.duration_sec > 0 ? ` · ${clip.duration_sec}s` : ''}
                                         </span>
                                       </div>
                                     </div>

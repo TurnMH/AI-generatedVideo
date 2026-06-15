@@ -40,12 +40,11 @@ func hasAnyNonEmpty(dialogues []string) bool {
 
 // tryPerClipAudioCompose attempts to synthesize per-clip audio, mux each clip,
 // then concat into a single merged mp4 with audio aligned to the storyboard.
-// Returns (mergedLocalPath, true) on success. On any failure, returns ("", false)
-// so the caller can fall back to the legacy concat-then-attach-audio flow.
+// Returns (mergedLocalPath, perClipDurations, true) on success. On any failure,
+// returns ("", nil, false) so the caller can fall back to plain concat.
 //
-// The function prefers the voice configuration from the latest DubbingTask for
-// this project+episode (so the user's choice of voice model propagates without
-// the user having to re-pick it when they render the video).
+// Pre-generated storyboard dubbing (from the dubbing tab) is preferred over
+// on-the-fly TTS so the final video matches what the user already approved.
 func (s *VideoService) tryPerClipAudioCompose(
 	ctx context.Context,
 	task *model.VideoTask,
@@ -53,13 +52,11 @@ func (s *VideoService) tryPerClipAudioCompose(
 	perClipDialogues []string,
 	transitions []string,
 	transitionDurations []float64,
-) (string, bool) {
+) (string, []float64, bool) {
 	if s.dubbing == nil || s.ffmpeg == nil {
-		return "", false
+		return "", nil, false
 	}
 
-	// Resolve voice config from the matching dubbing task (if any); fall back to
-	// RenderConfig overrides if the user specified them on the video task.
 	voiceModel, voiceRate, voicePitch, voiceVolume := s.repo.FindDubbingVoiceConfig(ctx, task.ProjectID, task.EpisodeID)
 	charVoiceBindings := s.dubbing.fetchCharacterVoiceBindings(ctx, task.ProjectID)
 	if v := renderConfigString(task.RenderConfig, "voice_model"); v != "" {
@@ -78,7 +75,6 @@ func (s *VideoService) tryPerClipAudioCompose(
 		voiceModel = "default"
 	}
 
-	// Align slice: only synthesize for clips we actually have URLs for.
 	dialogues := make([]string, len(clipURLs))
 	for i := range clipURLs {
 		if i < len(perClipDialogues) {
@@ -86,21 +82,15 @@ func (s *VideoService) tryPerClipAudioCompose(
 		}
 	}
 
-	s.logger.Info("per-clip audio compose: start",
-		zap.Int64("task_id", task.ID),
-		zap.Int("clips", len(clipURLs)),
-		zap.String("voice_model", voiceModel),
-		zap.Int("character_voice_bindings", len(charVoiceBindings)))
-
-	audioPaths, err := s.dubbing.SynthesizeClipAudios(
-		ctx, task.ProjectID,
-		deref(task.EpisodeID),
-		dialogues, voiceModel, voiceRate, voicePitch, voiceVolume,
+	storyboardIDs := extractStoryboardIDs(task.RenderConfig, len(clipURLs))
+	audioPaths, err := s.resolvePerClipAudioPaths(
+		ctx, task, storyboardIDs, dialogues,
+		voiceModel, voiceRate, voicePitch, voiceVolume,
 	)
 	if err != nil {
-		s.logger.Warn("per-clip audio compose: synthesis failed, falling back",
+		s.logger.Warn("per-clip audio compose: audio resolution failed, falling back",
 			zap.Int64("task_id", task.ID), zap.Error(err))
-		return "", false
+		return "", nil, false
 	}
 	defer func() {
 		for _, p := range audioPaths {
@@ -110,15 +100,32 @@ func (s *VideoService) tryPerClipAudioCompose(
 		}
 	}()
 
-	// Build a single work dir shared by all muxed clips so the final concat
-	// demuxer / xfade pass can live next to them.
+	hasAudio := false
+	for _, p := range audioPaths {
+		if p != "" {
+			hasAudio = true
+			break
+		}
+	}
+	if !hasAudio && !hasAnyNonEmpty(dialogues) {
+		return "", nil, false
+	}
+
+	s.logger.Info("per-clip audio compose: start",
+		zap.Int64("task_id", task.ID),
+		zap.Int("clips", len(clipURLs)),
+		zap.String("voice_model", voiceModel),
+		zap.Int("character_voice_bindings", len(charVoiceBindings)),
+		zap.Int("storyboard_ids", len(storyboardIDs)))
+
 	workDir, err := os.MkdirTemp(s.ffmpeg.TempDir, "perclip-*")
 	if err != nil {
 		s.logger.Warn("per-clip audio compose: mkdir failed, falling back",
 			zap.Int64("task_id", task.ID), zap.Error(err))
-		return "", false
+		return "", nil, false
 	}
 
+	clipDurations := make([]float64, len(clipURLs))
 	muxed := make([]string, 0, len(clipURLs))
 	for i, url := range clipURLs {
 		var audio string
@@ -132,9 +139,12 @@ func (s *VideoService) tryPerClipAudioCompose(
 				zap.Int("clip", i),
 				zap.Error(err))
 			_ = os.RemoveAll(workDir)
-			return "", false
+			return "", nil, false
 		}
 		muxed = append(muxed, local)
+		if d, dErr := s.ffmpeg.ProbeDuration(ctx, local); dErr == nil && d > 0 {
+			clipDurations[i] = d
+		}
 	}
 
 	merged, err := s.ffmpeg.ConcatLocalNormalizedClipsWithTransitionPlan(ctx, muxed, transitions, transitionDurations)
@@ -142,12 +152,9 @@ func (s *VideoService) tryPerClipAudioCompose(
 		s.logger.Warn("per-clip audio compose: concat failed, falling back",
 			zap.Int64("task_id", task.ID), zap.Error(err))
 		_ = os.RemoveAll(workDir)
-		return "", false
+		return "", nil, false
 	}
 
-	// Move merged out of workDir into a sibling so post-processing (subtitles,
-	// BGM) can live alongside it without the per-clip temp litter. The caller
-	// already schedules cleanup via filepath.Dir(mergedPath) removal.
 	finalDir, err := os.MkdirTemp(s.ffmpeg.TempDir, "perclip-final-*")
 	if err == nil {
 		dst := filepath.Join(finalDir, "merged.mp4")
@@ -157,14 +164,81 @@ func (s *VideoService) tryPerClipAudioCompose(
 				zap.Int64("task_id", task.ID),
 				zap.Int("muxed_clips", len(muxed)),
 				zap.String("final", dst))
-			return dst, true
+			return dst, clipDurations, true
 		}
 	}
 
 	s.logger.Info("per-clip audio compose: done (in-workdir)",
 		zap.Int64("task_id", task.ID),
 		zap.Int("muxed_clips", len(muxed)))
-	return merged, true
+	return merged, clipDurations, true
+}
+
+// resolvePerClipAudioPaths prefers pre-generated storyboard dubbing audio and
+// only synthesizes TTS for clips that still lack audio.
+func (s *VideoService) resolvePerClipAudioPaths(
+	ctx context.Context,
+	task *model.VideoTask,
+	storyboardIDs []int64,
+	dialogues []string,
+	voiceModel, voiceRate, voicePitch, voiceVolume string,
+) ([]string, error) {
+	results := make([]string, len(dialogues))
+	sbAudio := s.repo.FindStoryboardDubbingAudios(ctx, task.ProjectID, storyboardIDs)
+
+	for i := range dialogues {
+		if i >= len(storyboardIDs) || storyboardIDs[i] <= 0 {
+			continue
+		}
+		url := sbAudio[storyboardIDs[i]]
+		if url == "" {
+			continue
+		}
+		local, err := downloadToTemp(ctx, s.ffmpeg.TempDir, url)
+		if err != nil {
+			s.logger.Warn("per-clip audio compose: storyboard dubbing download failed",
+				zap.Int64("task_id", task.ID),
+				zap.Int("clip", i),
+				zap.Int64("storyboard_id", storyboardIDs[i]),
+				zap.Error(err))
+			continue
+		}
+		results[i] = local
+		s.logger.Info("per-clip audio compose: reused storyboard dubbing",
+			zap.Int64("task_id", task.ID),
+			zap.Int("clip", i),
+			zap.Int64("storyboard_id", storyboardIDs[i]))
+	}
+
+	ttsDialogues := make([]string, len(dialogues))
+	needTTS := false
+	for i, dialogue := range dialogues {
+		if results[i] != "" {
+			continue
+		}
+		ttsDialogues[i] = dialogue
+		if strings.TrimSpace(dialogue) != "" {
+			needTTS = true
+		}
+	}
+	if !needTTS {
+		return results, nil
+	}
+
+	synthPaths, err := s.dubbing.SynthesizeClipAudios(
+		ctx, task.ProjectID,
+		deref(task.EpisodeID),
+		ttsDialogues, voiceModel, voiceRate, voicePitch, voiceVolume,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for i, p := range synthPaths {
+		if results[i] == "" && p != "" {
+			results[i] = p
+		}
+	}
+	return results, nil
 }
 
 func deref(p *int64) int64 {
@@ -172,4 +246,41 @@ func deref(p *int64) int64 {
 		return 0
 	}
 	return *p
+}
+
+func extractStoryboardIDs(renderConfig model.RenderConfig, n int) []int64 {
+	result := make([]int64, n)
+	if len(renderConfig) == 0 {
+		return result
+	}
+	raw, ok := renderConfig["storyboard_ids"]
+	if !ok {
+		return result
+	}
+	switch v := raw.(type) {
+	case []int64:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = v[i]
+		}
+	case []int:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = int64(v[i])
+		}
+	case []float64:
+		for i := 0; i < n && i < len(v); i++ {
+			result[i] = int64(v[i])
+		}
+	case []interface{}:
+		for i := 0; i < n && i < len(v); i++ {
+			switch id := v[i].(type) {
+			case float64:
+				result[i] = int64(id)
+			case int64:
+				result[i] = id
+			case int:
+				result[i] = int64(id)
+			}
+		}
+	}
+	return result
 }

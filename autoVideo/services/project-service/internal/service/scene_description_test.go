@@ -26,6 +26,16 @@ func TestInferSceneDurationFromDialogue_ShortNarration(t *testing.T) {
 	}
 }
 
+func TestInferSceneDurationFromDialogue_ShortCharacterLine(t *testing.T) {
+	got := inferSceneDurationFromDialogue("王大发：还是您来扛，您看——", 8, "normal")
+	if got >= 6 {
+		t.Fatalf("expected short clip for brief character line, got %d", got)
+	}
+	if got < 2 {
+		t.Fatalf("duration too short: %d", got)
+	}
+}
+
 func TestInferSceneDurationFromDialogue_LongNarration(t *testing.T) {
 	long := strings.Repeat("这是一个需要更长时间才能念完的旁白句子。", 4)
 	got := inferSceneDurationFromDialogue(long, 5, "with_pauses")

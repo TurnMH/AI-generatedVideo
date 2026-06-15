@@ -17,7 +17,7 @@ import {
   Sparkles,
   Loader2,
 } from 'lucide-react'
-import { projectAPI, modelAPI } from '@/lib/api'
+import { projectAPI, modelAPI, videoAPI } from '@/lib/api'
 import { ensureProjectMediaTag, normalizeProjectMediaKind, PROJECT_MEDIA_META, stripProjectMediaTags, type ProjectMediaKind } from '@/lib/project-media'
 import { consumePendingProjectDraft } from '@/lib/project-draft'
 import { pickPreferredModel } from '@/lib/model-selection'
@@ -73,6 +73,13 @@ import {
   VIDEO_CREATE_STEPS,
   VIDEO_QUICK_GENRES,
 } from '@/lib/projects/new/video-create-ui'
+import {
+  buildVideoModelStatusMap,
+  formatClipDurationOptionsHint,
+  parseVideoModelStatusItems,
+  resolveClipDurationOptions,
+  snapDurationToSupportedOptions,
+} from '@/lib/projects/video-model-params'
 
 
 // ─── Page ────────────────────────────────────────────────────
@@ -122,32 +129,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
         : value
 
     setForm((prev) => {
-      const nextForm = { ...prev, [key]: nextValue } as any
-      
-      // [智能联动] 根据选择的视频模型，展示/调整默认参数
-      if (key === 'video_model_id' && value) {
-        const selectedModel = videoModels.find((m) => m.id === Number(value))
-        if (selectedModel) {
-          const name = selectedModel.name.toLowerCase()
-          if (name.includes('kling') || name.includes('runway') || name.includes('sora')) {
-             nextForm.storyboard_duration = 5
-          } else {
-             nextForm.storyboard_duration = 4
-          }
-        }
-      }
-      // [智能联动] 根据图片模型调整默认参数
-      if (key === 'image_model_id' && value) {
-        const selectedModel = imageModels.find((m) => m.id === Number(value))
-        if (selectedModel) {
-          const name = selectedModel.name.toLowerCase()
-          if (name.includes('mj') || name.includes('midjourney')) {
-             nextForm.storyboard_resolution = '1080p'
-          } else {
-             nextForm.storyboard_resolution = '1080p'
-          }
-        }
-      }
+      const nextForm = { ...prev, [key]: nextValue } as FormData
       return nextForm
     })
 
@@ -178,11 +160,31 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
     'models-tts',
     () => modelAPI.list({ type: 'audio' }) as unknown as Promise<{ data: Model[] }>
   )
+  const { data: videoModelStatusData } = useSWR(
+    display.modelSelectorKeys.includes('video') ? 'videos-model-status-create' : null,
+    () => videoAPI.modelStatus(),
+  )
 
   const textModels: Model[] = ((textModelsData as { data?: Model[] })?.data ?? []).filter((m) => m.is_active)
   const imageModels: Model[] = (imageModelsData as { data?: Model[] })?.data ?? []
   const videoModels: Model[] = (videoModelsData as { data?: Model[] })?.data ?? []
   const ttsModels: Model[] = (ttsModelsData as { data?: Model[] })?.data ?? []
+  const videoModelStatusMap = useMemo(
+    () => buildVideoModelStatusMap(parseVideoModelStatusItems(videoModelStatusData)),
+    [videoModelStatusData],
+  )
+  const selectedVideoModel = useMemo(
+    () => videoModels.find((model) => model.id === form.video_model_id),
+    [form.video_model_id, videoModels],
+  )
+  const clipDurationOptions = useMemo(
+    () => resolveClipDurationOptions(selectedVideoModel, videoModelStatusMap),
+    [selectedVideoModel, videoModelStatusMap],
+  )
+  const clipDurationHint = useMemo(
+    () => formatClipDurationOptionsHint(selectedVideoModel, videoModelStatusMap, clipDurationOptions),
+    [clipDurationOptions, selectedVideoModel, videoModelStatusMap],
+  )
   const modelSelectorDefs = {
     text: {
       label: '文本模型',
@@ -459,6 +461,15 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
   }, [imageModels, textModels, ttsModels, videoModels])
 
   useEffect(() => {
+    if (!display.showStoryboardDuration || clipDurationOptions.length === 0) return
+    setForm((prev) => {
+      const snapped = snapDurationToSupportedOptions(prev.storyboard_duration, clipDurationOptions)
+      if (snapped === prev.storyboard_duration) return prev
+      return { ...prev, storyboard_duration: snapped }
+    })
+  }, [clipDurationOptions, display.showStoryboardDuration, form.video_model_id])
+
+  useEffect(() => {
     setForm((prev) => {
       const nextTags = ensureProjectMediaTag(prev.style_tags, mediaKind)
       const next: FormData = {
@@ -649,7 +660,7 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
 
       if (uploadableScriptFile) {
         await projectAPI.uploadScript(projectId, uploadableScriptFile)
-        // 上传了剧本文件时，自动触发分集；首次创建会继续自动处理第 1 集（润色 → 资源 → 分镜）
+        // 上传了剧本文件时，自动触发分集；解说漫将基于原文直接提取资源并拆分分镜
         void projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: true })
       }
 
@@ -721,15 +732,36 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
           {display.showStoryboardDuration && (
             <div className="space-y-2">
               <Label className="text-xs">默认时长（秒）</Label>
-              <Input
-                type="number"
-                min={1}
-                max={60}
-                value={form.storyboard_duration}
-                onChange={(e) =>
-                  update('storyboard_duration', Math.max(1, Number(e.target.value)))
-                }
-              />
+              {clipDurationOptions.length > 0 ? (
+                <Select
+                  value={String(form.storyboard_duration)}
+                  onValueChange={(value) => update('storyboard_duration', Number(value))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clipDurationOptions.map((seconds) => (
+                      <SelectItem key={seconds} value={String(seconds)}>
+                        {seconds} 秒
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={form.storyboard_duration}
+                  onChange={(e) =>
+                    update('storyboard_duration', Math.max(1, Number(e.target.value)))
+                  }
+                />
+              )}
+              {clipDurationHint ? (
+                <p className="text-xs leading-5 text-surface-500">{clipDurationHint}</p>
+              ) : null}
             </div>
           )}
         </div>
@@ -1143,9 +1175,25 @@ export default function NewProjectPageClient({ forcedMediaKind }: NewProjectPage
                 </p>
               </div>
 
+              <div className="rounded-2xl border border-surface-200 bg-white p-4">
+                <ModelSelector
+                  label="视频模型"
+                  icon={<Video className="h-4 w-4 text-green-500" />}
+                  models={videoModels}
+                  isLoading={loadingVideo}
+                  value={form.video_model_id}
+                  onChange={(value) => update('video_model_id', value)}
+                />
+                <p className="mt-2 text-xs leading-5 text-surface-500">
+                  下方「每段大约多长」会按当前视频模型支持的参数展示可选时长。
+                </p>
+              </div>
+
               <VideoCreateOptions
                 aspectRatio={form.storyboard_aspect_ratio}
                 duration={form.storyboard_duration}
+                durationOptions={clipDurationOptions}
+                durationHint={clipDurationHint}
                 consistencyStrength={nearestConsistencyPreset(form.consistency_strength)}
                 enableDubbing={form.enable_dubbing}
                 enableSubtitle={form.enable_subtitle}

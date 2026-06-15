@@ -414,6 +414,8 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		clips = append(clips, clip)
 	}
 
+	var renderConfigMu sync.Mutex
+
 	// ─── 辅助函数：为单个 clip 构建 VideoGenerateReq 并执行生成 ─────────────────
 	// maxAttempts: 串行模式传 3，并行模式传 6
 	buildAndGenClip := func(c *model.VideoClip, overrideTailURL string, maxAttempts int) error {
@@ -521,7 +523,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 			shouldAddSerialContinuityPrompt(task, c.ClipOrder, c.SceneSeq, c.SceneGroupKey, perClipDialogues, perClipDescs) && c.SourceImageURL != "",
 			shouldChainSerialSource(task, c.SceneSeq, c.SceneGroupKey),
 		)
+		renderConfigMu.Lock()
 		task.RenderConfig = upsertClipIdentityTrace(task.RenderConfig, c.ClipOrder, trace)
+		renderConfigMu.Unlock()
 		if err := validateSameCharacterBindings(task.RenderConfig, resolvedModelName, genReq, clipRefBindings); err != nil {
 			c.Status = model.StatusFailed
 			c.ErrorMsg = err.Error()
@@ -997,8 +1001,9 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	// that the legacy "merge-all-audio-then-attach" flow could introduce.
 	mergedPath := ""
 	perClipAudioUsed := false
+	var muxedClipDurations []float64
 	if s.dubbing != nil && allowDubbingAttach && hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) {
-		mergedPath, perClipAudioUsed = s.tryPerClipAudioCompose(
+		mergedPath, muxedClipDurations, perClipAudioUsed = s.tryPerClipAudioCompose(
 			ctx, task, clipURLs, composedDialogues, transitionPlan, transitionDurations,
 		)
 	}
@@ -1023,6 +1028,7 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		subtitleText = joinDialogues(composedDialogues)
 	}
 	subtitleURL := "" // VTT subtitle URL from dubbing task
+	useEpisodeAudio := shouldUseEpisodeLevelAudio(composedDialogues, len(clipURLs), perClipAudioUsed)
 	if !allowDubbingAttach {
 		s.logger.Info("skipping dubbing attachment: native-audio model with generate_audio enabled and no dialogues to dub",
 			zap.Int64("task_id", taskID),
@@ -1031,12 +1037,10 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 	} else if perClipAudioUsed {
 		s.logger.Info("skipping dubbing attachment: per-clip audio already muxed",
 			zap.Int64("task_id", taskID))
-		// Still pick up the stored VTT (if any) so subtitles can be burnt below.
-		if subtitleText == "" {
-			if _, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubSub != "" {
-				subtitleURL = dubSub
-			}
-		}
+	} else if !useEpisodeAudio {
+		s.logger.Warn("skipping episode-level dubbing: per-clip dialogues present but per-clip mux failed",
+			zap.Int64("task_id", taskID),
+			zap.Int("clip_count", len(clipURLs)))
 	} else {
 		if audioURL == "" {
 			if dubAudio, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubAudio != "" {
@@ -1098,10 +1102,18 @@ func (s *VideoService) ProcessTask(ctx context.Context, taskID int64, imageURLs 
 		}
 	}
 
-	// Burn subtitles: prefer timed VTT URL over plain text
+	// Burn subtitles: per-clip aligned when dialogues map 1:1 to clips.
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageSubtitle)
 	subtitleStyle := parseSubtitleStyle(task.RenderConfig)
-	if subtitleURL != "" {
+	subtitleClipDurations := s.resolveSubtitleClipDurations(ctx, perClipAudioUsed, muxedClipDurations, clipURLs)
+	usePerClipSubtitles := hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) && len(subtitleClipDurations) > 0
+	if usePerClipSubtitles {
+		if p, err := s.burnPerClipAlignedSubtitles(ctx, finalPath, composedDialogues, subtitleClipDurations, transitionPlan, transitionDurations, subtitleStyle); err == nil {
+			finalPath = p
+		} else {
+			s.logger.Warn("add per-clip aligned subtitle failed", zap.Error(err))
+		}
+	} else if subtitleURL != "" {
 		if p, err := s.ffmpeg.AddSubtitleFromVTTWithStyle(ctx, finalPath, subtitleURL, subtitleStyle); err == nil {
 			finalPath = p
 		} else {
@@ -1202,8 +1214,9 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 
 	mergedPath := ""
 	perClipAudioUsed := false
+	var muxedClipDurations []float64
 	if s.dubbing != nil && composeAllowDubbing && hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) {
-		mergedPath, perClipAudioUsed = s.tryPerClipAudioCompose(
+		mergedPath, muxedClipDurations, perClipAudioUsed = s.tryPerClipAudioCompose(
 			ctx, task, clipURLs, composedDialogues, transitionPlan2, transitionDurations2,
 		)
 	}
@@ -1229,6 +1242,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	subtitleURL2 := ""
 	var whisperSegments []whisperClient.Segment
 	var whisperWords []whisperClient.Word
+	useEpisodeAudio := shouldUseEpisodeLevelAudio(composedDialogues, len(clipURLs), perClipAudioUsed)
 	if !composeAllowDubbing {
 		modelLabel := task.ModelName
 		if composeGen != nil {
@@ -1260,11 +1274,10 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	} else if perClipAudioUsed {
 		s.logger.Info("compose: skipping dubbing attachment: per-clip audio already muxed",
 			zap.Int64("task_id", taskID))
-		if subtitleText == "" {
-			if _, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubSub != "" {
-				subtitleURL2 = dubSub
-			}
-		}
+	} else if !useEpisodeAudio {
+		s.logger.Warn("compose: skipping episode-level dubbing: per-clip dialogues present but per-clip mux failed",
+			zap.Int64("task_id", taskID),
+			zap.Int("clip_count", len(clipURLs)))
 	} else {
 		if audioURL == "" {
 			if dubAudio, dubSub := s.repo.FindDubbingAudio(ctx, task.ProjectID, task.EpisodeID); dubAudio != "" {
@@ -1300,10 +1313,12 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 		}
 	}
 
-	// Burn subtitles: prefer timed VTT URL over plain text
+	// Burn subtitles: per-clip aligned when dialogues map 1:1 to clips.
 	_ = s.repo.UpdateComposeStage(ctx, taskID, model.ComposeStageSubtitle)
 	subtitleStyle2 := parseSubtitleStyle(task.RenderConfig)
-	subtitleRequested := subtitleURL2 != "" || subtitleText != "" || len(whisperSegments) > 0 || len(whisperWords) > 0
+	subtitleClipDurations := s.resolveSubtitleClipDurations(ctx, perClipAudioUsed, muxedClipDurations, clipURLs)
+	usePerClipSubtitles := hasAnyNonEmpty(composedDialogues) && len(composedDialogues) == len(clipURLs) && len(subtitleClipDurations) > 0
+	subtitleRequested := usePerClipSubtitles || subtitleURL2 != "" || subtitleText != "" || len(whisperSegments) > 0 || len(whisperWords) > 0
 	subtitleApplied := false
 	subtitleStatus := "not_requested"
 	subtitleError := ""
@@ -1314,6 +1329,16 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 			s.logger.Warn("compose: subtitle burn unavailable",
 				zap.Int64("task_id", taskID),
 				zap.String("reason", reason))
+		} else if usePerClipSubtitles {
+			if p, err := s.burnPerClipAlignedSubtitles(ctx, finalPath, composedDialogues, subtitleClipDurations, transitionPlan2, transitionDurations2, subtitleStyle2); err == nil {
+				finalPath = p
+				subtitleApplied = true
+				subtitleStatus = "applied"
+			} else {
+				subtitleStatus = "failed"
+				subtitleError = err.Error()
+				s.logger.Warn("compose: add per-clip aligned subtitle failed", zap.Int64("task_id", taskID), zap.Error(err))
+			}
 		} else if len(whisperWords) > 0 && strings.TrimSpace(subtitleText) != "" {
 			if p, err := s.ffmpeg.AddKaraokeSubtitleFromWordsWithStyle(ctx, finalPath, whisperWords, subtitleStyle2, subtitleText); err == nil {
 				finalPath = p
@@ -1422,7 +1447,7 @@ func (s *VideoService) ComposeTask(ctx context.Context, taskID int64) error {
 	return s.repo.UpdateTaskStatus(ctx, taskID, model.StatusSucceeded, resultURL, "", finalDuration)
 }
 
-// RetryClip regenerates a single failed clip and recomposes the task when possible.
+// RetryClip regenerates a single clip (failed or succeeded) and recomposes the task when possible.
 func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID int64, modelName string) error {
 	task, err := s.repo.GetTask(ctx, taskID)
 	if err != nil {
@@ -1445,8 +1470,8 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	if clip == nil {
 		return fmt.Errorf("clip %d not found in task %d", clipID, taskID)
 	}
-	if clip.Status != model.StatusFailed && clip.Status != model.StatusPending {
-		return fmt.Errorf("clip %d cannot be retried (status: %s)", clipID, clip.Status)
+	if clip.Status == model.StatusProcessing {
+		return fmt.Errorf("clip %d cannot be retried while processing", clipID)
 	}
 
 	resolvedModelName := strings.TrimSpace(modelName)
@@ -1479,6 +1504,7 @@ func (s *VideoService) RetryClip(ctx context.Context, projectID, taskID, clipID 
 	clip.ErrorMsg = ""
 	applyRouteExplainToClip(clip, resolvedModelName, routeExplain)
 	clip.ClipURL = ""
+	clip.EndFrameImageURL = ""
 	clip.DurationSec = 0
 	clip.ModelUsed = ""
 	if err := s.repo.UpdateClip(ctx, clip); err != nil {
@@ -2015,9 +2041,14 @@ func (s *VideoService) recoverStaleTasks(threshold time.Duration) {
 	s.logger.Warn("resetting stale video tasks to failed",
 		zap.Int("count", len(tasks)),
 		zap.Duration("threshold", threshold))
+	staleMsg := "task timed out (watchdog)"
 	for _, t := range tasks {
-		if err := s.repo.UpdateTaskStatus(ctx, t.ID, model.StatusFailed, "", "task timed out (watchdog)", 0); err != nil {
+		if err := s.repo.UpdateTaskStatus(ctx, t.ID, model.StatusFailed, "", staleMsg, 0); err != nil {
 			s.logger.Error("reset stale task", zap.Int64("id", t.ID), zap.Error(err))
+			continue
+		}
+		if err := s.repo.FailInFlightClipsByTaskID(ctx, t.ID, staleMsg); err != nil {
+			s.logger.Warn("fail stale task clips", zap.Int64("task_id", t.ID), zap.Error(err))
 		}
 	}
 }
@@ -2094,15 +2125,15 @@ type VideoTaskRenderOverrides struct {
 	Dialogues         []string
 }
 
-// RetryTask —— 重试单个失败任务，可选更换模型或覆盖 render_config 中的镜头文本
-// RetryTask retries a single failed task, optionally with a different model.
+// RetryTask —— 重试/重新生成单个视频任务，可选更换模型或覆盖 render_config 中的镜头文本
+// RetryTask retries or regenerates a task, optionally with a different model.
 func (s *VideoService) RetryTask(ctx context.Context, taskID int64, modelName string, overrides *VideoTaskRenderOverrides) error {
 	task, err := s.repo.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if task.Status != model.StatusFailed && task.Status != model.StatusPending {
-		return fmt.Errorf("task %d cannot be retried (status: %s)", taskID, task.Status)
+	if task.Status == model.StatusProcessing {
+		return fmt.Errorf("task %d is already running", taskID)
 	}
 	if modelName != "" {
 		task.ModelName = modelName
@@ -2120,6 +2151,8 @@ func (s *VideoService) RetryTask(ctx context.Context, taskID int64, modelName st
 	}
 	task.Status = model.StatusPending
 	task.ErrorMsg = ""
+	task.ResultURL = ""
+	task.ComposeStage = model.ComposeStageNone
 	if err := s.repo.UpdateTask(ctx, task); err != nil {
 		return err
 	}

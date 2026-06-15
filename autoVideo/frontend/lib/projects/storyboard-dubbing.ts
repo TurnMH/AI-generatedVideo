@@ -56,6 +56,21 @@ export function resolveStoryboardSpeechLimit(
   return resolveSpeechMaxRunesForClip(duration, project?.storyboard_config?.speech_pace)
 }
 
+/** Join two storyboard dialogue fields for manual merge-up. */
+export function joinStoryboardDialogue(a: string, b: string): string {
+  const left = a.trim()
+  const right = b.trim().replace(/^[，,]+/, '')
+  if (!left) return right
+  if (!right) return left
+  if (/[。！？]$/.test(left)) return left + right
+  if (/[，,]$/.test(left)) return left + right
+  return `${left}，${right}`
+}
+
+export function countStoryboardDialogueRunes(text: string): number {
+  return [...text.trim()].length
+}
+
 export type CharacterQuote = {
   speaker: string
   quote: string

@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/autovideo/video-service/internal/model"
 )
@@ -163,6 +164,18 @@ func TestCompactClipDialogue_PreservesSpeakerLines(t *testing.T) {
 	}
 	if !strings.Contains(got, "王大发：换新的，老古董碍事") {
 		t.Fatalf("missing character line: %q", got)
+	}
+}
+
+func TestCompactSingleSpeechBody_TruncatesByRunesNotBytes(t *testing.T) {
+	in := strings.Repeat("我在德聚楼掌勺三十年，却被老板用两千块遣退。", 3)
+	// Must not panic when maxRunes is smaller than byte length of CJK text.
+	got := compactSingleSpeechBody(in, 28)
+	if got == "" {
+		t.Fatal("expected truncated text")
+	}
+	if utf8.RuneCountInString(strings.TrimSuffix(got, "。")) > 28 {
+		t.Fatalf("expected <= 28 runes before suffix, got %q", got)
 	}
 }
 

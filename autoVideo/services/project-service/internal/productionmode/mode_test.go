@@ -35,6 +35,20 @@ func TestResolve_ScriptDramaDefault(t *testing.T) {
 	}
 }
 
+func TestProfile_ShouldSkipEpisodeScriptOptimization(t *testing.T) {
+	commentary := Profile{Mode: ModeCommentaryComic}
+	if !commentary.ShouldSkipEpisodeScriptOptimization() {
+		t.Fatal("commentary comic should skip episode script optimization")
+	}
+	if !commentary.ShouldSkipScriptPrep() {
+		t.Fatal("commentary comic should skip script prep before split")
+	}
+	drama := Profile{Mode: ModeScriptDrama}
+	if drama.ShouldSkipEpisodeScriptOptimization() {
+		t.Fatal("script drama should not skip episode script optimization")
+	}
+}
+
 func TestProfile_ShouldOptimizeScriptBeforeSplit(t *testing.T) {
 	ad := Profile{Mode: ModeAd}
 	if !ad.ShouldOptimizeScriptBeforeSplit(true) {

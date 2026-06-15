@@ -31,3 +31,17 @@ func TestFinalizeCommentaryDialogueWithLimit_SubtitleScene(t *testing.T) {
 		t.Fatal("expected subtitle narration")
 	}
 }
+
+func TestSpeakableRunesForDuration_StripsSpeakerLabel(t *testing.T) {
+	got := SpeakableRunesForDuration("王大发：还是您来扛，您看——")
+	if got >= 15 {
+		t.Fatalf("expected speakable body without speaker label, got %d", got)
+	}
+}
+
+func TestInferClipDurationFromDialogue_ShortCharacterLine(t *testing.T) {
+	got := InferClipDurationFromDialogue("王大发：还是您来扛，您看——", 8, "normal")
+	if got >= 6 {
+		t.Fatalf("expected short clip duration, got %d", got)
+	}
+}

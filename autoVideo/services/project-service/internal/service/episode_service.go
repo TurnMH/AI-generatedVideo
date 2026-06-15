@@ -2185,7 +2185,10 @@ func (s *EpisodeService) HasActiveGeneration(projectID uint64) (bool, error) {
 		progress.Stage == "script_prepping", nil
 }
 
-func (s *EpisodeService) episodeAutoPrepared(ep model.Episode) bool {
+func (s *EpisodeService) episodeAutoPrepared(ep model.Episode, profile productionmode.Profile) bool {
+	if profile.ShouldSkipEpisodeScriptOptimization() {
+		return strings.TrimSpace(ep.ScriptExcerpt) != ""
+	}
 	optimizedText := strings.TrimSpace(ep.OptimizedText)
 	if optimizedText == "" {
 		return false
@@ -2196,10 +2199,10 @@ func (s *EpisodeService) episodeAutoPrepared(ep model.Episode) bool {
 	return strings.TrimSpace(ep.ScriptExcerpt) == optimizedText
 }
 
-func (s *EpisodeService) countPreparedEpisodes(eps []model.Episode) int {
+func (s *EpisodeService) countPreparedEpisodes(eps []model.Episode, profile productionmode.Profile) int {
 	count := 0
 	for _, ep := range eps {
-		if s.episodeAutoPrepared(ep) {
+		if s.episodeAutoPrepared(ep, profile) {
 			count++
 		}
 	}
@@ -2294,7 +2297,8 @@ func (s *EpisodeService) finishAutoPreparation(projectID, userID uint64, totalEp
 }
 
 func (s *EpisodeService) runEpisodeAutoPipeline(ctx context.Context, project model.Project, ep model.Episode, totalEpisodes int, resumed, isFirstAutoEpisode, triggerAssets bool) bool {
-	if s.episodeAutoPrepared(ep) {
+	profile := productionmode.ResolveProfile(&project)
+	if s.episodeAutoPrepared(ep, profile) {
 		if !triggerAssets {
 			return true
 		}
@@ -2307,6 +2311,12 @@ func (s *EpisodeService) runEpisodeAutoPipeline(ctx context.Context, project mod
 			return false
 		}
 		return true
+	}
+
+	if profile.ShouldSkipEpisodeScriptOptimization() {
+		if strings.TrimSpace(ep.ScriptExcerpt) == "" {
+			return false
+		}
 	}
 
 	autoWritingHints := s.fetchWritingSkillHints(ctx, project.ID)
@@ -2324,19 +2334,39 @@ func (s *EpisodeService) runEpisodeAutoPipeline(ctx context.Context, project mod
 	message := fmt.Sprintf("正在润色并优化第 %d 集剧本…", ep.EpisodeNumber)
 	phaseLabel := "单集剧本处理中"
 	nextStep := "文本处理完成后可点击「自动处理」衔接资源与分镜"
+	if profile.ShouldSkipEpisodeScriptOptimization() {
+		message = fmt.Sprintf("正在基于原文准备第 %d 集…", ep.EpisodeNumber)
+		phaseLabel = "单集自动处理中"
+		nextStep = "将直接使用上传原文，不再进行 AI 润色优化"
+	}
 	if triggerAssets {
-		message = fmt.Sprintf("正在润色并准备第 %d 集，随后自动提取资源并拆分分镜…", ep.EpisodeNumber)
+		if profile.ShouldSkipEpisodeScriptOptimization() {
+			message = fmt.Sprintf("正在基于原文处理第 %d 集，随后自动提取资源并拆分分镜…", ep.EpisodeNumber)
+		} else {
+			message = fmt.Sprintf("正在润色并准备第 %d 集，随后自动提取资源并拆分分镜…", ep.EpisodeNumber)
+		}
 		phaseLabel = "单集自动处理中"
 		nextStep = "当前集处理完成后可进入工作台继续出图或成片"
 	}
 	if resumed {
-		message = fmt.Sprintf("服务重启后已自动恢复，正在准备第 %d 集…", ep.EpisodeNumber)
+		if profile.ShouldSkipEpisodeScriptOptimization() {
+			message = fmt.Sprintf("服务重启后已自动恢复，正在基于原文准备第 %d 集…", ep.EpisodeNumber)
+		} else {
+			message = fmt.Sprintf("服务重启后已自动恢复，正在准备第 %d 集…", ep.EpisodeNumber)
+		}
 		phaseLabel = "已自动恢复单集处理"
 	}
 	if totalEpisodes > 1 && isFirstAutoEpisode {
 		if triggerAssets {
-			message = fmt.Sprintf("正在自动处理第 %d 集（示范集），其余 %d 集请在单集列表手动启动", ep.EpisodeNumber, max(totalEpisodes-1, 0))
+			if profile.ShouldSkipEpisodeScriptOptimization() {
+				message = fmt.Sprintf("正在基于原文自动处理第 %d 集（示范集），其余 %d 集请在单集列表手动启动", ep.EpisodeNumber, max(totalEpisodes-1, 0))
+			} else {
+				message = fmt.Sprintf("正在自动处理第 %d 集（示范集），其余 %d 集请在单集列表手动启动", ep.EpisodeNumber, max(totalEpisodes-1, 0))
+			}
 			nextStep = "示范集完成后，请为其他分集点击「自动处理」"
+		} else if profile.ShouldSkipEpisodeScriptOptimization() {
+			message = fmt.Sprintf("正在基于原文准备第 %d 集示范剧本（项目共 %d 集）…", ep.EpisodeNumber, totalEpisodes)
+			nextStep = "示范集完成后，请为各分集点击「自动处理」衔接资源与分镜"
 		} else {
 			message = fmt.Sprintf("正在润色优化第 %d 集示范剧本（项目共 %d 集）…", ep.EpisodeNumber, totalEpisodes)
 			nextStep = "示范集文本完成后，请为各分集点击「自动处理」衔接资源与分镜"
@@ -2416,7 +2446,8 @@ func (s *EpisodeService) launchEpisodeAutoPipelineJob(project model.Project, epi
 		}
 
 		processedEpisodes := 0
-		textAlreadyPrepared := s.episodeAutoPrepared(episode)
+		profile := productionmode.ResolveProfile(&project)
+		textAlreadyPrepared := s.episodeAutoPrepared(episode, profile)
 		if textAlreadyPrepared && !opts.TriggerAssets {
 			processedEpisodes = 1
 		}
@@ -2584,10 +2615,15 @@ func (s *EpisodeService) ResumeInterruptedAutoPreparation(limit int) (int, error
 			s.logger.Info("resuming interrupted auto preparation",
 				zap.Uint64("project_id", projects[i].ID),
 				zap.Int("episode_count", len(episodes)),
-				zap.Int("already_prepared", s.countPreparedEpisodes(episodes)),
+				zap.Int("already_prepared", s.countPreparedEpisodes(episodes, productionmode.ResolveProfile(&projects[i]))),
 			)
 		}
-		s.startAutoPreparationPipeline(&projects[i], episodes, true, autoPrepTextOnly)
+		s.startAutoPreparationPipeline(&projects[i], episodes, true, func() autoPrepMode {
+			if productionmode.ResolveProfile(&projects[i]).ShouldSkipEpisodeScriptOptimization() {
+				return autoPrepFullFirstEpisode
+			}
+			return autoPrepTextOnly
+		}())
 		resumed++
 	}
 	return resumed, nil
@@ -2903,14 +2939,33 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 		var prepMessage string
 		var prepNextStep string
 		if isResplit {
-			prepMode = autoPrepTextOnly
-			sceneSplitStatus = "pending"
-			if len(dbEpisodes) <= 1 {
-				prepMessage = fmt.Sprintf("分集完成（%d 集），开始润色优化剧本（仅文本处理）…", len(dbEpisodes))
+			if productionProfile.ShouldSkipEpisodeScriptOptimization() {
+				prepMode = autoPrepFullFirstEpisode
+				sceneSplitStatus = "running"
+				if len(dbEpisodes) <= 1 {
+					prepMessage = fmt.Sprintf("分集完成（%d 集），开始基于原文自动提取资源并拆分分镜…", len(dbEpisodes))
+				} else {
+					prepMessage = fmt.Sprintf("分集完成（%d 集），将基于原文自动处理第 1 集（资源 → 分镜）", len(dbEpisodes))
+				}
+				prepNextStep = "解说漫将直接使用上传原文，不再进行 AI 润色优化"
 			} else {
-				prepMessage = fmt.Sprintf("分集完成（%d 集），将自动润色优化第 1 集示范剧本（仅文本），资源与分镜请手动启动", len(dbEpisodes))
+				prepMode = autoPrepTextOnly
+				sceneSplitStatus = "pending"
+				if len(dbEpisodes) <= 1 {
+					prepMessage = fmt.Sprintf("分集完成（%d 集），开始润色优化剧本（仅文本处理）…", len(dbEpisodes))
+				} else {
+					prepMessage = fmt.Sprintf("分集完成（%d 集），将自动润色优化第 1 集示范剧本（仅文本），资源与分镜请手动启动", len(dbEpisodes))
+				}
+				prepNextStep = "示范集文本处理完成后，请在单集列表点击「自动处理」衔接资源与分镜"
 			}
-			prepNextStep = "示范集文本处理完成后，请在单集列表点击「自动处理」衔接资源与分镜"
+		} else if productionProfile.ShouldSkipEpisodeScriptOptimization() {
+			if len(dbEpisodes) <= 1 {
+				prepMessage = fmt.Sprintf("分集完成（%d 集），开始基于原文自动提取资源并拆分分镜…", len(dbEpisodes))
+				prepNextStep = "完成后可在第 1 集工作台继续出图与成片"
+			} else {
+				prepMessage = fmt.Sprintf("分集完成（%d 集），将基于原文自动处理第 1 集（资源 → 分镜）", len(dbEpisodes))
+				prepNextStep = "示范集完成后，请为其余分集点击「自动处理」"
+			}
 		} else if len(dbEpisodes) <= 1 {
 			prepMessage = fmt.Sprintf("分集完成（%d 集），开始自动处理第 1 集（润色 → 资源 → 分镜）…", len(dbEpisodes))
 			prepNextStep = "完成后可在第 1 集工作台继续出图与成片"
@@ -3158,9 +3213,10 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 
 		// Prefer screenplay-format text (produced by OptimizeEpisode/AutoOptimizeReview)
 		// over raw novel text so the scene splitter gets properly structured input.
-		content := ep.OptimizedText
-		if content == "" {
-			content = ep.ScriptExcerpt
+		// Commentary comic always uses uploaded script_excerpt.
+		content := ep.ScriptExcerpt
+		if !productionProfile.ShouldSkipEpisodeScriptOptimization() && strings.TrimSpace(ep.OptimizedText) != "" {
+			content = ep.OptimizedText
 		}
 		if content == "" {
 			content = ep.Summary
@@ -3173,6 +3229,8 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 		reviewStatus := ep.ReviewStatus
 		contentSource := "summary"
 		switch {
+		case productionProfile.ShouldSkipEpisodeScriptOptimization() && strings.TrimSpace(ep.ScriptExcerpt) != "":
+			contentSource = "script_excerpt"
 		case strings.TrimSpace(ep.OptimizedText) != "":
 			contentSource = "optimized_text"
 		case strings.TrimSpace(ep.ScriptExcerpt) != "":
@@ -3907,6 +3965,7 @@ func (s *EpisodeService) postProcessAdScenes(scenes []llmScene, clipDuration int
 	for i := range processed {
 		processed[i].Duration = normalizeAdSceneDuration(processed[i].Duration, clipDuration)
 		refitSceneDialogue(&processed[i], clipDuration, speechPace, false)
+		processed[i].Duration = normalizeAdSceneDuration(processed[i].Duration, clipDuration)
 	}
 	return processed
 }
@@ -6128,22 +6187,39 @@ func (s *EpisodeService) OptimizeEpisode(ctx context.Context, id, projectID uint
 	return episode, nil
 }
 
-// ApplyOptimizedText copies optimized_text → script_excerpt (user confirmed).
+// ApplyOptimizedText copies optimized_text → script_excerpt (user confirmed), or for
+// commentary-comic projects uses the existing script_excerpt directly.
 func (s *EpisodeService) ApplyOptimizedText(ctx context.Context, id, projectID uint64) (*model.Episode, error) {
 	episode, err := s.episodeRepo.FindByID(id)
 	if err != nil || episode.ProjectID != projectID {
 		return nil, errors.New("episode not found")
 	}
-	if episode.OptimizedText == "" {
-		return nil, errors.New("no optimized text to apply")
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %w", err)
 	}
-	episode.ScriptExcerpt = episode.OptimizedText
-	episode.WordCount = utf8.RuneCountInString(episode.OptimizedText)
-	if episode.WordCount > 0 {
-		episode.EstimatedDuration = episode.WordCount / 5
-	}
-	if err := s.episodeRepo.Update(episode); err != nil {
-		return nil, fmt.Errorf("apply optimized text: %w", err)
+	profile := productionmode.ResolveProfile(project)
+	if profile.ShouldSkipEpisodeScriptOptimization() {
+		if strings.TrimSpace(episode.ScriptExcerpt) == "" {
+			return nil, errors.New("no script excerpt to apply")
+		}
+		episode.OptimizeStatus = "skipped"
+		episode.ReviewStatus = "skipped"
+		if err := s.episodeRepo.Update(episode); err != nil {
+			return nil, fmt.Errorf("apply original script: %w", err)
+		}
+	} else {
+		if episode.OptimizedText == "" {
+			return nil, errors.New("no optimized text to apply")
+		}
+		episode.ScriptExcerpt = episode.OptimizedText
+		episode.WordCount = utf8.RuneCountInString(episode.OptimizedText)
+		if episode.WordCount > 0 {
+			episode.EstimatedDuration = episode.WordCount / 5
+		}
+		if err := s.episodeRepo.Update(episode); err != nil {
+			return nil, fmt.Errorf("apply optimized text: %w", err)
+		}
 	}
 	if !shouldSkipEpisodeAssetExtraction(ctx) {
 		if err := s.extractAssetsForEpisode(WithSkipEpisodeStoryboardTrigger(ctx), projectID, id); err != nil {

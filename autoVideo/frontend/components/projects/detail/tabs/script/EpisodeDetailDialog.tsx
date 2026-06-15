@@ -35,6 +35,7 @@ type EpisodeDetailDialogProps = {
   onOptimizeEpisode: (episode: Episode) => void
   onApplyOptimizedText: (episode: Episode) => void
   onReviewEpisode: (episode: Episode) => void
+  commentaryProject?: boolean
 }
 
 export function EpisodeDetailDialog({
@@ -62,6 +63,7 @@ export function EpisodeDetailDialog({
   onOptimizeEpisode,
   onApplyOptimizedText,
   onReviewEpisode,
+  commentaryProject = false,
 }: EpisodeDetailDialogProps) {
   return (
     <Dialog open={!!selectedEpisode} onOpenChange={onOpenChange}>
@@ -73,10 +75,12 @@ export function EpisodeDetailDialog({
             </DialogTitle>
             {!editingEpisode ? (
               <div className="flex gap-2 shrink-0">
-                <Button size="sm" variant="outline" onClick={onPolishEpisode} disabled={polishingEpisode}>
-                  {polishingEpisode ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
-                  AI 润色
-                </Button>
+                {!commentaryProject ? (
+                  <Button size="sm" variant="outline" onClick={onPolishEpisode} disabled={polishingEpisode}>
+                    {polishingEpisode ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
+                    AI 润色
+                  </Button>
+                ) : null}
                 <Button size="sm" variant="outline" className="shrink-0" onClick={() => selectedEpisode && onOpenEditEpisode(selectedEpisode)}>
                   <Pencil className="mr-1.5 h-3.5 w-3.5" />
                   编辑
@@ -139,6 +143,15 @@ export function EpisodeDetailDialog({
                   <span>~{formatDuration(selectedEpisode?.estimated_duration ?? 0)}</span>
                 </div>
 
+                {commentaryProject ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-3">
+                    <p className="text-xs font-semibold text-blue-800">解说漫原文直出</p>
+                    <p className="mt-1 text-[11px] leading-5 text-blue-700">
+                      本模式会直接使用上传原文进行资源提取与分镜拆分，不再执行 AI 润色、转剧本格式或质量审查。
+                    </p>
+                  </div>
+                ) : (
+                  <>
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
                   <div className="mb-2 flex items-center justify-between">
                     <p className="text-xs font-semibold text-amber-800">剧本格式优化</p>
@@ -277,6 +290,8 @@ export function EpisodeDetailDialog({
                     <p className="text-[11px] text-green-600">点击&quot;AI 审查&quot;分析本集剧本的完整度、一致性、台词质量及情节衔接。</p>
                   )}
                 </div>
+                  </>
+                )}
               </>
             )}
           </div>

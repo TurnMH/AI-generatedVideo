@@ -4,6 +4,7 @@ import { CheckCircle2, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { Episode, Project } from '@/types'
 import type { VideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
+import { isCommentaryProject } from '@/lib/projects/commentary-project'
 import { getProgressStallMeta, SCRIPT_PROGRESS_STALL_MS } from '@/lib/projects/utils'
 
 type ScriptPipelineBannersProps = {
@@ -30,6 +31,7 @@ export function ScriptPipelineBanners({
   onRetryStalledScript,
 }: ScriptPipelineBannersProps) {
   const scriptProgressStalled = getProgressStallMeta(project.progress?.updated_at, SCRIPT_PROGRESS_STALL_MS)
+  const commentaryProject = isCommentaryProject(project)
 
   if (pipeline.phase === 'episode_splitting') {
     return (
@@ -82,10 +84,14 @@ export function ScriptPipelineBanners({
             <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-blue-900">剧本润色与自动准备中</p>
+            <p className="text-sm font-semibold text-blue-900">
+              {commentaryProject ? '原文自动处理中' : '剧本润色与自动准备中'}
+            </p>
             <p className="mt-1 text-sm leading-6 text-blue-800">{pipeline.activeDetail}</p>
             <p className="mt-1 text-xs text-blue-600">
-              分集已完成（{episodes.length} 集）。系统正在润色剧本并串联后续流程，这不是分镜拆分。
+              {commentaryProject
+                ? `分集已完成（${episodes.length} 集）。系统将直接使用上传原文提取资源并拆分分镜，不会进行 AI 润色优化。`
+                : `分集已完成（${episodes.length} 集）。系统正在润色剧本并串联后续流程，这不是分镜拆分。`}
             </p>
           </div>
         </div>
@@ -135,9 +141,10 @@ export function ScriptPipelineBanners({
 type EpisodeSplitDoneBannerProps = {
   episodesCount: number
   nextStepHint: string
+  commentaryProject?: boolean
 }
 
-export function EpisodeSplitDoneBanner({ episodesCount, nextStepHint }: EpisodeSplitDoneBannerProps) {
+export function EpisodeSplitDoneBanner({ episodesCount, nextStepHint, commentaryProject = false }: EpisodeSplitDoneBannerProps) {
   return (
     <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3">
       <div className="flex items-start gap-3">
@@ -146,7 +153,9 @@ export function EpisodeSplitDoneBanner({ episodesCount, nextStepHint }: EpisodeS
           <p className="text-sm font-semibold text-emerald-900">分集已完成（{episodesCount} 集）</p>
           <p className="mt-1 text-xs leading-5 text-emerald-700">
             {episodesCount > 1
-              ? '系统已自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在左侧单集列表点击「自动处理」。'
+              ? (commentaryProject
+                ? '系统已基于原文自动处理第 1 集示范流程（资源 → 分镜），其余分集请在左侧单集列表点击「自动处理」。'
+                : '系统已自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在左侧单集列表点击「自动处理」。')
               : nextStepHint}
           </p>
         </div>
@@ -157,9 +166,11 @@ export function EpisodeSplitDoneBanner({ episodesCount, nextStepHint }: EpisodeS
 
 type BatchFormattingBannerProps = {
   episodes: Episode[]
+  commentaryProject?: boolean
 }
 
-export function BatchFormattingBanner({ episodes }: BatchFormattingBannerProps) {
+export function BatchFormattingBanner({ episodes, commentaryProject = false }: BatchFormattingBannerProps) {
+  if (commentaryProject) return null
   const formattingCount = episodes.filter((ep) => ep.optimize_status === 'optimizing').length
   const formattedCount = episodes.filter((ep) => ep.optimize_status === 'done').length
   const pendingCount = episodes.filter((ep) => (ep.optimize_status ?? '') === '').length

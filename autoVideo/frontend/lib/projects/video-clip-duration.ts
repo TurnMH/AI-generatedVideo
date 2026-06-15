@@ -13,6 +13,8 @@ const MODEL_SNAP: Record<string, number[]> = {
   suanneng: [5, 8, 10],
 }
 
+const DEFAULT_CLIP_DURATION_OPTIONS = [4, 5, 6, 8]
+
 export function normalizeVideoModelFamily(modelKey: string): string {
   const key = (modelKey || '').trim().toLowerCase()
   if (!key) return 'default'
@@ -24,6 +26,14 @@ export function normalizeVideoModelFamily(modelKey: string): string {
   if (key.includes('veo') || key.includes('voe') || key === 'sora2') return 'veo'
   if (key === 'wan') return 'wan'
   return 'default'
+}
+
+/** Fallback clip duration choices when video-service model-status has no duration param. */
+export function getClipDurationOptionsForModelFamily(modelKey: string): number[] {
+  const family = normalizeVideoModelFamily(modelKey)
+  const allowed = MODEL_SNAP[family]
+  if (allowed?.length) return [...allowed]
+  return [...DEFAULT_CLIP_DURATION_OPTIONS]
 }
 
 export function snapClipDurationToModel(seconds: number, modelKey: string): number {

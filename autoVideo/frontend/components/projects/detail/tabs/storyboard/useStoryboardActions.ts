@@ -5,7 +5,7 @@ import { useOneShotTriggerEffect } from '@/lib/projects/use-one-shot-trigger'
 import { storyboardAPI, videoAPI, dubbingAPI, assetAPI, type DubbingTask } from '@/lib/api'
 import { normalizeVideoStylePreset, VIDEO_STYLE_COMPACT_OPTIONS, VIDEO_GENERATION_PRESETS } from '@/lib/video-style-config'
 import { FALLBACK_VOICE_OPTIONS } from '@/lib/projects/constants'
-import { formatStoryboardSpeechForVideo, formatStoryboardDubbingText, resolveStoryboardSpeechLimit } from '@/lib/projects/storyboard-dubbing'
+import { formatStoryboardSpeechForVideo, formatStoryboardDubbingText, resolveStoryboardSpeechLimit, joinStoryboardDialogue, countStoryboardDialogueRunes } from '@/lib/projects/storyboard-dubbing'
 import { canTriggerStoryboardImage, triggerStoryboardImageGeneration } from '@/lib/projects/storyboard-image'
 import { resolveStoryboardClipDurationSec, resolveStoryboardClipDurations } from '@/lib/projects/video-clip-duration'
 import { commentaryProductionModeValue } from '@/lib/projects/commentary-project'
@@ -781,6 +781,39 @@ export function useStoryboardActions({
     }
   }
 
+  const handleMergeWithPrevious = async (
+    current: Storyboard,
+    previous: Storyboard,
+    selectedSb: Storyboard | null,
+    setSelectedSb: (sb: Storyboard | null) => void,
+  ) => {
+    if (current.episode_id !== previous.episode_id) {
+      toast({ title: '只能合并同集分镜', variant: 'destructive' })
+      return
+    }
+    const mergedDialogue = joinStoryboardDialogue(previous.dialogue ?? '', current.dialogue ?? '')
+    const limit = resolveStoryboardSpeechLimit(previous, project)
+    const mergedRunes = countStoryboardDialogueRunes(mergedDialogue)
+    const confirmMessage = mergedRunes > limit
+      ? `合并后台词约 ${mergedRunes} 字，超过建议上限 ${limit} 字，配音可能偏长。仍要将第 ${current.sequence_number} 镜并入上一镜并删除本镜吗？`
+      : `将第 ${current.sequence_number} 镜台词并入第 ${previous.sequence_number} 镜并删除本镜？`
+    if (!window.confirm(confirmMessage)) return
+    try {
+      await storyboardAPI.update(projectId, previous.id, { dialogue: mergedDialogue })
+      await storyboardAPI.delete(projectId, current.id)
+      toast({ title: '已合并到上一镜', variant: 'success' })
+      mutateSb()
+      mutateStats()
+      if (selectedSb?.id === current.id) {
+        setSelectedSb(null)
+      } else if (selectedSb?.id === previous.id) {
+        setSelectedSb({ ...previous, dialogue: mergedDialogue })
+      }
+    } catch {
+      toast({ title: '合并失败', variant: 'destructive' })
+    }
+  }
+
   const handleSwitchVersion = async (sbId: number, versionId: number) => {
     try {
       await storyboardAPI.switchVersion(projectId, sbId, versionId)
@@ -943,6 +976,7 @@ export function useStoryboardActions({
     handleAuditContinuity,
     handleVoid,
     handleDelete,
+    handleMergeWithPrevious,
     handleSwitchVersion,
     handleCreateFromEpisodes,
     SB_VOICE_OPTIONS,

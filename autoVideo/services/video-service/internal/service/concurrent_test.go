@@ -181,12 +181,16 @@ func (r *fakeRepo) GetClipsByEpisode(_ context.Context, projectID, episodeID int
 	return nil, nil
 }
 func (r *fakeRepo) DeleteClipsByTaskID(_ context.Context, _ int64) error          { return nil }
+func (r *fakeRepo) FailInFlightClipsByTaskID(_ context.Context, _ int64, _ string) error { return nil }
 func (r *fakeRepo) UpdateComposeStage(_ context.Context, _ int64, _ string) error { return nil }
 func (r *fakeRepo) FindDubbingAudio(_ context.Context, _ int64, _ *int64) (string, string) {
 	return "", ""
 }
 func (r *fakeRepo) FindDubbingVoiceConfig(_ context.Context, _ int64, _ *int64) (string, string, string, string) {
 	return "", "", "", ""
+}
+func (r *fakeRepo) FindStoryboardDubbingAudios(_ context.Context, _ int64, _ []int64) map[int64]string {
+	return nil
 }
 
 // compile-time check: fakeRepo must satisfy VideoTaskRepo

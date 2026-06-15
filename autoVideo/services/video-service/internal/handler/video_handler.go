@@ -516,6 +516,7 @@ type generateReq struct {
 	ImageURLs                   []string           `json:"image_urls"`
 	SceneDescriptions           []string           `json:"scene_descriptions"` // per-clip descriptions, parallel to image_urls
 	Dialogues                   []string           `json:"dialogues"`          // per-clip dialogue / subtitle lines
+	StoryboardIDs               []int64            `json:"storyboard_ids"`     // per-clip storyboard ids, parallel to image_urls
 	MotionDescs                 []string           `json:"motion_descs"`       // opt-p7: per-clip camera/motion from storyboard
 	Durations                   []float64          `json:"durations"`          // per-clip duration in seconds
 	CameraMovements             []string           `json:"camera_movements"`
@@ -623,6 +624,9 @@ func (h *VideoHandler) Generate(c *gin.Context) {
 	applySpeechSanitization(&req.Dialogues, &req.SubtitleText)
 	if len(req.Dialogues) > 0 {
 		req.RenderConfig["dialogues"] = req.Dialogues
+	}
+	if len(req.StoryboardIDs) > 0 {
+		req.RenderConfig["storyboard_ids"] = req.StoryboardIDs
 	}
 	if len(req.SubtitleTimeline) > 0 {
 		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
@@ -1001,6 +1005,7 @@ type projectGenerateReq struct {
 	ImageURLs                   []string           `json:"image_urls" binding:"required,min=1"`
 	SceneDescriptions           []string           `json:"scene_descriptions"` // per-clip visual descriptions
 	Dialogues                   []string           `json:"dialogues"`          // per-clip dialogue/subtitle text
+	StoryboardIDs               []int64            `json:"storyboard_ids"`     // per-clip storyboard ids
 	Durations                   []float64          `json:"durations"`          // per-clip duration in seconds (from storyboard)
 	CameraMovements             []string           `json:"camera_movements"`   // per-clip camera movement hint
 	Moods                       []string           `json:"moods"`              // per-clip mood/emotion
@@ -1079,6 +1084,9 @@ func (h *VideoHandler) GenerateProjectVideo(c *gin.Context) {
 	applySpeechSanitization(&req.Dialogues, &req.SubtitleText)
 	if len(req.Dialogues) > 0 {
 		req.RenderConfig["dialogues"] = req.Dialogues
+	}
+	if len(req.StoryboardIDs) > 0 {
+		req.RenderConfig["storyboard_ids"] = req.StoryboardIDs
 	}
 	if len(req.SubtitleTimeline) > 0 {
 		req.RenderConfig["subtitle_timeline"] = req.SubtitleTimeline
@@ -1260,6 +1268,7 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		ImageURLs         []string   `json:"image_urls" binding:"required,min=1"`
 		SceneDescriptions []string   `json:"scene_descriptions"` // per-clip visual descriptions
 		Dialogues         []string   `json:"dialogues"`          // per-clip dialogue text
+		StoryboardIDs     []int64    `json:"storyboard_ids"`     // per-clip storyboard ids
 		Durations         []float64  `json:"durations"`          // per-clip duration in seconds
 		CameraMovements   []string   `json:"camera_movements"`   // per-clip camera movement hint
 		Moods             []string   `json:"moods"`              // per-clip mood
@@ -1337,6 +1346,9 @@ func (h *VideoHandler) GenerateProjectVideosBatch(c *gin.Context) {
 		applySpeechSanitization(&ep.Dialogues, nil)
 		if len(ep.Dialogues) > 0 {
 			rc["dialogues"] = ep.Dialogues
+		}
+		if len(ep.StoryboardIDs) > 0 {
+			rc["storyboard_ids"] = ep.StoryboardIDs
 		}
 		if len(ep.SubtitleTimeline) > 0 {
 			rc["subtitle_timeline"] = ep.SubtitleTimeline
@@ -1532,7 +1544,7 @@ func (h *VideoHandler) RetryVideo(c *gin.Context) {
 	response.OK(c, gin.H{"task_id": vid, "message": "retry started"})
 }
 
-// RetryVideoClip retries a single failed clip within a video task.
+// RetryVideoClip retries or regenerates a single clip within a video task.
 // POST /api/v1/projects/:pid/videos/:vid/clips/:cid/retry
 func (h *VideoHandler) RetryVideoClip(c *gin.Context) {
 	pid, err := pathInt64(c, "pid")

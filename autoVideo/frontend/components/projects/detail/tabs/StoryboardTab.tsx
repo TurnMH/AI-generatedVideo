@@ -338,6 +338,7 @@ export function StoryboardTab({
         onSwitchVersion={actions.handleSwitchVersion}
         onVoid={(id) => actions.handleVoid(id, selectedSb, setSelectedSb)}
         onDelete={(id) => actions.handleDelete(id, selectedSb, setSelectedSb)}
+        onMergeWithPrevious={(current, previous) => actions.handleMergeWithPrevious(current, previous, selectedSb, setSelectedSb)}
         onOpenEpisodeVideoDialog={actions.openEpisodeVideoDialog}
         onCreateFromEpisodes={actions.handleCreateFromEpisodes}
       />

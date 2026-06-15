@@ -12,6 +12,7 @@ import { CreateEpisodeDialog } from './script/CreateEpisodeDialog'
 import { ScriptPreviewDialog } from './script/ScriptPreviewDialog'
 import { EpisodeDetailDialog } from './script/EpisodeDetailDialog'
 import { DeleteEpisodeAlert } from './script/DeleteEpisodeAlert'
+import { isCommentaryProject } from '@/lib/projects/commentary-project'
 
 export function ScriptTab({
   projectId,
@@ -29,6 +30,7 @@ export function ScriptTab({
   if (tab.episodesLoading) return <TabSkeleton />
 
   const scriptFileName = project.script_file_url?.split('/').pop() || '剧本文件'
+  const commentaryProject = isCommentaryProject(project)
 
   return (
     <div className="space-y-6">
@@ -201,6 +203,7 @@ export function ScriptTab({
         onOptimizeEpisode={tab.handleOptimizeEpisode}
         onApplyOptimizedText={tab.handleApplyOptimizedText}
         onReviewEpisode={tab.handleReviewEpisode}
+        commentaryProject={commentaryProject}
       />
 
       <DeleteEpisodeAlert

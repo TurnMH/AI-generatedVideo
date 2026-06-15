@@ -33,11 +33,13 @@ type VideoTaskRepo interface {
 	GetClipsByTaskID(ctx context.Context, taskID int64) ([]model.VideoClip, error)
 	GetClipsByEpisode(ctx context.Context, projectID, episodeID int64) ([]model.VideoClip, error)
 	DeleteClipsByTaskID(ctx context.Context, taskID int64) error
+	FailInFlightClipsByTaskID(ctx context.Context, taskID int64, errMsg string) error
 	UpdateComposeStage(ctx context.Context, taskID int64, stage string) error
 
 	// Dubbing / audio lookup
 	FindDubbingAudio(ctx context.Context, projectID int64, episodeID *int64) (audioURL string, subtitleURL string)
 	FindDubbingVoiceConfig(ctx context.Context, projectID int64, episodeID *int64) (voiceModel, voiceRate, voicePitch, voiceVolume string)
+	FindStoryboardDubbingAudios(ctx context.Context, projectID int64, storyboardIDs []int64) map[int64]string
 }
 
 // VideoRepo encapsulates database operations for video tasks and clips.
@@ -154,6 +156,13 @@ func (r *VideoRepo) DeleteClipsByTaskID(ctx context.Context, taskID int64) error
 	return r.db.WithContext(ctx).Where("video_task_id = ?", taskID).Delete(&model.VideoClip{}).Error
 }
 
+// FailInFlightClipsByTaskID marks pending/processing clips as failed when the parent task aborts.
+func (r *VideoRepo) FailInFlightClipsByTaskID(ctx context.Context, taskID int64, errMsg string) error {
+	return r.db.WithContext(ctx).Model(&model.VideoClip{}).
+		Where("video_task_id = ? AND status IN ?", taskID, []string{model.StatusPending, model.StatusProcessing}).
+		Updates(map[string]any{"status": model.StatusFailed, "error_msg": errMsg}).Error
+}
+
 // SoftDeleteTask —— 软删除任务，设置 deleted_at 时间戳
 // SoftDeleteTask marks a task as deleted by setting deleted_at.
 func (r *VideoRepo) SoftDeleteTask(ctx context.Context, taskID int64) error {
@@ -233,6 +242,33 @@ func (r *VideoRepo) FindDubbingVoiceConfig(ctx context.Context, projectID int64,
 		return "", "", "", ""
 	}
 	return task.VoiceModel, task.VoiceRate, task.VoicePitch, task.VoiceVolume
+}
+
+// FindStoryboardDubbingAudios returns the latest succeeded dubbing audio URL
+// per storyboard_id (task_type=dubbing). Missing IDs are omitted from the map.
+func (r *VideoRepo) FindStoryboardDubbingAudios(ctx context.Context, projectID int64, storyboardIDs []int64) map[int64]string {
+	out := make(map[int64]string)
+	if len(storyboardIDs) == 0 {
+		return out
+	}
+	var tasks []model.DubbingTask
+	if err := r.db.WithContext(ctx).
+		Where("project_id = ? AND storyboard_id IN ? AND task_type = 'dubbing' AND status = 'succeeded' AND audio_url != ''",
+			projectID, storyboardIDs).
+		Order("created_at DESC").
+		Find(&tasks).Error; err != nil {
+		return out
+	}
+	for _, task := range tasks {
+		if task.StoryboardID == nil {
+			continue
+		}
+		sid := *task.StoryboardID
+		if _, exists := out[sid]; !exists {
+			out[sid] = task.AudioURL
+		}
+	}
+	return out
 }
 
 // StatusCounts —— 按状态分组统计项目下的任务数量，返回 map[status]count

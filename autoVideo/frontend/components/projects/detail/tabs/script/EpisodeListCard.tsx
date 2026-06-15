@@ -8,6 +8,7 @@ import type { EpisodeCountRecommendation } from '@/lib/projects/comic'
 import type { VideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
 import { SplitAdvancedSettingsPanel } from './SplitAdvancedSettingsPanel'
 import { ScriptPipelineBanners, EpisodeSplitDoneBanner, BatchFormattingBanner, AssetExtractionBanner } from './ScriptPipelineBanners'
+import { isCommentaryProject } from '@/lib/projects/commentary-project'
 import { KeywordLibraryPanel } from './KeywordLibraryPanel'
 import { EpisodeGrid, SceneSplittingEpisodeGrid } from './EpisodeGrid'
 
@@ -96,6 +97,7 @@ export function EpisodeListCard(props: EpisodeListCardProps) {
   } = props
 
   const showSceneSplittingGrid = pipeline.phase === 'scene_splitting'
+  const commentaryProject = isCommentaryProject(project)
 
   return (
     <Card>
@@ -205,10 +207,14 @@ export function EpisodeListCard(props: EpisodeListCardProps) {
         ) : (
           <>
             {pipeline.episodeSplitDone && !pipeline.isActive ? (
-              <EpisodeSplitDoneBanner episodesCount={episodes.length} nextStepHint={pipeline.nextStepHint} />
+              <EpisodeSplitDoneBanner
+                episodesCount={episodes.length}
+                nextStepHint={pipeline.nextStepHint}
+                commentaryProject={commentaryProject}
+              />
             ) : null}
 
-            <BatchFormattingBanner episodes={episodes} />
+            <BatchFormattingBanner episodes={episodes} commentaryProject={commentaryProject} />
 
             <AssetExtractionBanner
               projectStatus={project.status}

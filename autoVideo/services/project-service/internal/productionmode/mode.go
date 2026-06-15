@@ -41,7 +41,13 @@ func (p Profile) ShouldPostProcessMergeScenes() bool {
 
 // ShouldSkipScriptPrep returns true when pre-split script LLM prep should be skipped.
 func (p Profile) ShouldSkipScriptPrep() bool {
-	return p.IsComics()
+	return p.IsComics() || p.IsCommentaryComic()
+}
+
+// ShouldSkipEpisodeScriptOptimization skips per-episode polish/optimize/review and uses
+// the uploaded script_excerpt directly for asset extraction and scene splitting.
+func (p Profile) ShouldSkipEpisodeScriptOptimization() bool {
+	return p.IsCommentaryComic()
 }
 
 // UseAdEpisodeEstimate returns true when episode count estimation should apply

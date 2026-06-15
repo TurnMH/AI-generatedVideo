@@ -708,11 +708,16 @@ func compactSingleSpeechBody(text string, maxRunes int) string {
 		text = strings.Join(units, "。") + "。"
 	}
 	if runes := []rune(text); len(runes) > maxRunes {
-		if idx := strings.LastIndexAny(string(runes[:maxRunes]), "，,；;"); idx >= maxRunes/3 {
-			text = strings.TrimSpace(string(runes[:idx])) + "。"
-		} else {
-			text = strings.TrimSpace(string(runes[:maxRunes])) + "。"
+		cutAt := maxRunes
+		minCut := maxRunes / 3
+		for i := maxRunes - 1; i >= minCut; i-- {
+			r := runes[i]
+			if r == '，' || r == ',' || r == '；' || r == ';' {
+				cutAt = i
+				break
+			}
 		}
+		text = strings.TrimSpace(string(runes[:cutAt])) + "。"
 	}
 	return strings.TrimSpace(text)
 }

@@ -11,6 +11,7 @@ import { getProgressStallMeta, SCRIPT_PROGRESS_STALL_MS, getTimingSummary } from
 import { recommendEpisodeCount } from '@/lib/projects/comic'
 import { AUTO_EPISODE_SPLIT_HINT, prefersAutoEpisodeSplit } from '@/lib/projects/episode-split'
 import { deriveVideoPipelineSnapshot } from '@/lib/projects/pipeline-status'
+import { isCommentaryProject } from '@/lib/projects/commentary-project'
 import { getSplitModelRemark, buildSplitModelSearchText, getSplitModelAvailabilityRank } from '@/lib/projects/models'
 import type { StoryboardStatsData } from '@/lib/projects/workflow'
 import { getApiErrorMessage } from '@/lib/projects/get-api-error-message'
@@ -30,6 +31,7 @@ export function useScriptTab({
 }) {
   const { toast } = useToast()
   const usesAutoEpisodeSplit = prefersAutoEpisodeSplit(project)
+  const commentaryProject = isCommentaryProject(project)
   const fileRef = useRef<HTMLInputElement>(null)
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null)
   const [assetGenerating, setAssetGenerating] = useState(false)
@@ -501,7 +503,11 @@ export function useScriptTab({
     await projectAPI.generateEpisodes(projectId, undefined, { autoStoryboard: autoStoryboardAfterSplit })
     toast({
       title: '上传成功，已自动开始分集',
-      description: autoStoryboardAfterSplit ? '系统会自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在单集列表手动启动。' : '分集完成后可继续手动推进后续流程。',
+      description: autoStoryboardAfterSplit
+        ? (commentaryProject
+          ? '系统将基于上传原文自动提取资源并拆分分镜，不会进行 AI 润色优化。'
+          : '系统会自动润色优化第 1 集示范剧本（仅文本），资源与分镜请在单集列表手动启动。')
+        : '分集完成后可继续手动推进后续流程。',
       variant: 'success',
     })
     if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()
@@ -584,7 +590,11 @@ export function useScriptTab({
         ...(hasExistingEpisodes ? { rebuild: true } : {}),
       })
       toast({
-        title: autoStoryboardAfterSplit ? '重新分集已启动：将自动润色优化第 1 集示范剧本（仅文本）' : '重新分集已启动：旧分集与旧分镜将按新配置重建',
+        title: autoStoryboardAfterSplit
+          ? (commentaryProject
+            ? '重新分集已启动：将基于原文自动提取资源并拆分分镜'
+            : '重新分集已启动：将自动润色优化第 1 集示范剧本（仅文本）')
+          : '重新分集已启动：旧分集与旧分镜将按新配置重建',
         variant: 'success',
       })
       if (autoStoryboardAfterSplit) onAutoStoryboardQueued?.()

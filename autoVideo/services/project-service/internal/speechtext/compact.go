@@ -127,6 +127,11 @@ func dedupeSpeechUnits(text string) string {
 }
 
 func normalizeSpeechKey(text string) string {
+	return NormalizeSpeechKey(text)
+}
+
+// NormalizeSpeechKey strips punctuation/whitespace for fuzzy speech matching.
+func NormalizeSpeechKey(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""

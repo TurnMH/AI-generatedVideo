@@ -5,12 +5,13 @@ import { Switch } from '@/components/ui/switch'
 import {
   FRIENDLY_ASPECT_OPTIONS,
   FRIENDLY_CONSISTENCY_OPTIONS,
-  FRIENDLY_DURATION_OPTIONS,
 } from '@/lib/projects/new/video-create-ui'
 
 type VideoCreateOptionsProps = {
   aspectRatio: string
   duration: number
+  durationOptions: number[]
+  durationHint?: string
   consistencyStrength: number
   enableDubbing: boolean
   enableSubtitle: boolean
@@ -24,6 +25,8 @@ type VideoCreateOptionsProps = {
 export function VideoCreateOptions({
   aspectRatio,
   duration,
+  durationOptions,
+  durationHint,
   consistencyStrength,
   enableDubbing,
   enableSubtitle,
@@ -60,7 +63,7 @@ export function VideoCreateOptions({
       <div className="space-y-2">
         <Label className="text-sm">每段大约多长</Label>
         <div className="flex flex-wrap gap-2">
-          {FRIENDLY_DURATION_OPTIONS.map((seconds) => {
+          {durationOptions.map((seconds) => {
             const active = duration === seconds
             return (
               <button
@@ -76,6 +79,9 @@ export function VideoCreateOptions({
             )
           })}
         </div>
+        {durationHint ? (
+          <p className="text-xs leading-5 text-surface-500">{durationHint}</p>
+        ) : null}
       </div>
 
       <div className="space-y-2">

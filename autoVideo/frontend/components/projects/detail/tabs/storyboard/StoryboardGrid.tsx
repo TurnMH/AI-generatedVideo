@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  ArrowUpToLine,
   Ban,
   Eye,
   LayoutGrid,
@@ -44,6 +45,7 @@ export function StoryboardGrid({
   onSwitchVersion,
   onVoid,
   onDelete,
+  onMergeWithPrevious,
   onOpenEpisodeVideoDialog,
   onCreateFromEpisodes,
 }: {
@@ -63,6 +65,7 @@ export function StoryboardGrid({
   onSwitchVersion: (sbId: number, versionId: number) => void
   onVoid: (id: number) => void
   onDelete: (id: number) => void
+  onMergeWithPrevious: (current: Storyboard, previous: Storyboard) => void
   onOpenEpisodeVideoDialog: (episodeId: number) => void
   onCreateFromEpisodes: () => void
 }) {
@@ -98,7 +101,7 @@ export function StoryboardGrid({
     return (epA?.episode_number ?? a) - (epB?.episode_number ?? b)
   })
 
-  const renderSbCard = (sb: Storyboard) => (
+  const renderSbCard = (sb: Storyboard, previousSb: Storyboard | null) => (
     <Card key={sb.id} className={`group overflow-hidden transition-shadow hover:shadow-md ${sb.status === 'failed' ? 'ring-2 ring-red-300' : ''}`}>
       <div
         className="relative aspect-video cursor-pointer overflow-hidden bg-surface-100"
@@ -181,6 +184,17 @@ export function StoryboardGrid({
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => onSelectStoryboard(sb)} title="查看">
             <Eye className="h-3.5 w-3.5" />
           </Button>
+          {previousSb ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={() => onMergeWithPrevious(sb, previousSb)}
+              title="与上一镜合并"
+            >
+              <ArrowUpToLine className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => onVoid(sb.id)} title="作废">
             <Ban className="h-3.5 w-3.5" />
           </Button>
@@ -233,7 +247,7 @@ export function StoryboardGrid({
               )}
             </div>
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-              {sorted.map(renderSbCard)}
+              {sorted.map((sb, index) => renderSbCard(sb, index > 0 ? sorted[index - 1] : null))}
             </div>
           </div>
         )
