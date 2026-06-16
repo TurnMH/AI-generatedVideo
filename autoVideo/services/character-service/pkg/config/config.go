@@ -34,11 +34,16 @@ type Config struct {
 		DefaultModel string `mapstructure:"default_model"`
 	} `mapstructure:"image"`
 	LLM struct {
-		BaseURL     string `mapstructure:"base_url"`
-		APIKey      string `mapstructure:"api_key"`
-		Model       string `mapstructure:"model"`
-		VisionModel string `mapstructure:"vision_model"`
-		Timeout     int    `mapstructure:"timeout"`
+		BaseURL         string `mapstructure:"base_url"`
+		APIKey          string `mapstructure:"api_key"`
+		Model           string `mapstructure:"model"`
+		FallbackBaseURL string `mapstructure:"fallback_base_url"`
+		FallbackAPIKey  string `mapstructure:"fallback_api_key"`
+		FallbackModel   string `mapstructure:"fallback_model"`
+		VisionModel     string `mapstructure:"vision_model"`
+		VisionBaseURL   string `mapstructure:"vision_base_url"` // 视觉质检独立渠道；留空则与 base_url 相同
+		VisionAPIKey    string `mapstructure:"vision_api_key"`  // 视觉质检独立 key；留空则与 api_key 相同
+		Timeout         int    `mapstructure:"timeout"`
 	} `mapstructure:"llm"`
 	Gemini struct {
 		Bases string `mapstructure:"bases"` // comma-separated proxy base URLs
@@ -122,11 +127,13 @@ func Load() (*Config, error) {
 	viper.SetDefault("kafka.consumer_topic", "asset.generate.request")
 	viper.SetDefault("kafka.producer_topic", "asset.generate.result")
 	viper.SetDefault("image.base_url", "http://localhost:8005")
-	viper.SetDefault("image.default_model", "doubao-seedream-4-0-250828")
+	viper.SetDefault("image.default_model", "gpt-image-2")
 	viper.SetDefault("llm.base_url", "https://api.easyart.cc/v1")
 	viper.SetDefault("llm.api_key", "")
-	viper.SetDefault("llm.model", "gpt-5.4-mini")
+	viper.SetDefault("llm.model", "gpt-5.4")
 	viper.SetDefault("llm.vision_model", "")
+	viper.SetDefault("llm.vision_base_url", "")
+	viper.SetDefault("llm.vision_api_key", "")
 	viper.SetDefault("llm.timeout", 120)
 	viper.SetDefault("project_service.base_url", "http://localhost:8002")
 	viper.SetDefault("auth_service.base_url", "http://localhost:8001")

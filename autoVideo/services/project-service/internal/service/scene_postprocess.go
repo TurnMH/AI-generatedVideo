@@ -10,6 +10,9 @@ import (
 )
 
 func (s *EpisodeService) postProcessScenes(scenes []llmScene, clipDuration int, speechPace string, profile productionmode.Profile) []llmScene {
+	if profile.SkipPostProcessing {
+		return scenes
+	}
 	if profile.ShouldPostProcessMergeScenes() {
 		return s.postProcessAdScenes(scenes, clipDuration, speechPace)
 	}
@@ -151,23 +154,117 @@ func (s *EpisodeService) postProcessAndAlignCommentaryScenes(
 	speechPace string,
 	profile productionmode.Profile,
 ) []llmScene {
+	if profile.SkipPostProcessing {
+		for i := range scenes {
+			scenes[i].Dialogue = strings.TrimSpace(scenes[i].Dialogue)
+			scenes[i].Description = sanitizeUserSceneDescription(scenes[i].Description)
+			if scenes[i].Duration <= 0 {
+				scenes[i].Duration = inferSceneDurationFromDialogue(scenes[i].Dialogue, clipDuration, speechPace)
+			}
+		}
+		return scenes
+	}
 	scenes = s.postProcessScenes(scenes, clipDuration, speechPace, profile)
 	if profile.IsCommentaryComic() {
 		scenes = alignCommentaryScenesWithSource(episodeContent, scenes)
-		scenes = ensureCommentaryNarrationCoverage(episodeContent, scenes, clipDuration, speechPace)
+		llmHints := append([]llmScene(nil), scenes...)
+		// 解说漫：旁白必须逐字来自原文。LLM 只提供画面描述提示，dialogue 始终按原文顺序切分，
+		// 不再依赖「80% 逐字匹配」判定——片段化/乱序的 LLM 输出也会误判为合格。
+		if units := speechtext.ExtractCommentarySpeechUnits(episodeContent); len(units) > 0 {
+			scenes = packCommentaryScenesFromSource(episodeContent, units, clipDuration, speechPace, llmHints)
+		} else if !commentaryDialogueIsVerbatimFromSource(episodeContent, scenes) {
+			scenes = ensureCommentaryNarrationCoverage(episodeContent, scenes, clipDuration, speechPace)
+		}
 		scenes = expandCommentaryScenesForClipLimit(scenes, clipDuration, speechPace)
-		scenes = consolidateShortCommentaryDialogue(scenes, clipDuration, speechPace)
 		maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
 		for i := range scenes {
 			if dlg := strings.TrimSpace(scenes[i].Dialogue); dlg != "" {
-				scenes[i].Dialogue = speechtext.FinalizeCommentaryDialogueWithLimit(dlg, maxRunes)
+				scenes[i].Dialogue = speechtext.CompactCommentaryDialogue(dlg, maxRunes)
 			}
 			syncSceneDurationFromDialogue(&scenes[i], clipDuration, speechPace)
 		}
-		scenes = consolidateOrphanCommentaryDialogue(scenes, clipDuration, speechPace)
 		scenes = dropEmptyCommentaryScenes(scenes)
 	}
 	return scenes
+}
+
+// commentaryVerbatimFidelityThreshold —— 分镜 dialogue 中"逐字来自原文"的最低占比。
+// 低于该值视为 LLM 进行了改写/优化，需要从原文重建以恢复逐字与完整性。
+const commentaryVerbatimFidelityThreshold = 0.80
+
+// commentaryDialogueIsVerbatimFromSource reports whether the scene dialogues are (mostly)
+// verbatim contiguous fragments of the episode source. Faithful splitting/merging keeps
+// dialogue as a substring of the punctuation-stripped source key; word-level rewriting does not.
+func commentaryDialogueIsVerbatimFromSource(source string, scenes []llmScene) bool {
+	units := speechtext.ExtractCommentarySpeechUnits(source)
+	if len(units) == 0 {
+		// 无法从原文抽取可念内容时，不强制重建，交由后续覆盖度逻辑处理。
+		return true
+	}
+	var sb strings.Builder
+	for _, unit := range units {
+		sb.WriteString(normalizeCommentaryDialogueKey(unit))
+	}
+	sourceKey := sb.String()
+	if sourceKey == "" {
+		return true
+	}
+
+	totalRunes := 0
+	matchedRunes := 0
+	for i := range scenes {
+		sceneKey := normalizeCommentaryDialogueKey(scenes[i].Dialogue)
+		keyRunes := utf8.RuneCountInString(sceneKey)
+		if keyRunes == 0 {
+			continue
+		}
+		totalRunes += keyRunes
+		if strings.Contains(sourceKey, sceneKey) {
+			matchedRunes += keyRunes
+			continue
+		}
+		matchedRunes += longestCommonSubstringRunes(sceneKey, sourceKey)
+	}
+	if totalRunes == 0 {
+		// 没有任何可念 dialogue —— 让覆盖度逻辑去补全，不在此处判定。
+		return true
+	}
+	return float64(matchedRunes) >= float64(totalRunes)*commentaryVerbatimFidelityThreshold
+}
+
+// longestCommonSubstringRunes returns the rune length of the longest common contiguous
+// substring of a and b. Used to give partial credit when a scene is only partially rewritten.
+func longestCommonSubstringRunes(a, b string) int {
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 || len(br) == 0 {
+		return 0
+	}
+	// 防御：超长原文截断到合理范围，避免 O(n*m) 过大。
+	const maxLen = 8000
+	if len(br) > maxLen {
+		br = br[:maxLen]
+	}
+	prev := make([]int, len(br)+1)
+	cur := make([]int, len(br)+1)
+	best := 0
+	for i := 1; i <= len(ar); i++ {
+		for j := 1; j <= len(br); j++ {
+			if ar[i-1] == br[j-1] {
+				cur[j] = prev[j-1] + 1
+				if cur[j] > best {
+					best = cur[j]
+				}
+			} else {
+				cur[j] = 0
+			}
+		}
+		prev, cur = cur, prev
+		for j := range cur {
+			cur[j] = 0
+		}
+	}
+	return best
 }
 
 func ensureCommentaryNarrationCoverage(source string, scenes []llmScene, clipDuration int, speechPace string) []llmScene {
@@ -183,7 +280,9 @@ func ensureCommentaryNarrationCoverage(source string, scenes []llmScene, clipDur
 		return scenes
 	}
 	sceneRunes := sumSceneDialogueRunes(scenes)
-	if sceneRunes >= sourceRunes*55/100 {
+	// 解说漫强调内容完整：分镜旁白总量低于原文可念内容 80% 时，
+	// 视为 LLM 拆分时漏抄/概括，触发从原文逐句补全以恢复完整性。
+	if sceneRunes >= sourceRunes*80/100 {
 		return scenes
 	}
 	return supplementCommentaryScenesFromSource(source, scenes, units, clipDuration, speechPace)
@@ -191,7 +290,7 @@ func ensureCommentaryNarrationCoverage(source string, scenes []llmScene, clipDur
 
 func packCommentaryScenesFromSource(source string, units []string, clipDuration int, speechPace string, hints []llmScene) []llmScene {
 	maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
-	dialogues := speechtext.PackSpeechUnitsToMaxRunes(units, maxRunes)
+	dialogues := packCommentaryDialoguesFromUnits(units, maxRunes)
 	if len(dialogues) == 0 {
 		return hints
 	}
@@ -203,6 +302,8 @@ func packCommentaryScenesFromSource(source string, units []string, clipDuration 
 		}
 		if hint := findCommentaryDescriptionHint(dlg, hints); hint != "" {
 			sc.Description = hint
+		} else if hint := excerptCommentaryVisualHint(source, dlg); hint != "" {
+			sc.Description = hint
 		} else {
 			sc.Description = defaultCommentarySceneDescription(dlg, i+1)
 		}
@@ -211,6 +312,40 @@ func packCommentaryScenesFromSource(source string, units []string, clipDuration 
 	}
 	_ = source
 	return scenes
+}
+
+func packCommentaryDialoguesFromUnits(units []string, maxRunes int) []string {
+	if len(units) == 0 {
+		return nil
+	}
+	var packed []string
+	var current strings.Builder
+	currentRunes := 0
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		packed = append(packed, strings.TrimSpace(current.String()))
+		current.Reset()
+		currentRunes = 0
+	}
+	for _, unit := range units {
+		unit = strings.TrimSpace(unit)
+		if unit == "" {
+			continue
+		}
+		unitRunes := utf8.RuneCountInString(unit)
+		if currentRunes > 0 && currentRunes+unitRunes > maxRunes {
+			flush()
+		}
+		current.WriteString(unit)
+		currentRunes += unitRunes
+		if currentRunes >= maxRunes {
+			flush()
+		}
+	}
+	flush()
+	return packed
 }
 
 func expandCommentaryScenesForClipLimit(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
@@ -222,7 +357,10 @@ func expandCommentaryScenesForClipLimit(scenes []llmScene, clipDuration int, spe
 			out = append(out, scene)
 			continue
 		}
-		cleaned := strings.TrimSpace(speechtext.ExtractNarrationForSpeech(raw))
+		cleaned := strings.TrimSpace(raw)
+		if speechtext.LooksLikeStoryboardVisualDescription(cleaned) {
+			cleaned = strings.TrimSpace(speechtext.ExtractNarrationForSpeechEx(raw, true))
+		}
 		if cleaned == "" {
 			cleaned = strings.TrimSpace(raw)
 		}

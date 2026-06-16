@@ -15,6 +15,7 @@ import { isCommentaryProject } from '@/lib/projects/commentary-project'
 import { getSplitModelRemark, buildSplitModelSearchText, getSplitModelAvailabilityRank } from '@/lib/projects/models'
 import type { StoryboardStatsData } from '@/lib/projects/workflow'
 import { getApiErrorMessage } from '@/lib/projects/get-api-error-message'
+import { parseAssetExtractionState, resolveExtractionModelName } from '@/lib/projects/asset-extraction'
 import { resolveDraftTargetEpisodes } from '@/lib/projects/resolve-draft-target-episodes'
 import { getProjectModelAvailability } from './model-availability'
 
@@ -92,14 +93,16 @@ export function useScriptTab({
       refreshInterval: (data) => {
         if (assetGenerating) return 3000
         const assets = (data as { data?: Asset[] })?.data ?? []
-        // Poll during extraction (sentinel) or image generation
-        return assets.some((a) => a.status === 'extracting' || a.status === 'generating') ? 3000 : 0
+        const state = parseAssetExtractionState(assets)
+        // Poll during extraction (sentinel), failure recovery, or image generation
+        return state.inProgress || state.failed || assets.some((a) => a.status === 'generating') ? 3000 : 0
       },
     }
   )
   const extractAssetsRaw = (extractAssetsData as { data?: Asset[] })?.data ?? []
   const extractAssets = extractAssetsRaw.filter((a) => a.name !== '__extracting__')
   const extractTotal = extractAssets.length
+  const extractionState = parseAssetExtractionState(extractAssetsRaw)
 
   // Phase 1: Extraction (LLM reads script → creates assets in "pending" status)
   const extractionInProgress = extractAssetsRaw.some((a) => a.status === 'extracting')
@@ -114,7 +117,9 @@ export function useScriptTab({
   const storyboardAssetsReady =
     extractTotal === 0 ||
     (!extractionInProgress && extractedPendingCount === 0 && extractedGeneratingCount === 0 && extractedPausedCount === 0)
-  const storyboardAssetBlockingReason = extractionInProgress
+  const storyboardAssetBlockingReason = extractionState.failed
+    ? extractionState.errorMessage
+    : extractionInProgress
     ? '资源仍在提取中，请先完成资源提取'
     : extractedPendingCount > 0 || extractedGeneratingCount > 0 || extractedPausedCount > 0
       ? `资源图尚未全部完成：待生成 ${extractedPendingCount}，生成中 ${extractedGeneratingCount}，已暂停 ${extractedPausedCount}，失败 ${extractedFailedCount}`
@@ -379,12 +384,21 @@ export function useScriptTab({
       const inGracePeriod = msSinceStart < 8000
       const assetsCleared = !inGracePeriod && extractTotal === 0 && !extractAssetsRaw.some((a) => a.status === 'extracting')
       const extractionComplete = extractTotal > 0 && !extractionInProgress
-      if (assetsCleared || extractionComplete) {
+      const extractionFailed = extractionState.failed && !extractionInProgress
+      if (extractionFailed) {
+        setAssetGenerating(false)
+        extractionStartedAtRef.current = null
+        toast({
+          title: '资源提取失败',
+          description: extractionState.errorMessage,
+          variant: 'destructive',
+        })
+      } else if (assetsCleared || extractionComplete) {
         setAssetGenerating(false)
         extractionStartedAtRef.current = null
       }
     }
-  }, [assetGenerating, extractTotal, extractionInProgress, extractAssetsRaw])
+  }, [assetGenerating, extractTotal, extractionInProgress, extractAssetsRaw, extractionState.failed, extractionState.errorMessage, toast])
 
   React.useEffect(() => {
     if (!usesAutoEpisodeSplit || project.target_episodes <= 0) return
@@ -575,6 +589,12 @@ export function useScriptTab({
     setShowRegenerateDialog(false)
     setEpisodeGenerating(true)
     setAssetGenerating(false) // Reset stale extraction state
+
+    // 重新分集：立即把集数列表乐观清空，让界面当场回退到"刚创建项目"的空状态。
+    // 后端在 Phase 0 也会同步删除旧分集，随后的轮询会拉到空列表并保持一致。
+    if (hasExistingEpisodes) {
+      void mutateEpisodes({ data: [] }, false)
+    }
 
     // Clean up existing assets (including any in-progress extractions)
     try {
@@ -934,10 +954,19 @@ export function useScriptTab({
     }
   }
 
-  const handleExtractEpisodeAssets = async (episodeId: number, episodeNum: number) => {
+  const handleExtractEpisodeAssets = async (episodeId: number, episodeNum: number, modelName?: string) => {
     setExtractingEpisodeAssets(episodeId)
     try {
-      await assetAPI.extractEpisode(projectId, episodeId)
+      const resolvedModel = modelName ?? resolveExtractionModelName(
+        effectiveSplitModel?.model_key,
+        project.text_model_id,
+        splitModels,
+      )
+      await assetAPI.extractEpisode(
+        projectId,
+        episodeId,
+        resolvedModel ? { modelName: resolvedModel } : undefined,
+      )
       mutateExtractAssets()
       toast({ title: `第 ${episodeNum} 集资源提取已启动`, variant: 'success' })
       // Poll a few extra times so the sentinel is caught even if the first refresh races ahead
@@ -953,7 +982,16 @@ export function useScriptTab({
   const handleAutoStartEpisodeAssets = async (episodeId: number, episodeNum: number) => {
     setExtractingEpisodeAssets(episodeId)
     try {
-      await assetAPI.extractEpisode(projectId, episodeId)
+      const resolvedModel = resolveExtractionModelName(
+        effectiveSplitModel?.model_key,
+        project.text_model_id,
+        splitModels,
+      )
+      await assetAPI.extractEpisode(
+        projectId,
+        episodeId,
+        resolvedModel ? { modelName: resolvedModel } : undefined,
+      )
       mutateExtractAssets()
       setTimeout(() => mutateExtractAssets(), 1000)
       setTimeout(() => mutateExtractAssets(), 2500)

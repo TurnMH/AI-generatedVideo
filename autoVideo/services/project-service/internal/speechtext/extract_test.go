@@ -37,3 +37,18 @@ func TestLooksLikeSceneDescription(t *testing.T) {
 		t.Fatal("narration sentence should not be classified as scene description")
 	}
 }
+
+func TestExtractNarrationForSpeech_VerbatimCommentary(t *testing.T) {
+	text := `他跪在我包子铺门口："刘师傅，求你救救我！"`
+	got := ExtractNarrationForSpeechEx(text, true)
+	want := `他跪在我包子铺门口："刘师傅，求你救救我！"`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+
+	action := "伸手拿起放在铺子门口的那只空塑料桶"
+	gotAction := ExtractNarrationForSpeechEx(action, true)
+	if gotAction != action {
+		t.Fatalf("commentary action should be kept verbatim, got %q", gotAction)
+	}
+}

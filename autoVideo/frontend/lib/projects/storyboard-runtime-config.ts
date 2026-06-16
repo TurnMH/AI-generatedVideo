@@ -30,7 +30,7 @@ export function resolveProjectSpeechPace(project?: Pick<Project, 'storyboard_con
 }
 
 export function buildProjectVideoRenderConfig(
-  project: Pick<Project, 'storyboard_config' | 'enable_dubbing'>,
+  project: Pick<Project, 'storyboard_config' | 'style_tags'>,
   extras?: Record<string, unknown>,
 ): Record<string, unknown> {
   const cfg = project.storyboard_config ?? {}

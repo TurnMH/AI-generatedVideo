@@ -77,6 +77,30 @@ func main() {
 			gens["gpt-image-1"] = generators.NewDalleGeneratorForModel(cfg.Models.OpenAIKeys, cfg.Models.OpenAIBase, "gpt-image-1", "gpt-image-1", logger)
 		}
 	}
+	// Register the dedicated gpt-image-2 channel(s), isolated from the shared OpenAI
+	// pool above. gpt-image-2 is the default image model, so it gets multi-channel
+	// failover: each (base,key) pair becomes its own dalle channel, and the failover
+	// wrapper falls through to the next channel when one is banned / rate-limited /
+	// out of credit. gpt_image2_bases[i] pairs with gpt_image2_keys[i]; if fewer
+	// bases than keys are configured the last base (or gpt_image2_base) is reused.
+	if len(cfg.Models.GPTImage2Keys) > 0 {
+		bases := cfg.Models.GPTImage2Bases
+		fallbackBase := cfg.Models.GPTImage2Base
+		for _, modelName := range []string{"gpt-image-2", "gpt-image-2-all", "gpt-image-2-u"} {
+			channels := make([]generators.ImageGenerator, 0, len(cfg.Models.GPTImage2Keys))
+			for i, key := range cfg.Models.GPTImage2Keys {
+				base := fallbackBase
+				if i < len(bases) {
+					base = bases[i]
+				} else if len(bases) > 0 {
+					base = bases[len(bases)-1]
+				}
+				chanKey := fmt.Sprintf("%s#%d", modelName, i)
+				channels = append(channels, generators.NewDalleGeneratorForModel([]string{key}, base, modelName, chanKey, logger))
+			}
+			gens[modelName] = generators.NewFailoverGenerator(modelName, channels, logger)
+		}
+	}
 	// Register additional DashScope/Tongyi image models from config (tongyi_models list)
 	for _, modelName := range cfg.Models.TongyiModels {
 		if modelName == "" || modelName == "wanx2.1-t2i-turbo" {
@@ -138,6 +162,26 @@ func main() {
 				gens[modelName] = generators.NewGeminiImageGenerator(
 					bases, cfg.Models.GeminiKeys,
 					modelName, modelName, true, logger, geminiPerChan)
+			}
+		}
+
+		// Secondary failover channel (天衍 etc.) for the two flagship gemini image
+		// models. This channel serves them via the DALL-E /images/generations path
+		// (verified working), so it is wired BEHIND the primary gemini-chat generator
+		// to preserve multi-ref fusion when the primary is healthy, and to transparently
+		// fall through to the working backup when the primary channel is banned/limited.
+		if fbKey := cfg.Models.GeminiImageFallbackKey; fbKey != "" {
+			fbBase := cfg.Models.GeminiImageFallbackBase
+			proFB := generators.NewDalleGeneratorForModel([]string{fbKey}, fbBase, "gemini-3-pro-image-preview", "gemini-3-pro-image-preview#fallback", logger)
+			proFO := generators.NewFailoverGenerator("gemini-3-pro-image-preview", []generators.ImageGenerator{gemini3Pro, proFB}, logger)
+			gens["gemini-3-pro-image-preview"] = proFO
+			gens["gemini-3-pro-image"] = proFO
+
+			flashFB := generators.NewDalleGeneratorForModel([]string{fbKey}, fbBase, "gemini-3.1-flash-image-preview", "gemini-3.1-flash-image-preview#fallback", logger)
+			flashFO := generators.NewFailoverGenerator("gemini-3.1-flash-image", []generators.ImageGenerator{gemini3Flash, flashFB}, logger)
+			gens["gemini-3.1-flash-image"] = flashFO
+			if flashModel != "" && flashModel != "gemini-3.1-flash-image" {
+				gens[flashModel] = flashFO
 			}
 		}
 	}

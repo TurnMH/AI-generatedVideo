@@ -18,9 +18,10 @@ export function pickPreferredModel(
   if (models.length === 0) return undefined
 
   return [...models].sort((left, right) => {
+    // 数据库 is_default 优先于健康度，确保创建项目默认选中 gpt-image-2 等官方默认项
+    if (left.is_default !== right.is_default) return left.is_default ? -1 : 1
     const healthDelta = getHealthRank(left, healthMap) - getHealthRank(right, healthMap)
     if (healthDelta !== 0) return healthDelta
-    if (left.is_default !== right.is_default) return left.is_default ? -1 : 1
     if (left.priority !== right.priority) return left.priority - right.priority
     return left.name.localeCompare(right.name, 'zh-CN')
   })[0]

@@ -40,7 +40,7 @@ import {
   Pencil,
   RotateCcw,
 } from 'lucide-react'
-import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask } from '@/lib/api'
+import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask, type VoiceCatalogItem } from '@/lib/api'
 import { ProductionSkillsPanel } from '@/components/skills/ProductionSkillsPanel'
 import type {
   Project,
@@ -194,7 +194,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
   const recommendedVoiceKeys = new Set(((voicesDataDub as { recommended?: Array<{ key?: string; value?: string }> } | null | undefined)?.recommended ?? []).map((v) => v.key ?? v.value ?? '').filter(Boolean))
   const VOICE_OPTIONS = [
     { value: 'auto', label: '自动按人物分配', category: 'auto', recommended: true },
-    ...(voicesDataDub ?? FALLBACK_VOICE_OPTIONS).map((v) => {
+    ...(voicesDataDub ?? FALLBACK_VOICE_OPTIONS).map((v: VoiceCatalogItem | { value: string; label: string; category?: string; recommended?: boolean }) => {
       const voice = v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string; provider?: string; auto_assignable?: boolean }
       const key = voice.key ?? voice.value ?? ''
       return {
@@ -488,6 +488,7 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
           dialogue?: string
           scene_description?: string
           characters?: string[]
+          duration?: number
         }>
       }
       const storyboards = (res?.data ?? []).sort((a, b) => a.sequence_number - b.sequence_number)
@@ -496,10 +497,13 @@ export function DubbingTab({ projectId, project, mutateProject, episodeId }: { p
         return
       }
       const aggregated = storyboards
-        .map((sb) => formatStoryboardDubbingText(
-          { dialogue: sb.dialogue || '', characters: sb.characters || [], scene_description: sb.scene_description || '', duration: sb.duration },
-          storyboardSpeechOptions(sb),
-        ))
+        .map((sb) => {
+          const duration = sb.duration ?? 4
+          return formatStoryboardDubbingText(
+            { dialogue: sb.dialogue || '', characters: sb.characters || [], scene_description: sb.scene_description || '', duration },
+            storyboardSpeechOptions({ duration }),
+          )
+        })
         .filter(Boolean)
         .join('\n')
       if (!aggregated) {

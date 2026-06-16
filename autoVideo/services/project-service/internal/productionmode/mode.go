@@ -19,7 +19,9 @@ const (
 
 // Profile describes pipeline behavior for a resolved mode.
 type Profile struct {
-	Mode Mode
+	Mode                   Mode
+	SkipScriptOptimization bool
+	SkipPostProcessing     bool
 }
 
 func (p Profile) IsAd() bool              { return p.Mode == ModeAd }
@@ -41,13 +43,13 @@ func (p Profile) ShouldPostProcessMergeScenes() bool {
 
 // ShouldSkipScriptPrep returns true when pre-split script LLM prep should be skipped.
 func (p Profile) ShouldSkipScriptPrep() bool {
-	return p.IsComics() || p.IsCommentaryComic()
+	return p.IsComics() || p.IsCommentaryComic() || p.SkipScriptOptimization
 }
 
 // ShouldSkipEpisodeScriptOptimization skips per-episode polish/optimize/review and uses
 // the uploaded script_excerpt directly for asset extraction and scene splitting.
 func (p Profile) ShouldSkipEpisodeScriptOptimization() bool {
-	return p.IsCommentaryComic()
+	return p.IsCommentaryComic() || p.SkipScriptOptimization
 }
 
 // UseAdEpisodeEstimate returns true when episode count estimation should apply
@@ -105,7 +107,47 @@ func configuredProductionMode(project *model.Project) Mode {
 
 // ResolveProfile returns the behavior profile for a project.
 func ResolveProfile(project *model.Project) Profile {
-	return Profile{Mode: Resolve(project)}
+	profile := Profile{Mode: Resolve(project)}
+	if project != nil {
+		// Check style tags first
+		if hasAnyStyleTag(project, "direct_split", "direct-split", "直接拆分", "no_optimize", "no-optimize", "不优化", "no_process", "no-process", "不处理") {
+			profile.SkipScriptOptimization = true
+			profile.SkipPostProcessing = true
+		}
+
+		// Check storyboard_config
+		if len(project.StoryboardConfig) > 0 {
+			var cfg struct {
+				SkipScriptOptimization bool `json:"skip_script_optimization"`
+				SkipPostProcessing     bool `json:"skip_post_processing"`
+				DirectSplit            bool `json:"direct_split"`
+			}
+			if err := json.Unmarshal(project.StoryboardConfig, &cfg); err == nil {
+				if cfg.SkipScriptOptimization || cfg.DirectSplit {
+					profile.SkipScriptOptimization = true
+				}
+				if cfg.SkipPostProcessing || cfg.DirectSplit {
+					profile.SkipPostProcessing = true
+				}
+			}
+		}
+	}
+	return profile
+}
+
+func hasAnyStyleTag(project *model.Project, tags ...string) bool {
+	if project == nil {
+		return false
+	}
+	for _, raw := range project.StyleTags {
+		lower := strings.ToLower(strings.TrimSpace(raw))
+		for _, tag := range tags {
+			if lower == strings.ToLower(strings.TrimSpace(tag)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IsAd is a convenience helper for callers that only need ad detection.

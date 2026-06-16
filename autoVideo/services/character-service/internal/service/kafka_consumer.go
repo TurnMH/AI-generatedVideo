@@ -24,7 +24,7 @@ import (
 // parallel.  5 concurrent submissions keeps image-service within standard
 // single-API-key rate limits.  Tune via concurrency.max_generations in config.
 const defaultMaxConcurrent = 5
-const defaultImageModel = "doubao-seedream-4-0-250828"
+const defaultImageModel = "gpt-image-2"
 
 type KafkaConsumer struct {
 	reader         *kafka.Reader
@@ -171,6 +171,8 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message, releaseSe
 	}
 
 	prompt := req.Prompt
+	// 高级模式：用户手工锁定的最终提示词，原样使用，跳过精炼/套版/视觉 hint/润色。
+	rawMode := req.RawPrompt && strings.TrimSpace(prompt) != ""
 	if prompt == "" {
 		// LLM-refine the description before prompt composition (translates Chinese, injects skill hints).
 		refinedDesc := c.assetSvc.refineAssetDescriptionForGeneration(
@@ -180,17 +182,26 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message, releaseSe
 		prompt = composeAssetImagePrompt(req.Type, req.Name, refinedDesc, req.PromptSuffix, stylePreset)
 	}
 
-	if profile != nil {
-		prompt = appendProjectVisualHintInline(prompt, buildProjectVisualHintForAsset(profile, req.Type))
-	}
+	if !rawMode {
+		if profile != nil {
+			prompt = appendProjectVisualHintInline(prompt, buildProjectVisualHintForAsset(profile, req.Type))
+		}
 
-	// Final LLM polish: merge the mechanically assembled prompt (mixed Chinese/English
-	// templates + appended visual hints) into a single coherent, semantic prompt.
-	prompt = c.assetSvc.polishAssetImagePrompt(ctx, prompt, req.Type, stylePreset)
+		// Final LLM polish: merge the mechanically assembled prompt (mixed Chinese/English
+		// templates + appended visual hints) into a single coherent, semantic prompt.
+		prompt = c.assetSvc.polishAssetImagePrompt(ctx, prompt, req.Type, stylePreset)
+	}
 
 	// 传递明确的 task_type 避免 image-service 依靠提示词推断出错误尺寸。
 	singleImageTaskType := assetTypeToTaskType(req.Type)
-	taskID, err := c.submitImageTask(ctx, req.AssetID, req.ProjectID, prompt, req.ModelName, stylePreset, negativePrompt, req.Type, singleImageTaskType, 0, 0, 0, "")
+	singleW, singleH := 0, 0
+	// 角色（真人与动漫统一）为单图四视图（最左大头照特写 + 正面/侧面/背面全身并排），
+	// 四栏横向排列需要更宽的画幅 + character-sheet 语义。
+	if isCharacterAssetType(req.Type) {
+		singleImageTaskType = "character-sheet"
+		singleW, singleH = 1536, 864
+	}
+	taskID, err := c.submitImageTask(ctx, req.AssetID, req.ProjectID, prompt, req.ModelName, stylePreset, negativePrompt, req.Type, singleImageTaskType, singleW, singleH, 0, "")
 
 	result := AssetGenerateResult{AssetID: req.AssetID}
 	if err != nil {
@@ -372,20 +383,6 @@ func (c *KafkaConsumer) recoverPendingAsset(ctx context.Context, asset *model.As
 	var once sync.Once
 	release := func() { once.Do(releaseSem) }
 	defer release() // safety net for early returns
-
-	// 角色资产使用四视图流程（四个独立任务）。服务重启后只能从 generation_progress 中恢复
-	// closeup 的单个 task_id，无法重建完整四栏 + 合成图。直接标为 failed，用户可在 UI 重试。
-	if isCharacterAssetType(asset.Type) {
-		c.logger.Warn("character panel asset cannot be auto-recovered after restart; marking failed for manual retry",
-			zap.Uint64("asset_id", asset.ID))
-		_ = c.assetSvc.UpdateStatus(asset.ID, "failed", "服务重启中断四视图生成，请重新触发生成")
-		c.publishResult(ctx, AssetGenerateResult{
-			AssetID:  asset.ID,
-			Status:   "failed",
-			ErrorMsg: "服务重启中断四视图生成，请重新触发生成",
-		})
-		return
-	}
 
 	metadata, err := parseAssetMetadata(asset.Metadata)
 	if err != nil {
@@ -640,8 +637,8 @@ func (c *KafkaConsumer) generateCharacterPanels(
 		if visualHint != "" {
 			p = appendProjectVisualHintInline(p, visualHint)
 		}
-		// Per-panel polish —— 保持 LLM 不破坏"single subject"约束：polishAssetImagePrompt 已内置 character guardrails。
-		p = c.assetSvc.polishAssetImagePrompt(ctx, p, req.Type, stylePreset)
+		// Per-panel polish —— panel-aware polish 禁止 LLM 重新引入多视图/多人物 layout。
+		p = c.assetSvc.polishAssetImagePromptForPanel(ctx, p, req.Type, stylePreset, panel)
 		return p
 	}
 
@@ -980,9 +977,9 @@ func (c *KafkaConsumer) RegenPanel(ctx context.Context, assetID uint64, panelStr
 	if strings.TrimSpace(promptOverride) != "" {
 		prompt = strings.TrimSpace(promptOverride)
 	} else {
-		refined := strings.TrimSpace(asset.Description)
+		refined := sanitizeCharacterDescriptionForPanel(strings.TrimSpace(asset.Description))
 		if refined == "" && strings.TrimSpace(asset.PromptUsed) != "" {
-			refined = strings.TrimSpace(asset.PromptUsed)
+			refined = sanitizeCharacterDescriptionForPanel(strings.TrimSpace(asset.PromptUsed))
 		}
 		prompt = composeCharacterPanelPromptWithStyle(asset.Name, refined, asset.PromptUsed, stylePreset, panel)
 		if prefix := buildCharacterStylePrefix(stylePreset); prefix != "" {
@@ -991,7 +988,7 @@ func (c *KafkaConsumer) RegenPanel(ctx context.Context, assetID uint64, panelStr
 		if hint := buildProjectVisualHintForAsset(profile, asset.Type); hint != "" {
 			prompt = appendProjectVisualHintInline(prompt, hint)
 		}
-		prompt = c.assetSvc.polishAssetImagePrompt(ctx, prompt, asset.Type, stylePreset)
+		prompt = c.assetSvc.polishAssetImagePromptForPanel(ctx, prompt, asset.Type, stylePreset, panel)
 	}
 
 	// seed：沿用资产现有 seed；若为 0 则生成新 seed（老数据兼容）

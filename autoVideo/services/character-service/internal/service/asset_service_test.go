@@ -58,27 +58,29 @@ func TestComposeAssetImagePromptIncludesTypeSpecificGuidance(t *testing.T) {
 		prompt := composeAssetImagePrompt("character", "晨袍女人", "清晨刚醒，披着晨袍，神情放松。", "保留生活化气质", "")
 		for _, want := range []string{
 			"晨袍女人",
-			"character reference sheet",
-			"head and shoulder portrait on the left third of the image",
-			"head and neck fully visible in portrait section",
-			"full body front view, full body side view, full body back view arranged side by side",
+			// 单图四视图：必须明确说明版面构成（同一个人、最左大头照 + 正面/侧面/背面并排）。
+			"character turnaround sheet with leftmost closeup headshot",
+			"closeup face headshot on the far left, then front / side / back full-body views arranged left to right",
+			"same single person repeated as headshot plus three full-body views",
+			"大头照在最左侧",
+			"同一个角色的设定参考图",
+			"九头身比例",
+			"9-head body proportion",
 			"清晨刚醒，披着晨袍，神情放松。",
 			"保留生活化气质",
 			"pure white background",
 			"(no text:2.0)",
 			"(masterpiece:1.5)",
-			"strict model-sheet consistency",
-			"costume layers, accessories, hairstyle silhouette, and footwear clearly readable",
-			"neutral presentation pose, orthographic design-sheet readability",
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("prompt %q does not contain %q", prompt, want)
 			}
 		}
-		// Must NOT be an instruction-style prompt for characters.
-		for _, bad := range []string{"影视前期设定", "突出角色身份"} {
+		for _, bad := range []string{
+			"影视前期设定", "突出角色身份",
+		} {
 			if strings.Contains(prompt, bad) {
-				t.Fatalf("character prompt should not contain instruction text %q", bad)
+				t.Fatalf("character prompt should not contain %q", bad)
 			}
 		}
 	})

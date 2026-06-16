@@ -46,14 +46,32 @@ type optimizeVideoPromptRequest struct {
 	GenerateAudio bool   `json:"generate_audio"`
 }
 
-// TranslatePrompt translates Chinese text to English for image-generation prompts.
-// POST /api/v1/utils/translate  { "text": "..." }
+// TranslatePrompt translates prompt text for UI or generation use.
+// POST /api/v1/utils/translate  { "text": "...", "to": "en" | "zh" }
+// - to=en (default): Chinese → English for image-generation prompts
+// - to=zh: English/long prompt → readable Chinese for UI display
 func (h *UtilsHandler) TranslatePrompt(c *gin.Context) {
 	var req struct {
 		Text string `json:"text"`
+		To   string `json:"to"`
 	}
 	if err := c.BindJSON(&req); err != nil || strings.TrimSpace(req.Text) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing text"})
+		return
+	}
+
+	target := strings.ToLower(strings.TrimSpace(req.To))
+	if target == "zh" {
+		if isPrimarilyChinese(req.Text) {
+			c.JSON(http.StatusOK, gin.H{"translated": strings.TrimSpace(req.Text)})
+			return
+		}
+		translated, err := h.callLLMTranslateToChinese(c.Request.Context(), req.Text)
+		if err != nil || translated == "" {
+			c.JSON(http.StatusOK, gin.H{"translated": req.Text, "warning": "translation failed, original returned"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"translated": translated})
 		return
 	}
 
@@ -79,6 +97,37 @@ func containsChineseChars(s string) bool {
 	}
 	return false
 }
+
+// isPrimarilyChinese returns true when text is mostly Chinese (not EN prompt + a few CN names).
+func isPrimarilyChinese(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	han, latin, compact := 0, 0, 0
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			han++
+			compact++
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			latin++
+			compact++
+		case r != ' ' && r != '\n' && r != '\t' && r != '\r':
+			compact++
+		}
+	}
+	if han == 0 || latin > han || compact == 0 {
+		return false
+	}
+	return float64(han)/float64(compact) >= 0.18
+}
+
+const (
+	translateChineseChunkMax = 3200
+	translateChineseTimeout  = 90 * time.Second
+	translateChineseMaxTok   = 4096
+)
 
 // OptimizeVideoPrompt rewrites a manual video prompt for the selected video model and mode.
 // POST /api/v1/utils/optimize-video-prompt
@@ -129,6 +178,127 @@ func (h *UtilsHandler) callLLMTranslate(ctx context.Context, text string) (strin
 	req.Header.Set("Authorization", "Bearer "+h.llmAPIKey)
 
 	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var llmResp struct {
+		Choices []struct {
+			Message struct{ Content string `json:"content"` } `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &llmResp); err != nil || len(llmResp.Choices) == 0 {
+		return "", err
+	}
+	return strings.TrimSpace(llmResp.Choices[0].Message.Content), nil
+}
+
+func (h *UtilsHandler) callLLMTranslateToChinese(ctx context.Context, text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("empty text")
+	}
+	if len(text) <= translateChineseChunkMax {
+		return h.callLLMTranslateToChineseChunk(ctx, text)
+	}
+	chunks := splitTextForTranslation(text, translateChineseChunkMax)
+	out := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		translated, err := h.callLLMTranslateToChineseChunk(ctx, chunk)
+		if err != nil {
+			return "", err
+		}
+		out = append(out, translated)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n\n")), nil
+}
+
+func splitTextForTranslation(text string, maxLen int) []string {
+	text = strings.TrimSpace(text)
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+	parts := strings.Split(text, "\n\n")
+	var chunks []string
+	var current strings.Builder
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		chunks = append(chunks, current.String())
+		current.Reset()
+	}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if len(part) > maxLen {
+			flush()
+			for start := 0; start < len(part); {
+				end := start + maxLen
+				if end > len(part) {
+					end = len(part)
+				} else if idx := strings.LastIndex(part[start:end], ". "); idx > maxLen/3 {
+					end = start + idx + 1
+				}
+				chunks = append(chunks, strings.TrimSpace(part[start:end]))
+				start = end
+			}
+			continue
+		}
+		extra := len(part)
+		if current.Len() > 0 {
+			extra += 2
+		}
+		if current.Len()+extra > maxLen {
+			flush()
+		}
+		if current.Len() > 0 {
+			current.WriteString("\n\n")
+		}
+		current.WriteString(part)
+	}
+	flush()
+	if len(chunks) == 0 {
+		return []string{text}
+	}
+	return chunks
+}
+
+func (h *UtilsHandler) callLLMTranslateToChineseChunk(ctx context.Context, text string) (string, error) {
+	tCtx, cancel := context.WithTimeout(ctx, translateChineseTimeout)
+	defer cancel()
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": h.llmModel,
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": "You are a professional translator for AI image-generation prompts. " +
+					"Translate the user's English prompt into clear, readable Chinese for creators reviewing what the model received. " +
+					"Preserve ALL constraints: style, character lock, camera, mood, continuity, negative instructions, and technical tokens. " +
+					"Do NOT summarize or shorten — keep equivalent detail and length. " +
+					"Use natural Chinese prose; you may use line breaks between sections. " +
+					"Output only the Chinese translation, no explanation, no quotes, no preamble.",
+			},
+			{"role": "user", "content": text},
+		},
+		"temperature": 0.3,
+		"max_tokens":  translateChineseMaxTok,
+	})
+
+	req, err := http.NewRequestWithContext(tCtx, http.MethodPost, h.llmBaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.llmAPIKey)
+
+	client := &http.Client{Timeout: translateChineseTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

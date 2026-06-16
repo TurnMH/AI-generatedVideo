@@ -78,6 +78,20 @@ func buildStoryboardNegativePrompt(project *model.Project) string {
 		"extra fingers",
 		"extra limbs",
 		"cropped face",
+		// 服装/造型稳定性：避免人物服装与发型在部分分镜里被"吹起/飘逸/飞扬"，
+		// 导致与角色参考图（设定图）不一致。强制静态、贴合参考的衣着与发型。
+		"flowing clothes",
+		"billowing fabric",
+		"clothes blowing in the wind",
+		"fluttering clothing",
+		"windblown clothing",
+		"windswept hair",
+		"floating hair",
+		"wind effect",
+		"strong wind",
+		"dramatic wind",
+		"cape flying",
+		"swirling fabric",
 	}
 
 	switch storyboardStylePreset(project) {

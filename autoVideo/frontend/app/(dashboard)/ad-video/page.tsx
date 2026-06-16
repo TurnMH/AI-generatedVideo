@@ -138,7 +138,12 @@ export default function AdVideoWorkbenchPage() {
       if (Array.isArray(root.items)) return root.items || []
       return []
     }
-    const statusPayload = (videoStatusRes as { data?: { models?: VideoModelStatus[] } })?.data
+    const statusPayload = videoStatusRes && typeof videoStatusRes === 'object'
+      ? (videoStatusRes as { data?: { models?: VideoModelStatus[] }; models?: VideoModelStatus[] }).data
+        ?? (Array.isArray((videoStatusRes as { models?: VideoModelStatus[] }).models)
+          ? { models: (videoStatusRes as { models?: VideoModelStatus[] }).models }
+          : undefined)
+      : undefined
     return {
       text: normalize(textRes),
       image: normalize(imageRes),

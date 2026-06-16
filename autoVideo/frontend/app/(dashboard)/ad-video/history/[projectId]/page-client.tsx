@@ -1,0 +1,3121 @@
+'use client'
+
+import Link from 'next/link'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams } from 'next/navigation'
+import useSWR from 'swr'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import { useToast } from '@/components/ui/toast'
+import { assetAPI, modelAPI, projectAPI, storyboardAPI, storageAPI, videoAPI } from '@/lib/api'
+import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
+import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
+import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
+import type { AdCopyOptimizationState, Asset, Episode, Project, Storyboard } from '@/types'
+
+type VideoTaskClip = {
+  id: number
+  video_task_id?: number
+  clip_order: number
+  source_image_url?: string
+  clip_url?: string
+  duration_sec?: number
+  model_used?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  status?: string
+  error_msg?: string
+  scene_group_key?: string
+  scene_seq?: number
+  end_frame_image_url?: string
+  created_at?: string
+  updated_at?: string
+}
+
+type VideoTask = {
+  id: number
+  project_id: number
+  episode_id?: number | null
+  status?: string
+  model_name?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  result_url?: string
+  error_msg?: string
+  created_at?: string
+  updated_at?: string
+  render_config?: Record<string, unknown>
+  clips?: VideoTaskClip[]
+}
+
+type VideoTaskClipDebug = {
+  id: number
+  clip_order: number
+  scene_seq?: number
+  status?: string
+  error_msg?: string
+  source_image_url?: string
+  end_frame_image_url?: string
+  clip_url?: string
+  scene_group_key?: string
+  requested_model?: string
+  routed_generator?: string
+  runtime_provider?: string
+  effective_model?: string
+  requested_generate_mode?: string
+  final_generate_mode?: string
+  model_family?: string
+  reference_bindings?: string[]
+  project_identity_refs?: string[]
+  character_refs?: string[]
+  asset_refs?: string[]
+}
+
+type VideoTaskDetailData = {
+  task: VideoTask
+  clips_debug?: VideoTaskClipDebug[]
+  task_debug_summary?: {
+    requested_model?: string
+    routed_generator?: string
+    runtime_provider?: string
+    effective_model?: string
+    route_reason?: string
+    clip_count?: number
+  }
+}
+
+type VideoModelParamOption = {
+  value: string
+  label: string
+}
+
+type VideoModelParam = {
+  key: string
+  label: string
+  default?: string
+  values: VideoModelParamOption[]
+}
+
+type VideoModelMeta = {
+  key: string
+  label?: string
+  provider?: string
+  provider_model?: string
+  available: boolean
+  native_audio?: boolean
+  params?: VideoModelParam[]
+}
+
+function getFallbackVideoModelLabel(key: string) {
+  const map: Record<string, string> = {
+    wan: '通义-Wan-图生视频',
+    'wan-t2v': '通义-Wan-文生视频',
+    vidu: '生数-Vidu-标准版',
+    'vidu-mix': '生数-Vidu-Mix',
+    'vidu-offpeak': '生数-Vidu-离峰版',
+    'vidu-mix-offpeak': '生数-Vidu-Mix离峰版',
+    kling: '可灵-Kling-标准版',
+    aiping: '爱评-Kling-K3',
+    'tencent-vclm': '腾讯-VCLM-Kling',
+    doubao: '豆包-视频生成-标准版',
+    'doubao-seedance': '豆包-Seedance-2.0',
+    suanneng: '算能-视频生成-标准版',
+    'hubagi-voe3.1': 'Google-Veo-3.1',
+    'hubagi-TC-GV': 'Google-TC-GV-标准版',
+    sora2: 'OpenAI-Sora-2',
+    'comfyui-video': 'ComfyUI-Video-本地版',
+    runninghub: 'RunningHub-Video-标准版',
+    cogvideo: 'CogVideo-Video-标准版',
+    'baidu-bce': '百度-BCE-视频生成',
+    gaga: 'Gaga-Video-标准版',
+    minmax: 'MiniMax-Hailuo-标准版',
+  }
+  return map[key] || key
+}
+
+function formatVideoModelLabel(status?: Pick<VideoModelMeta, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const key = status?.key || keyFallback || ''
+  return status?.label?.trim() || getFallbackVideoModelLabel(key)
+}
+
+function formatVideoModelActualLabel(status?: Pick<VideoModelMeta, 'key' | 'label' | 'provider' | 'provider_model'> | null, keyFallback?: string) {
+  const base = formatVideoModelLabel(status, keyFallback)
+  const providerModel = String(status?.provider_model || '').trim()
+  if (!providerModel) return base
+  return `${base}（实际: ${providerModel}）`
+}
+
+function formatModelParamValues(param?: VideoModelParam) {
+  if (!param?.values?.length) return '未声明可选值'
+  return param.values.map((item) => item.label || item.value).join(' / ')
+}
+
+function modelHasParam(model: VideoModelMeta | null, key: string) {
+  return Boolean(model?.params?.some((item) => item.key === key))
+}
+
+function uniqueNonEmptyUrls(values: Array<string | undefined | null>, limit?: number) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of values) {
+    const trimmed = String(raw || '').trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+    if (limit && result.length >= limit) break
+  }
+  return result
+}
+
+function buildCharacterAssetSearchText(asset: Asset) {
+  return [asset.id, asset.name, asset.description, asset.type, asset.status, asset.image_url]
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ')
+}
+
+const DEFAULT_AD_COPY_OPTIMIZATION_PROMPT = `你是广告短视频编剧、导演统筹和连续性审校。你的任务不是直接分集，也不是直接写成逐镜头分镜稿，而是先把整篇广告文案优化成更适合后续“按台词 / 口播为主自动切分成多个视频片段”的中间稿，并补出后续生成时必须遵守的一致性前提。
+
+必须遵守：
+- 保留原始产品卖点、人物设定、核心承诺与事实信息，不得胡编功效。
+- 按当前目标风格重写语言与镜头感，使文案更适合后续广告视频生成，但绝不能提前把它写成 storyboard / shotlist / 分镜脚本。
+- 必须主动补全并澄清以下 14 个维度：1）世界观/故事发生的视觉宇宙；2）空间（在哪里）；3）时间（几点/昼夜/时序）；4）人物（谁）；5）服装（穿什么）；6）动作（做什么）；7）核心物件/镜头重点；8）光线（怎么打光）；9）色彩（什么色调）；10）材质（表面质感）；11）镜头运动（怎么拍）；12）情绪（传达什么感觉）；13）转场（怎么切）；14）字幕/屏幕文字、配音/口播内容、以及最终给 AI 的生成 Prompt 描述。
+- optimized_script 必须是“可继续拆分的广告中间稿”，核心是口播 / 台词 / 信息块顺序清楚，而不是已经拆好的镜头列表。
+- consistency_premise 必须单独总结以上 14 个维度里“后续不得漂移”的硬约束，写成清晰条目。
+- 把长段落整理成更自然的台词 / 口播句群，让后续系统更容易按单分镜时长进行台词拆分；优先保证一句口播能在一个完整镜头里说完。
+- 每个段落优先围绕“一个卖点 / 一个信息推进 / 一个情绪动作”来写，不要为了增加画面感把一句话拆成多个视觉段。
+- 可以补充必要的视觉约束，但只能轻量嵌入同一段中；不要给每段都单独展开“画面 / 字幕 / 配音 / Prompt”四件套。
+- 严禁使用类似“【画面1】/【镜头1】/【字幕】/【口播】/【Prompt】”的逐段标签式输出；不要显式编号，不要写成 shot-by-shot 结构。
+- 除收尾 CTA 外，不要主动新增无台词视觉段；不要为了渲染镜头感平白增加多个空镜、转场镜头、补充动作镜头。
+- 优化后的正文总长度应尽量克制，通常控制在原文的 1.2x~1.6x 内；若明显超过，优先压缩视觉描述，而不是继续扩写。
+- 如果是写实风格，优先真实场景、生活化表达、自然口语；如果是动漫风格，允许更鲜明的视觉感，但不要失去广告转化目标。
+- 如果后续需要人物出镜，默认写成“泛化角色 / 主讲人 / 讲解者 / 商务人物”，不要主动固化成可识别的真实身份，不要强化姓名、人脸细节、五官特征、皮肤纹理、近景肖像特写、证件照式描述。
+- 除非用户明确要求并能承担审核风险，否则不要主动加入 portrait、photorealistic、RAW photo、8K UHD、full-body live-action character portrait、真实人物、真人肖像、面部特写等容易提高审核敏感度的措辞。
+- 若原文包含具体中文名、英文名、称呼或“我是某某”，在不影响广告表达的前提下，优先改写成“我 / 主讲人 / 讲解者 / 品牌顾问 / 商务人物”等泛化表述，降低后续图生视频的真人身份绑定风险。
+- 不要输出分集编号，不要显式写“第一段/第二段”，只输出优化后的完整文案和 consistency_premise。`
+
+const DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT = `你是一位专业的广告分镜师和摄影指导。当前步骤 1 的分镜拆分必须遵守以下内置规则：
+
+1. 最高优先级：当规则发生冲突时，一律以“时长优先、台词 / 口播承载量优先”为最高准则。
+2. 本项目目标单分镜时长以当前用户所选值为准；如当前未显式指定，则按模型默认允许时长执行。
+3. 核心原则：优先判断一段台词 / 口播是否能在当前目标单分镜时长内完整表达，并同时追求视觉单位连贯性、空间方位一致性与整体表达稳定性，而不是追求最小视觉单位。
+4. 如果同一段卖点说明、同一段口播、同一段连续动作在当前目标时长内可以完整表达，应优先合并为一个主分镜或少量连续分镜；即使进入新卖点，也只有在当前时长已经承载不下时才拆镜。
+5. 判断是否拆镜的唯一依据是：观众是否会在该镜头内获得新的信息或新的情绪锚点；若没有，则不拆。
+6. 口播内容必须在一个完整分镜内说完，不得为动作细节拆散口播。无 dialogue 分镜只能作为极短辅助镜头（建议不超过总分镜数的 20%），不可连续出现，不可单独承担卖点传达；除最后一个分镜外，若当前分镜没有台词，或台词长度明显不足以支撑当前目标时长，就必须继续合并、重写或调整拆分。
+7. 只有最后一个分镜允许在确有必要时作为收束镜头例外，但即便如此也应尽量带有一句完整收尾口播、CTA 或字幕，不要轻易留空。
+8. dialogue 只能放真的会被念出来或打上字幕的文字；如果某段只有动作或镜头说明、没有可念文本，优先继续调整拆分，让它并回前后有台词的分镜，而不是直接保留。
+9. description 必须使用结构化格式：[景别] + [人物/主体位置与动作] + [环境与光线] + [关键道具或视觉锚点]；每条尽量不超过 60 字。
+10. 为了降低后续图生视频审核风险，description 默认优先写“主讲人 / 讲解者 / 商务人物 / 角色 A / 泛化角色”等中性称呼，不要主动重复真实姓名、英文名或可识别身份标签。
+11. 除非用户明确要求，否则不要在 description 里主动加入 portrait、photorealistic、RAW photo、8K UHD、full-body live-action character portrait、真实人物、真人肖像、面部特写、皮肤纹理、五官细节等高敏感词；优先改写成“电影感写实 / 干净商务画面 / 中景构图 / 自然光办公场景”之类更安全的表达。
+12. 如果文案里有人物出镜，分镜应尽量使用中景、半身、侧身、背身、边走边讲、看屏幕/看产品/看窗外等构图，减少“正脸近景 + 强身份锁定 + 五官细节描写”的组合，避免把后续视频生成推向真人肖像审核高风险区。`
+
+function unwrap<T>(payload: unknown): T | null {
+  if (!payload || typeof payload !== 'object') return null
+  const maybe = payload as { data?: T }
+  return maybe.data ?? (payload as T)
+}
+
+function unwrapArray<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload
+  if (payload && typeof payload === 'object') {
+    const maybe = payload as { items?: T[]; data?: T[] }
+    if (Array.isArray(maybe.items)) return maybe.items
+    if (Array.isArray(maybe.data)) return maybe.data
+  }
+  return []
+}
+
+function taskResultUrl(task?: VideoTask | null) {
+  if (!task) return ''
+  const rc = task.render_config || {}
+  return String(task.result_url || rc.subtitled_result_url || rc.original_result_url || '').trim()
+}
+
+function softenVideoPromptText(input: string) {
+  const text = String(input || '')
+  if (!text.trim()) return ''
+
+  return text
+    .replace(/Li Enze|李恩泽/gi, 'speaker')
+    .replace(/portrait/gi, 'character shot')
+    .replace(/photorealistic/gi, 'cinematic')
+    .replace(/RAW photo/gi, 'clean cinematic frame')
+    .replace(/full-body live-action character portrait/gi, 'full-body character reference')
+    .replace(/live-action/gi, 'cinematic')
+    .replace(/8K UHD/gi, 'high detail')
+    .replace(/professional studio lighting/gi, 'clean commercial lighting')
+    .replace(/realistic skin texture/gi, 'natural lighting texture')
+    .replace(/realistic skin tone with natural imperfections/gi, 'natural lighting and stable styling')
+    .replace(/natural skin tone/gi, 'natural overall look')
+    .replace(/skin tone/gi, 'overall look')
+    .replace(/face structure|facial structure|face shape/gi, 'overall appearance')
+    .replace(/eye shape|nose shape|mouth shape|jawline/gi, 'facial consistency')
+    .replace(/same face|同一张脸/g, 'same character identity')
+    .replace(/youthful charm/gi, 'professional presence')
+    .replace(/expressive eyes/gi, 'focused expression')
+    .replace(/warm smile/gi, 'calm expression')
+    .replace(/hairstyle/gi, 'styling')
+    .replace(/hair color/gi, 'grooming')
+    .replace(/真实人物|真人肖像|人脸特写|面部特征|脸部细节|真实肤色|真人短剧写实风格/g, '泛化商务人物')
+    .replace(/\bcelebrity\b/gi, 'specific identity')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function softenDialogueText(input: string) {
+  const text = String(input || '')
+  if (!text.trim()) return ''
+  return text
+    .replace(/Li Enze|李恩泽/gi, 'speaker')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function softenSceneCharacters(characters: string[]) {
+  const cleaned = Array.from(new Set((characters || []).map((item) => String(item || '').trim()).filter(Boolean).map((item, index) => {
+    if (/^李恩泽$/i.test(item) || /^Li Enze$/i.test(item)) return 'speaker'
+    return `role${index + 1}`
+  })))
+  return cleaned
+}
+
+function applyStep3SafetySoftening(renderConfig: Record<string, unknown>, payload: ReturnType<typeof buildEpisodeVideoPayload>): Record<string, unknown> {
+  return {
+    ...renderConfig,
+    safety_softening: 'moderation-lite',
+    scene_descriptions: payload.scene_descriptions,
+    dialogues: payload.dialogues,
+    scene_characters: payload.scene_characters,
+    source_prompt_softened: true,
+  }
+}
+
+const CHARACTER_IDENTITY_CONSTRAINTS = [
+  'All shots must depict the same character identity as the uploaded reference.',
+  'Keep the same overall appearance, styling, outfit silhouette, accessories, and age impression across every clip.',
+  'Do not switch identity, do not create a lookalike stranger, and do not let continuity cues override the uploaded identity anchor.',
+]
+
+function humanizeVideoErrorMessage(message?: string) {
+  const msg = String(message || '')
+  if (!msg) return ''
+  if (/same-character preflight failed|no usable identity anchor|missing identity anchor/i.test(msg)) {
+    return '这次不是上游模型拒绝，而是本地在提交前发现 same-character 缺少可用人物锚点或引用图绑定。'
+  }
+  if (/InputImageSensitiveContentDetected|real-person\/sensitive image|HTTP 451|内容审核拒绝|隐私信息风控/i.test(msg)) {
+    return '这次更像是首图触发了上游内容审核，不一定是步骤 3 参数或串行链本身的问题。'
+  }
+  if (/serial chain broken/i.test(msg)) {
+    return '后续 clip 的串行报错通常是首段没过审带出来的连锁结果。'
+  }
+  return ''
+}
+
+function humanizeVideoTaskError(task?: VideoTask | null) {
+  return humanizeVideoErrorMessage(task?.error_msg)
+}
+
+function getParamOptions(model: VideoModelMeta | null, key: string): VideoModelParamOption[] {
+  if (!model?.params?.length) return []
+  const param = model.params.find((item) => item.key === key)
+  return Array.isArray(param?.values) ? param!.values : []
+}
+
+const SPEECH_PACE_OPTIONS = [
+  { value: 'normal', label: '正常', hint: '10 秒内按常规商业口播节奏拆分。' },
+  { value: 'slightly_fast', label: '稍快', hint: '10 秒内可承载更多字数，适合信息密度略高的广告。' },
+  { value: 'with_pauses', label: '有停顿', hint: '要给停顿和强调留空间，会更积极拆镜。' },
+  { value: 'very_fast', label: '很快', hint: '10 秒内承载量最高，但仍以完整句群为主。' },
+  { value: 'medium_fast', label: '中速偏快', hint: '介于正常和稍快之间，适合信息流广告。' },
+  { value: 'medium_steady', label: '中速稳重', hint: '节奏稳，句间更讲究停连，避免单镜过满。' },
+] as const
+
+type SpeechPaceOption = typeof SPEECH_PACE_OPTIONS[number]['value']
+
+function pickAllowedValue(options: VideoModelParamOption[], preferred?: string | number | null, fallbackToFirst = true) {
+  if (!options.length) return ''
+  const normalizedPreferred = String(preferred ?? '').trim()
+  if (normalizedPreferred && options.some((item) => item.value === normalizedPreferred)) {
+    return normalizedPreferred
+  }
+  return fallbackToFirst ? (options[0]?.value || '') : normalizedPreferred
+}
+
+function humanStage(project: Project | null) {
+  if (!project) return '暂无'
+  return project.progress?.phase_label || project.progress?.stage || project.progress?.message || project.status || '暂无'
+}
+
+function stepTone(status: 'pending' | 'active' | 'done' | 'blocked') {
+  switch (status) {
+    case 'done':
+      return 'border-emerald-500/30 bg-emerald-500/15 text-emerald-100'
+    case 'active':
+      return 'border-cyan-500/30 bg-cyan-500/15 text-cyan-100'
+    case 'blocked':
+      return 'border-rose-500/30 bg-rose-500/15 text-rose-100'
+    default:
+      return 'border-white/10 bg-black/20 text-slate-200'
+  }
+}
+
+function stepLabel(status: 'pending' | 'active' | 'done' | 'blocked') {
+  switch (status) {
+    case 'done':
+      return '已完成'
+    case 'active':
+      return '当前执行'
+    case 'blocked':
+      return '前置未完成'
+    default:
+      return '待执行'
+  }
+}
+
+function buildEpisodeVideoPayload(
+  storyboards: Storyboard[],
+  episodeId: number | undefined,
+  options?: { serialScene?: boolean; isCommentary?: boolean; project?: Project },
+) {
+  const serialScene = options?.serialScene !== false
+  const sorted = storyboards
+    .slice()
+    .sort((a, b) => a.sequence_number - b.sequence_number)
+
+  const resolveFrameImage = (storyboard: Storyboard) => String(storyboard.image_url || '').trim()
+
+  const firstImageIndex = sorted.findIndex((item) => resolveFrameImage(item))
+  const serialStoryboards = firstImageIndex > 0 ? sorted.slice(firstImageIndex) : sorted
+  const sceneDescriptions = serialStoryboards.map((item) => softenVideoPromptText(buildVideoSceneDescription(item)))
+  const dialogues = serialStoryboards.map((item) => softenDialogueText(
+    formatStoryboardSpeechForVideo(item, { isCommentary: options?.isCommentary, project: options?.project }),
+  ))
+  const durations = serialStoryboards.map((item) => item.duration || 0)
+  const cameraMovements = serialStoryboards.map((item) => item.camera_movement || '')
+  const moods = serialStoryboards.map((item) => item.mood || '')
+  const spatialAnchors = serialStoryboards.map((item) => item.spatial_anchor || '')
+  const subjectPositions = serialStoryboards.map((item) => item.subject_positions || '')
+  const transitionNotes = serialStoryboards.map((item) => item.transition_note || '')
+  const sceneCharacters = serialStoryboards.map((item) => softenSceneCharacters(item.characters || []))
+  const sceneAssetIds = serialStoryboards.map((item) => item.asset_ids || [])
+
+  const frameImages = serialStoryboards.map((item) => resolveFrameImage(item))
+
+  return {
+    episode_id: episodeId,
+    image_urls: frameImages,
+    scene_descriptions: sceneDescriptions,
+    dialogues: dialogues.some(Boolean) ? dialogues : undefined,
+    durations: durations.some(Boolean) ? durations : undefined,
+    camera_movements: cameraMovements.some(Boolean) ? cameraMovements : undefined,
+    moods: moods.some(Boolean) ? moods : undefined,
+    spatial_anchors: spatialAnchors.some(Boolean) ? spatialAnchors : undefined,
+    subject_positions: subjectPositions.some(Boolean) ? subjectPositions : undefined,
+    transition_notes: transitionNotes.some(Boolean) ? transitionNotes : undefined,
+    scene_characters: sceneCharacters.some((arr) => arr.length > 0) ? sceneCharacters : undefined,
+    scene_asset_ids: sceneAssetIds.some((arr) => arr.length > 0) ? sceneAssetIds : undefined,
+    scene_description: softenVideoPromptText(sceneDescriptions.filter(Boolean).join(' ')) || undefined,
+    scene_group_keys: serialScene ? serialStoryboards.map(() => `ad-episode-${episodeId || 'single'}`) : undefined,
+  }
+}
+
+export default function AdVideoHistoryDetailPage() {
+  const { toast } = useToast()
+  const params = useParams<{ projectId: string }>()
+  const projectId = Number(params?.projectId || 0)
+
+  const [editableOptimizedScript, setEditableOptimizedScript] = useState('')
+  const [editableOriginalScript, setEditableOriginalScript] = useState('')
+  const [editableOptimizationPrompt, setEditableOptimizationPrompt] = useState('')
+  const [editableStoryboardSplitPrompt, setEditableStoryboardSplitPrompt] = useState('')
+  const [optimizingCopy, setOptimizingCopy] = useState(false)
+  const [adCopyOptimizationPending, setAdCopyOptimizationPending] = useState(false)
+  const [savingCopyDraft, setSavingCopyDraft] = useState(false)
+  const [generationAction, setGenerationAction] = useState<string | null>(null)
+  const [rerunAction, setRerunAction] = useState<string | null>(null)
+  const [uploadingAssetId, setUploadingAssetId] = useState<number | null>(null)
+  const [selectedTextModelId, setSelectedTextModelId] = useState('default')
+  const [selectedConstraintVideoModel, setSelectedConstraintVideoModel] = useState('')
+  const [selectedGenerationVideoModel, setSelectedGenerationVideoModel] = useState('')
+  const [selectedAspectRatio, setSelectedAspectRatio] = useState('')
+  const [activePipelineStep, setActivePipelineStep] = useState<'step1' | 'step2' | 'step3'>('step1')
+  const userSelectedPipelineStepRef = useRef(false)
+  const previousStoryboardsRef = useRef<Storyboard[]>([])
+  const actionLocksRef = useRef<Set<string>>(new Set())
+  const [selectedResolution, setSelectedResolution] = useState('')
+  const [selectedDuration, setSelectedDuration] = useState('')
+  const [selectedStep3AspectRatio, setSelectedStep3AspectRatio] = useState('')
+  const [selectedStep3Resolution, setSelectedStep3Resolution] = useState('')
+  const [selectedStep3Duration, setSelectedStep3Duration] = useState('')
+  const [selectedStep3ExecutionMode, setSelectedStep3ExecutionMode] = useState<'serial' | 'parallel'>('serial')
+  const [selectedStep3VeoPersonGeneration, setSelectedStep3VeoPersonGeneration] = useState('allow_adult')
+  const [selectedStep3VeoSeed, setSelectedStep3VeoSeed] = useState('')
+  const [selectedStep3VeoUseReferenceImages, setSelectedStep3VeoUseReferenceImages] = useState(false)
+  const [selectedStep3VeoUseLastFrame, setSelectedStep3VeoUseLastFrame] = useState(false)
+  const [selectedSpeechPace, setSelectedSpeechPace] = useState<SpeechPaceOption>('normal')
+  const [selectedGenerateAudio, setSelectedGenerateAudio] = useState(false)
+  const [selectedStep3GenerateAudio, setSelectedStep3GenerateAudio] = useState(false)
+  const [selectedStoryboardImageModel, setSelectedStoryboardImageModel] = useState('')
+  const [videoModelMismatch, setVideoModelMismatch] = useState('')
+  const [characterAssetSearch, setCharacterAssetSearch] = useState('')
+  const [selectedCharacterAnchorAssetId, setSelectedCharacterAnchorAssetId] = useState<number | null>(null)
+  const [focusedAssetId, setFocusedAssetId] = useState<number | null>(null)
+  const [focusedStoryboardId, setFocusedStoryboardId] = useState<number | null>(null)
+  const [bindingStoryboardId, setBindingStoryboardId] = useState<number | null>(null)
+
+  const { data: projectData, mutate: mutateProject, isLoading } = useSWR(projectId ? ['ad-video-history-project', projectId] : null, async () => {
+    const res = await projectAPI.get(projectId)
+    return unwrap<Project>((res as { data?: unknown }).data)
+  }, { revalidateOnFocus: true })
+
+  const { data: episodesData, mutate: mutateEpisodes } = useSWR(projectId ? ['ad-video-history-episodes', projectId] : null, async () => {
+    const res = await projectAPI.listEpisodes(projectId)
+    return unwrap<Episode[]>((res as { data?: unknown }).data) || []
+  }, { refreshInterval: 5000, revalidateOnFocus: true })
+
+  const { data: adCopyState, mutate: mutateAdCopyState } = useSWR(projectId ? ['ad-video-history-ad-copy', projectId] : null, async () => {
+    const res = await projectAPI.getAdCopyOptimizationState(projectId)
+    return unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
+  }, {
+    revalidateOnFocus: true,
+    refreshInterval: adCopyOptimizationPending ? 3000 : 0,
+  })
+
+  const { data: storyboardsData, mutate: mutateStoryboards } = useSWR(projectId ? ['ad-video-history-storyboards', projectId] : null, async () => {
+    const res = await storyboardAPI.listAll(projectId)
+    const payload = (res as { data?: Storyboard[] }).data
+    return Array.isArray(payload) ? payload : []
+  }, { refreshInterval: 5000, revalidateOnFocus: true })
+
+  const { data: taskData, mutate: mutateTasks } = useSWR(projectId ? ['ad-video-history-tasks', projectId] : null, async () => {
+    const res = await videoAPI.listAllTasks({ project_id: projectId, page: 1, page_size: 200 })
+    const payload = res as { data?: { items?: VideoTask[] } }
+    return payload?.data?.items || []
+  }, {
+    refreshInterval: (latest) => Array.isArray(latest) && latest.some((task) => task.status === 'pending' || task.status === 'processing' || task.status === 'running') ? 5000 : 0,
+    revalidateOnFocus: true,
+  })
+
+  const latestTaskId = useMemo(() => {
+    const items = Array.isArray(taskData) ? taskData : []
+    return items.slice().sort((a, b) => Number(b.id) - Number(a.id))[0]?.id || 0
+  }, [taskData])
+
+  const { data: latestTaskDetailData, mutate: mutateLatestTaskDetail } = useSWR(
+    projectId && latestTaskId ? ['ad-video-history-task-detail', latestTaskId] : null,
+    async () => {
+      const res = await videoAPI.getTask<VideoTask>(latestTaskId)
+      const payload = res as { data?: { task?: VideoTask; clips_debug?: VideoTaskClipDebug[]; task_debug_summary?: VideoTaskDetailData['task_debug_summary'] } }
+      const data = payload?.data || {}
+      if (!data?.task) return null
+      return {
+        task: data.task,
+        clips_debug: Array.isArray(data.clips_debug) ? data.clips_debug : [],
+        task_debug_summary: data.task_debug_summary,
+      } as VideoTaskDetailData
+    },
+    {
+      refreshInterval: (latest) => {
+        const status = String(latest?.task?.status || '').toLowerCase()
+        return status === 'pending' || status === 'processing' || status === 'running' ? 5000 : 0
+      },
+      revalidateOnFocus: true,
+    },
+  )
+
+  const { data: assetsData, mutate: mutateAssets } = useSWR(projectId ? ['ad-video-history-assets', projectId] : null, async () => {
+    const res = await assetAPI.list(projectId)
+    return unwrapArray<Asset>((res as { data?: unknown }).data)
+  }, { refreshInterval: 5000, revalidateOnFocus: true })
+
+  const { data: textModels } = useSWR(projectId ? ['ad-video-history-text-models'] : null, async () => {
+    const res = await modelAPI.list({ type: 'llm', enabled: 'true', sort_by: 'priority' })
+    const payload = res as {
+      data?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> | { items?: Array<{ id: number; name: string; model_key: string; is_active?: boolean }> }
+    }
+    const rawItems = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.data?.items)
+        ? payload.data.items
+        : []
+    return rawItems.filter((item) => item.is_active !== false)
+  }, { revalidateOnFocus: false })
+
+  const { data: videoModelStatus } = useSWR(projectId ? ['ad-video-history-video-model-status'] : null, async () => {
+    const res = await videoAPI.modelStatus()
+    if (!res || typeof res !== 'object') return []
+    const payload = res as { data?: { models?: VideoModelMeta[] } | VideoModelMeta[]; models?: VideoModelMeta[] }
+    if (Array.isArray(payload.models)) return payload.models
+    if (Array.isArray(payload.data)) return payload.data
+    if (payload.data && typeof payload.data === 'object' && Array.isArray((payload.data as { models?: VideoModelMeta[] }).models)) {
+      return (payload.data as { models?: VideoModelMeta[] }).models || []
+    }
+    return []
+  }, { revalidateOnFocus: false })
+
+  const { data: imageModelStatus } = useSWR(projectId ? ['ad-video-history-image-model-status'] : null, async () => {
+    const res = await assetAPI.modelStatus()
+    if (!res || typeof res !== 'object') return []
+    const payload = res as { data?: { models?: { key: string; available: boolean }[] } | { key: string; available: boolean }[]; models?: { key: string; available: boolean }[] }
+    if (Array.isArray(payload.models)) return payload.models
+    if (Array.isArray(payload.data)) return payload.data
+    if (payload.data && typeof payload.data === 'object' && Array.isArray((payload.data as { models?: { key: string; available: boolean }[] }).models)) {
+      return (payload.data as { models?: { key: string; available: boolean }[] }).models || []
+    }
+    return []
+  }, { revalidateOnFocus: false })
+
+  const project = projectData || null
+  const episodes = (episodesData || []).slice().sort((a, b) => a.episode_number - b.episode_number)
+  const storyboards = (storyboardsData || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
+  const tasks = useMemo(() => taskData || [], [taskData])
+  const textModelOptions = useMemo(() => {
+    const base = (textModels || []).map((item) => ({
+      id: item.id,
+      label: `${item.name} · ${item.model_key}`,
+    }))
+    const persistedId = project?.text_model_id
+    if (persistedId && !base.some((item) => item.id === persistedId)) {
+      base.unshift({
+        id: persistedId,
+        label: `当前项目已选模型 #${persistedId}（未出现在当前可用列表中）`,
+      })
+    }
+    return base
+  }, [project?.text_model_id, textModels])
+  const assets = (assetsData || []).slice().sort((a, b) => Number(a.id) - Number(b.id))
+  const availableModels = (videoModelStatus || []).filter((item) => item.available)
+  const availableImageModels = (imageModelStatus || []).filter((item) => item.available)
+  const latestTask = useMemo(() => tasks.slice().sort((a, b) => Number(b.id) - Number(a.id))[0] || null, [tasks])
+  const latestTaskDetail = latestTaskDetailData || null
+  const latestTaskClips = useMemo(
+    () => (latestTaskDetail?.clips_debug || []).slice().sort((a, b) => Number(a.clip_order) - Number(b.clip_order)),
+    [latestTaskDetail],
+  )
+  const latestStoryboardVideoRecords = useMemo(() => {
+    if (!latestTaskDetail?.task) return []
+    const clips = Array.isArray(latestTaskDetail.task.clips) ? latestTaskDetail.task.clips : []
+    const debugMap = new Map((latestTaskDetail.clips_debug || []).map((item) => [Number(item.clip_order), item]))
+    const renderConfig = (latestTaskDetail.task.render_config || {}) as {
+      scene_descriptions?: string[]
+      dialogues?: string[]
+      camera_movements?: string[]
+      moods?: string[]
+      scene_characters?: string[][]
+    }
+    const sceneDescriptions = Array.isArray(renderConfig.scene_descriptions) ? renderConfig.scene_descriptions : []
+    const dialogues = Array.isArray(renderConfig.dialogues) ? renderConfig.dialogues : []
+    const cameraMovements = Array.isArray(renderConfig.camera_movements) ? renderConfig.camera_movements : []
+    const moods = Array.isArray(renderConfig.moods) ? renderConfig.moods : []
+    const sceneCharacters = Array.isArray(renderConfig.scene_characters) ? renderConfig.scene_characters : []
+
+    return clips
+      .slice()
+      .sort((a, b) => Number(a.clip_order) - Number(b.clip_order))
+      .map((clip) => {
+        const clipOrder = Number(clip.clip_order)
+        const debug = debugMap.get(clipOrder)
+        return {
+          ...clip,
+          source_image_url: clip.source_image_url || debug?.source_image_url || '',
+          end_frame_image_url: clip.end_frame_image_url || debug?.end_frame_image_url || '',
+          requested_model: clip.requested_model || debug?.requested_model || '',
+          routed_generator: clip.routed_generator || debug?.routed_generator || '',
+          runtime_provider: clip.runtime_provider || debug?.runtime_provider || '',
+          effective_model: clip.effective_model || debug?.effective_model || '',
+          scene_group_key: clip.scene_group_key || debug?.scene_group_key || '',
+          scene_seq: clip.scene_seq ?? debug?.scene_seq,
+          requested_generate_mode: debug?.requested_generate_mode || '',
+          final_generate_mode: debug?.final_generate_mode || '',
+          model_family: debug?.model_family || '',
+          reference_bindings: Array.isArray(debug?.reference_bindings) ? debug.reference_bindings : [],
+          project_identity_refs: Array.isArray(debug?.project_identity_refs) ? debug.project_identity_refs : [],
+          character_refs: Array.isArray(debug?.character_refs) ? debug.character_refs : [],
+          asset_refs: Array.isArray(debug?.asset_refs) ? debug.asset_refs : [],
+          prompt_scene_description: String(sceneDescriptions[clipOrder] || '').trim(),
+          prompt_dialogue: String(dialogues[clipOrder] || '').trim(),
+          prompt_camera_movement: String(cameraMovements[clipOrder] || '').trim(),
+          prompt_mood: String(moods[clipOrder] || '').trim(),
+          prompt_scene_characters: Array.isArray(sceneCharacters[clipOrder]) ? sceneCharacters[clipOrder] : [],
+        }
+      })
+  }, [latestTaskDetail])
+  const autoSplit = project?.progress?.auto_split || null
+  const realOptimizedScript = useMemo(
+    () => String(adCopyState?.optimized_script || autoSplit?.optimized_script || '').trim(),
+    [adCopyState?.optimized_script, autoSplit?.optimized_script],
+  )
+  const displayedOptimizedScript = useMemo(
+    () => editableOptimizedScript.trim() || realOptimizedScript,
+    [editableOptimizedScript, realOptimizedScript],
+  )
+  const realOriginalScript = useMemo(
+    () => String(adCopyState?.original_script || autoSplit?.original_script || project?.script_text || '').trim(),
+    [adCopyState?.original_script, autoSplit?.original_script, project?.script_text],
+  )
+  const realOptimizationPrompt = useMemo(
+    () => String(adCopyState?.optimization_prompt || autoSplit?.optimization_prompt || project?.storyboard_config?.ad_copy_optimization_prompt || DEFAULT_AD_COPY_OPTIMIZATION_PROMPT).trim(),
+    [adCopyState?.optimization_prompt, autoSplit?.optimization_prompt, project?.storyboard_config?.ad_copy_optimization_prompt],
+  )
+  const isAdCopyProgressAdvancing = useMemo(() => {
+    const stage = String(project?.progress?.stage || '')
+    if (!stage) return false
+    return stage === 'script_processing'
+      || stage === 'episode_splitting'
+      || stage === 'scene_splitting'
+      || stage === 'script_prepping'
+  }, [project?.progress])
+  const storyboardSplitBuiltinPrompt = useMemo(
+    () => String(adCopyState?.storyboard_split_prompt_builtin || DEFAULT_STORYBOARD_SPLIT_BUILTIN_PROMPT).trim(),
+    [adCopyState?.storyboard_split_prompt_builtin],
+  )
+  const selectedSpeechPaceMeta = useMemo(
+    () => SPEECH_PACE_OPTIONS.find((item) => item.value === selectedSpeechPace) || SPEECH_PACE_OPTIONS[0],
+    [selectedSpeechPace],
+  )
+  const storyboardSplitPromptPreview = useMemo(() => {
+    const custom = editableStoryboardSplitPrompt.trim()
+    const paceBlock = `# 本次步骤 1 语速档位\n${selectedSpeechPaceMeta.label}：${selectedSpeechPaceMeta.hint}`
+    return custom
+      ? `${storyboardSplitBuiltinPrompt}
+
+${paceBlock}
+
+# 项目级补充规则
+${custom}` : `${storyboardSplitBuiltinPrompt}
+
+${paceBlock}`
+  }, [editableStoryboardSplitPrompt, selectedSpeechPaceMeta, storyboardSplitBuiltinPrompt])
+  const resultUrl = taskResultUrl(latestTask)
+
+  const persistedVideoModel = useMemo(
+    () => String(project?.storyboard_config?.video_model || autoSplit?.video_model || '').trim(),
+    [project?.storyboard_config?.video_model, autoSplit?.video_model],
+  )
+
+  const effectiveConstraintVideoModel = useMemo(
+    () => selectedConstraintVideoModel || persistedVideoModel,
+    [selectedConstraintVideoModel, persistedVideoModel],
+  )
+
+  const effectiveSelectedVideoModel = useMemo(
+    () => selectedGenerationVideoModel || persistedVideoModel,
+    [selectedGenerationVideoModel, persistedVideoModel],
+  )
+
+  const constraintModelMeta = useMemo(
+    () => availableModels.find((item) => item.key === effectiveConstraintVideoModel) || null,
+    [availableModels, effectiveConstraintVideoModel],
+  )
+
+  const selectedModelMeta = useMemo(
+    () => availableModels.find((item) => item.key === effectiveSelectedVideoModel) || null,
+    [availableModels, effectiveSelectedVideoModel],
+  )
+  const selectedConstraintModelLabel = useMemo(
+    () => formatVideoModelLabel(constraintModelMeta, effectiveConstraintVideoModel),
+    [constraintModelMeta, effectiveConstraintVideoModel],
+  )
+  const selectedGenerationModelLabel = useMemo(
+    () => formatVideoModelLabel(selectedModelMeta, effectiveSelectedVideoModel),
+    [selectedModelMeta, effectiveSelectedVideoModel],
+  )
+  const selectedGenerationModelActualLabel = useMemo(
+    () => formatVideoModelActualLabel(selectedModelMeta, effectiveSelectedVideoModel),
+    [selectedModelMeta, effectiveSelectedVideoModel],
+  )
+  const selectedGenerationProviderModel = useMemo(
+    () => String(selectedModelMeta?.provider_model || '').trim(),
+    [selectedModelMeta],
+  )
+  const selectedModelParams = useMemo(() => selectedModelMeta?.params || [], [selectedModelMeta])
+  const selectedModelParamKeys = useMemo(() => new Set(selectedModelParams.map((param) => param.key)), [selectedModelParams])
+  const selectedModelIsVeo = useMemo(
+    () => /(?:^|[-_])(veo|voe)/i.test(`${effectiveSelectedVideoModel} ${selectedGenerationProviderModel}`),
+    [effectiveSelectedVideoModel, selectedGenerationProviderModel],
+  )
+  const selectedModelSupportsVeoNativeControls = selectedModelIsVeo && (
+    modelHasParam(selectedModelMeta, 'person_generation')
+    || modelHasParam(selectedModelMeta, 'reference_images')
+    || modelHasParam(selectedModelMeta, 'last_frame')
+    || modelHasParam(selectedModelMeta, 'seed')
+  )
+  const step3VeoPersonGenerationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'person_generation'), [selectedModelMeta])
+
+  const videoModelsForStep3 = useMemo(() => {
+    const map = new Map<string, VideoModelMeta>()
+    for (const item of availableModels) map.set(item.key, item)
+    if (persistedVideoModel && !map.has(persistedVideoModel)) {
+      map.set(persistedVideoModel, {
+        key: persistedVideoModel,
+        available: false,
+        native_audio: false,
+        params: [],
+      })
+    }
+    return Array.from(map.values())
+  }, [availableModels, persistedVideoModel])
+
+  const aspectRatioOptions = useMemo(() => getParamOptions(constraintModelMeta, 'aspect_ratio'), [constraintModelMeta])
+  const resolutionOptions = useMemo(() => getParamOptions(constraintModelMeta, 'resolution'), [constraintModelMeta])
+  const durationOptions = useMemo(() => getParamOptions(constraintModelMeta, 'duration'), [constraintModelMeta])
+  const step3AspectRatioOptions = useMemo(() => getParamOptions(selectedModelMeta, 'aspect_ratio'), [selectedModelMeta])
+  const step3ResolutionOptions = useMemo(() => getParamOptions(selectedModelMeta, 'resolution'), [selectedModelMeta])
+  const step3DurationOptions = useMemo(() => getParamOptions(selectedModelMeta, 'duration'), [selectedModelMeta])
+  const persistedDuration = useMemo(
+    () => String(project?.storyboard_config?.duration || autoSplit?.duration || '').trim(),
+    [project?.storyboard_config?.duration, autoSplit?.duration],
+  )
+  const durationMismatch = useMemo(
+    () => Boolean(persistedDuration && durationOptions.length > 0 && !durationOptions.some((item) => item.value === persistedDuration)),
+    [durationOptions, persistedDuration],
+  )
+
+  const scopeStoryboards = useMemo(() => storyboards, [storyboards])
+
+  useEffect(() => {
+    if (scopeStoryboards.length > 0) {
+      previousStoryboardsRef.current = scopeStoryboards
+    }
+  }, [scopeStoryboards])
+
+  const scopeStoryboardAssetIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const storyboard of scopeStoryboards) {
+      for (const assetId of storyboard.asset_ids || []) ids.add(assetId)
+    }
+    return ids
+  }, [scopeStoryboards])
+
+  const scopeAssets = useMemo(() => {
+    const referenced = assets.filter((item) => scopeStoryboardAssetIds.has(item.id))
+    return referenced.length > 0 ? referenced : assets
+  }, [assets, scopeStoryboardAssetIds])
+
+  const uploadedScopeAssets = useMemo(
+    () => scopeAssets.filter((item) => String(item.image_url || '').trim()).length,
+    [scopeAssets],
+  )
+
+  const processingVideoTaskCount = useMemo(
+    () => tasks.filter((item) => item.status === 'pending' || item.status === 'processing').length,
+    [tasks],
+  )
+
+  const splitConfigReady = Boolean(
+    effectiveConstraintVideoModel
+      && selectedAspectRatio
+      && selectedResolution
+      && selectedDuration
+      && aspectRatioOptions.length > 0
+      && resolutionOptions.length > 0
+      && durationOptions.length > 0,
+  )
+
+  const step3ConfigReady = Boolean(
+    effectiveSelectedVideoModel
+      && selectedStep3AspectRatio
+      && selectedStep3Resolution
+      && selectedStep3Duration
+      && step3AspectRatioOptions.length > 0
+      && step3ResolutionOptions.length > 0
+      && step3DurationOptions.length > 0,
+  )
+
+  const pipelineBusy = Boolean(rerunAction !== null || generationAction !== null || uploadingAssetId !== null)
+  const step1Running = rerunAction === 'pipeline'
+    || project?.status === 'script_processing'
+    || project?.progress?.stage === 'episode_splitting'
+    || project?.progress?.stage === 'scene_splitting'
+    || project?.progress?.stage === 'script_prepping'
+
+  const displayStoryboards = useMemo(() => {
+    if (scopeStoryboards.length > 0) return scopeStoryboards
+    if (step1Running && previousStoryboardsRef.current.length > 0) return previousStoryboardsRef.current
+    return []
+  }, [scopeStoryboards, step1Running])
+
+  const completedStoryboardImages = useMemo(
+    () => displayStoryboards.filter((item) => String(item.image_url || '').trim()).length,
+    [displayStoryboards],
+  )
+  const firstStoryboard = displayStoryboards[0] || null
+  const firstStoryboardImageReady = Boolean(firstStoryboard && String(firstStoryboard.image_url || '').trim())
+  const firstFrameIdentityReviewStatus = String(project?.storyboard_config?.first_frame_identity_review_status || 'unreviewed').trim() || 'unreviewed'
+  const firstFrameIdentityApproved = firstFrameIdentityReviewStatus === 'approved'
+
+  const assetToStoryboardMap = useMemo(() => {
+    const map = new Map<number, Storyboard[]>()
+    for (const storyboard of displayStoryboards) {
+      for (const assetId of storyboard.asset_ids || []) {
+        const bucket = map.get(assetId) ?? []
+        bucket.push(storyboard)
+        map.set(assetId, bucket)
+      }
+    }
+    return map
+  }, [displayStoryboards])
+
+  const storyboardAssetDetailMap = useMemo(() => {
+    const map = new Map<number, Asset[]>()
+    for (const storyboard of displayStoryboards) {
+      const details = (storyboard.asset_ids || [])
+        .map((assetId) => scopeAssets.find((asset) => asset.id === assetId) || assets.find((asset) => asset.id === assetId) || null)
+        .filter((item): item is Asset => Boolean(item))
+      map.set(storyboard.id, details)
+    }
+    return map
+  }, [displayStoryboards, scopeAssets, assets])
+
+  const firstStoryboardAssets = useMemo(() => {
+    if (!firstStoryboard) return [] as Asset[]
+    return storyboardAssetDetailMap.get(firstStoryboard.id) || []
+  }, [firstStoryboard, storyboardAssetDetailMap])
+
+  const storyboardsWithCharacters = useMemo(
+    () => displayStoryboards.filter((storyboard) => Array.isArray(storyboard.characters) && storyboard.characters.length > 0),
+    [displayStoryboards],
+  )
+  const characterBoundStoryboardCount = useMemo(
+    () => storyboardsWithCharacters.filter((storyboard) => (
+      (storyboardAssetDetailMap.get(storyboard.id) || []).some((asset) => asset.type === 'character' && String(asset.image_url || '').trim())
+    )).length,
+    [storyboardsWithCharacters, storyboardAssetDetailMap],
+  )
+
+  const characterAssets = useMemo(() => {
+    const fromScope = scopeAssets.filter((item) => item.type === 'character')
+    if (fromScope.length > 0) return fromScope
+    return assets.filter((item) => item.type === 'character')
+  }, [scopeAssets, assets])
+
+  const filteredCharacterAssets = useMemo(() => {
+    const query = characterAssetSearch.trim().toLowerCase()
+    if (!query) return characterAssets
+    return characterAssets
+      .filter((asset) => buildCharacterAssetSearchText(asset).includes(query))
+      .sort((a, b) => {
+        const aName = String(a.name || '').trim().toLowerCase()
+        const bName = String(b.name || '').trim().toLowerCase()
+        const aExact = aName === query ? 1 : 0
+        const bExact = bName === query ? 1 : 0
+        if (aExact !== bExact) return bExact - aExact
+        const aStarts = aName.startsWith(query) ? 1 : 0
+        const bStarts = bName.startsWith(query) ? 1 : 0
+        if (aStarts !== bStarts) return bStarts - aStarts
+        return Number(a.id) - Number(b.id)
+      })
+  }, [characterAssetSearch, characterAssets])
+
+  useEffect(() => {
+    if (characterAssets.length === 0) {
+      setSelectedCharacterAnchorAssetId(null)
+      return
+    }
+    const hasSelected = selectedCharacterAnchorAssetId != null && characterAssets.some((asset) => asset.id === selectedCharacterAnchorAssetId)
+    if (hasSelected) return
+    const preferred = characterAssets.find((asset) => String(asset.image_url || '').trim()) || characterAssets[0]
+    setSelectedCharacterAnchorAssetId(preferred?.id ?? null)
+  }, [characterAssets, selectedCharacterAnchorAssetId])
+
+  const characterAnchorAsset = useMemo(() => {
+    const preferred = selectedCharacterAnchorAssetId != null
+      ? characterAssets.find((asset) => asset.id === selectedCharacterAnchorAssetId) || null
+      : null
+    if (preferred && String(preferred.image_url || '').trim()) return preferred
+    const firstWithImage = characterAssets.find((asset) => String(asset.image_url || '').trim())
+    if (preferred) return preferred
+    return firstWithImage || null
+  }, [characterAssets, selectedCharacterAnchorAssetId])
+
+  const countSameNameCharacterAssets = useCallback((name: string) => {
+    const query = String(name || '').trim().toLowerCase()
+    if (!query) return 0
+    return characterAssets.filter((asset) => String(asset.name || '').trim().toLowerCase() === query).length
+  }, [characterAssets])
+
+  const characterAnchorImageUrl = String(characterAnchorAsset?.image_url || project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim()
+  const characterAnchorSource = characterAnchorAsset?.image_url
+    ? 'asset'
+    : project?.storyboard_config?.approved_first_frame_image_url
+      ? 'approved_first_frame'
+      : firstStoryboard?.image_url
+        ? 'storyboard_image'
+        : 'none'
+  const step3VeoReferenceImages = useMemo(
+    () => uniqueNonEmptyUrls([
+      ...characterAssets.map((asset) => String(asset.image_url || '').trim()),
+      characterAnchorImageUrl,
+      String(project?.storyboard_config?.approved_first_frame_image_url || '').trim(),
+    ], 3),
+    [characterAssets, characterAnchorImageUrl, project?.storyboard_config?.approved_first_frame_image_url],
+  )
+  const step3VeoLastFrameImageUrl = useMemo(() => {
+    const reversed = displayStoryboards.slice().reverse()
+    for (const storyboard of reversed) {
+      const imageUrl = String(storyboard.image_url || '').trim()
+      if (imageUrl) return imageUrl
+    }
+    return ''
+  }, [displayStoryboards])
+  const step3UsesVeoReferenceImages = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length > 0
+  const step3UsesVeoLastFrame = selectedModelSupportsVeoNativeControls && selectedStep3VeoUseLastFrame && Boolean(step3VeoLastFrameImageUrl)
+  const step3ExecutionModeLabel = selectedStep3ExecutionMode === 'parallel' ? '并行生成（每段独立提交）' : '串行生成（按分镜链式衔接）'
+  const step3ExecutionModeHint = selectedStep3ExecutionMode === 'parallel'
+    ? '并行会让每段分镜独立提交，不再依赖上一段链式衔接。'
+    : '串行也仍需先准备整批分镜图。每段会按分镜顺序链式衔接，但依然要用当前分镜图和后续分镜图作为过渡锚点，避免直接拿空图或错图提交。'
+  const step2StoryboardPrepLabel = selectedStep3ExecutionMode === 'parallel' ? '并行模式分镜图预生成' : '串行模式分镜锚点图预生成'
+  const step2StoryboardPrepHint = selectedStep3ExecutionMode === 'parallel'
+    ? '当前是并行模式，这里预生成的是每段独立提交前要看的分镜图，不依赖前一段链式衔接。'
+    : '当前是串行模式，但这里仍然必须先生成整批分镜图。它们不是可省略的静态图，而是每段链式视频生成前要用到的起止过渡锚点，请先在这里看图、补图、确认图。'
+
+  const focusedStoryboardIds = useMemo(() => {
+    if (focusedAssetId == null) return new Set<number>()
+    return new Set((assetToStoryboardMap.get(focusedAssetId) || []).map((storyboard) => storyboard.id))
+  }, [assetToStoryboardMap, focusedAssetId])
+
+  const focusedAssetIds = useMemo(() => {
+    if (focusedStoryboardId == null) return new Set<number>()
+    return new Set((storyboardAssetDetailMap.get(focusedStoryboardId) || []).map((asset) => asset.id))
+  }, [storyboardAssetDetailMap, focusedStoryboardId])
+
+  const storyboardScopeReady = displayStoryboards.length > 0
+  const assetScopeReady = scopeAssets.length > 0
+  const allScopeAssetsUploaded = assetScopeReady && uploadedScopeAssets === scopeAssets.length
+  const allStoryboardFramesReady = storyboardScopeReady && completedStoryboardImages > 0 && completedStoryboardImages === displayStoryboards.length
+  const serialStepStoryboardReady = firstStoryboardImageReady
+  const step3NeedsAllStoryboardFrames = selectedStep3ExecutionMode !== 'serial'
+  const step2StoryboardReady = step3NeedsAllStoryboardFrames ? allStoryboardFramesReady : serialStepStoryboardReady
+  const allCharacterStoryboardsBound = storyboardsWithCharacters.length === 0 || characterBoundStoryboardCount === storyboardsWithCharacters.length
+
+  const step1Done = storyboardScopeReady && !step1Running
+  const step2Running = generationAction?.startsWith('asset-') || generationAction?.startsWith('storyboard-image-') || uploadingAssetId !== null || project?.status === 'asset_generating' || project?.status === 'storyboard_generating'
+  const step2Enabled = step1Done
+  const step2Done = step1Done && assetScopeReady && allScopeAssetsUploaded && allCharacterStoryboardsBound && step2StoryboardReady && firstFrameIdentityApproved
+  const latestTaskIsPaused = String(latestTask?.status || '').toLowerCase() === 'paused'
+  const step3Running = generationAction === 'video-start' || processingVideoTaskCount > 0 || project?.status === 'video_generating'
+  const step3Enabled = latestTaskIsPaused || (step2Done && step3ConfigReady)
+  const step3Done = Boolean(resultUrl)
+
+  const step1Status: 'pending' | 'active' | 'done' | 'blocked' = step1Running ? 'active' : step1Done ? 'done' : 'pending'
+  const step2NeedsAttention = step2Enabled && !step2Done && (!assetScopeReady || !allScopeAssetsUploaded || !allCharacterStoryboardsBound || !step2StoryboardReady || !firstFrameIdentityApproved)
+  const step2Status: 'pending' | 'active' | 'done' | 'blocked' = !step2Enabled ? 'blocked' : step2Running ? 'active' : step2Done ? 'done' : step2NeedsAttention ? 'blocked' : 'pending'
+  const step3Status: 'pending' | 'active' | 'done' | 'blocked' = !step3Enabled ? 'blocked' : step3Running ? 'active' : step3Done ? 'done' : 'pending'
+
+  useEffect(() => {
+    if (userSelectedPipelineStepRef.current && !step1Running && !step2Running && !step3Running) return
+    if (step1Running) {
+      setActivePipelineStep('step1')
+      return
+    }
+    if (step2Running) {
+      setActivePipelineStep('step2')
+      return
+    }
+    if (step3Running) {
+      setActivePipelineStep('step3')
+      return
+    }
+  }, [step1Running, step2Running, step3Running])
+
+  const step1Hint = step1Running
+    ? '当前正在重跑文本拆分 / 自动分镜；后端会重建整条广告的分镜文本，请等这一轮回流。'
+    : !splitConfigReady
+      ? '先补齐视频模型、比例、分辨率、单分镜时长。'
+      : !editableOriginalScript.trim()
+        ? '当前原文为空，无法拆分。'
+        : storyboardScopeReady
+          ? `当前范围已经有可用分镜，可继续重跑覆盖；当前语速档位：${selectedSpeechPaceMeta.label}。`
+          : `先执行这一步，按 ${selectedSpeechPaceMeta.label} 语速产出新的整条广告分镜文本。`
+
+  const step2PendingReasons = useMemo(() => {
+    const reasons: string[] = []
+    if (!step2Enabled) {
+      reasons.push('步骤 1 还没完成，当前还没有可用分镜文本。')
+      return reasons
+    }
+    if (!assetScopeReady) reasons.push('还没有人物 / 素材槽位，请先点“准备人物槽位”。')
+    if (!allScopeAssetsUploaded) reasons.push(`当前范围素材图未全部就绪，已完成 ${uploadedScopeAssets} / ${scopeAssets.length}。`)
+    if (!allCharacterStoryboardsBound) reasons.push(`还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜未绑定角色图。`)
+    if (selectedStep3ExecutionMode === 'serial') {
+      if (!firstStoryboardImageReady) reasons.push('串行模式下还缺第 1 张分镜图。')
+    } else if (!allStoryboardFramesReady) {
+      reasons.push(`并行模式下分镜图未备齐，当前 ${completedStoryboardImages} / ${displayStoryboards.length}。`)
+    }
+    if (!firstFrameIdentityApproved) reasons.push('首镜人物一致性还没确认。')
+    return reasons
+  }, [
+    step2Enabled,
+    assetScopeReady,
+    allScopeAssetsUploaded,
+    uploadedScopeAssets,
+    scopeAssets.length,
+    allCharacterStoryboardsBound,
+    storyboardsWithCharacters.length,
+    characterBoundStoryboardCount,
+    selectedStep3ExecutionMode,
+    firstStoryboardImageReady,
+    allStoryboardFramesReady,
+    completedStoryboardImages,
+    displayStoryboards.length,
+    firstFrameIdentityApproved,
+  ])
+
+  const step3PendingReasons = useMemo(() => {
+    const reasons: string[] = []
+    if (!latestTaskIsPaused) {
+      if (!step2StoryboardReady) {
+        reasons.push(selectedStep3ExecutionMode === 'serial'
+          ? '串行模式下还缺第 1 张分镜图。'
+          : `并行模式下分镜图未备齐，当前 ${completedStoryboardImages} / ${displayStoryboards.length}。`)
+      }
+      if (!allCharacterStoryboardsBound) reasons.push(`还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜未绑定角色图。`)
+      if (!firstFrameIdentityApproved) reasons.push('首镜人物一致性还没确认。')
+      if (!step3ConfigReady) reasons.push('步骤 3 的模型参数还没选完整。')
+    }
+    return reasons
+  }, [
+    latestTaskIsPaused,
+    step2StoryboardReady,
+    selectedStep3ExecutionMode,
+    completedStoryboardImages,
+    displayStoryboards.length,
+    allCharacterStoryboardsBound,
+    storyboardsWithCharacters.length,
+    characterBoundStoryboardCount,
+    firstFrameIdentityApproved,
+    step3ConfigReady,
+  ])
+
+  const step2Hint = !step2Enabled
+    ? '先完成步骤 1，先让这一轮视频配置真正产出新的广告分镜文案。'
+    : step2Running
+      ? '当前正在执行步骤 2：准备素材槽位、补齐人物绑定、批量生成首尾帧分镜图，请等这一轮回流。'
+      : !assetScopeReady
+        ? '当前范围还没有可上传的人物 / 素材槽位，先点“准备人物槽位”。'
+        : !allScopeAssetsUploaded
+          ? '先把当前范围需要的参考图补齐；没上传完之前，不建议批量生成首尾帧分镜图。'
+          : !allCharacterStoryboardsBound
+            ? `当前还有 ${storyboardsWithCharacters.length - characterBoundStoryboardCount} 条含人物分镜没绑定已上传角色图，建议先补齐，再生成对应首尾帧。`
+            : selectedStep3ExecutionMode === 'serial' && !firstStoryboardImageReady
+              ? '当前是串行模式，步骤 3 只要求人物图、首张分镜图和首镜确认；请先把第 1 张分镜图准备好。'
+              : selectedStep3ExecutionMode !== 'serial' && !allStoryboardFramesReady
+                ? `当前范围需要提前准备 ${displayStoryboards.length} 张分镜图作为视频首尾帧，当前已完成 ${completedStoryboardImages} 张。当前模式：${step3ExecutionModeLabel}。`
+                : !firstFrameIdentityApproved
+                  ? '首镜图已就绪，但还没确认“这是不是当前上传角色本人”。请先在步骤 2 完成首镜角色确认。'
+                  : '当前范围的人物绑定和当前执行模式所需的分镜图门槛都已备齐，步骤 2 可以视为完成。'
+
+  const step3Hint = latestTaskIsPaused
+    ? '检测到上一步有已暂停但未完成的视频任务；这里会优先继续旧任务，而不是重新新建一条视频任务。'
+    : selectedStep3ExecutionMode === 'serial' && !firstStoryboardImageReady
+      ? '当前是串行模式。只要人物图、首张分镜图和首镜确认完成即可进入步骤 3；请先把首张分镜图准备好。'
+      : selectedStep3ExecutionMode !== 'serial' && !allStoryboardFramesReady
+        ? `当前范围还没有把首尾帧分镜图备齐，已完成 ${completedStoryboardImages} / ${displayStoryboards.length}。请先回步骤 2 批量生成。`
+        : !allCharacterStoryboardsBound
+          ? '当前仍有含人物的分镜没有绑定可用角色图。建议先在步骤 2 补齐绑定，再提交视频生成。'
+          : !firstFrameIdentityApproved
+            ? '当前首镜还没有通过“角色一致性确认”。请先确认首镜人物就是当前上传角色本人，再进入步骤 3。'
+            : !step3ConfigReady
+              ? '请先在步骤 3 选择一个可用视频模型，并补齐它支持的比例 / 分辨率 / 时长参数。'
+              : step3Running
+                ? '当前已经有视频任务在执行，先等这一轮结果。'
+                : step3Done
+                  ? '当前已经有成片结果；如果不满意，可以沿用这批已准备好的分镜锚点继续重生。'
+                  : selectedStep3ExecutionMode === 'serial'
+                    ? `当前已满足串行提交流程的最低门槛，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。`
+                    : `当前范围的首尾帧分镜图已经提前准备完成，可以开始提交视频生成任务。当前执行方式：${step3ExecutionModeLabel}。${step3ExecutionModeHint}`
+
+  useEffect(() => {
+    if (!realOptimizedScript) return
+    setEditableOptimizedScript((prev) => {
+      if (!prev.trim()) return realOptimizedScript
+      if (prev.trim() === realOptimizedScript) return prev
+      if (step1Running || optimizingCopy) return prev
+      return realOptimizedScript
+    })
+  }, [realOptimizedScript, step1Running, optimizingCopy])
+
+  useEffect(() => {
+    if (!adCopyOptimizationPending) return
+    if (realOptimizedScript || isAdCopyProgressAdvancing) {
+      setAdCopyOptimizationPending(false)
+    }
+  }, [adCopyOptimizationPending, realOptimizedScript, isAdCopyProgressAdvancing])
+
+  useEffect(() => {
+    setEditableOriginalScript((prev) => {
+      if (!prev.trim()) return realOriginalScript
+      if (prev.trim() === realOriginalScript) return prev
+      if (!realOriginalScript) return prev
+      return realOriginalScript
+    })
+  }, [realOriginalScript])
+
+  useEffect(() => {
+    setEditableOptimizationPrompt((prev) => {
+      if (!prev.trim()) return realOptimizationPrompt
+      if (prev.trim() === realOptimizationPrompt) return prev
+      if (!realOptimizationPrompt) return prev
+      return realOptimizationPrompt
+    })
+  }, [realOptimizationPrompt])
+
+  useEffect(() => {
+    if (!availableModels.length) return
+    const preferred = persistedVideoModel
+    if (preferred && availableModels.some((item) => item.key === preferred)) {
+      setVideoModelMismatch('')
+      setSelectedConstraintVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : preferred))
+      setSelectedGenerationVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : preferred))
+      return
+    }
+    if (preferred) {
+      setVideoModelMismatch(preferred)
+    } else {
+      setVideoModelMismatch('')
+    }
+    const fallback = availableModels[0]?.key || ''
+    setSelectedConstraintVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : fallback))
+    setSelectedGenerationVideoModel((prev) => (prev && availableModels.some((item) => item.key === prev) ? prev : fallback))
+  }, [availableModels, persistedVideoModel])
+
+  useEffect(() => {
+    const persistedTextModelId = project?.text_model_id ? String(project.text_model_id) : 'default'
+    setSelectedTextModelId(persistedTextModelId)
+  }, [project?.text_model_id])
+
+  useEffect(() => {
+    const nextAspect = pickAllowedValue(aspectRatioOptions, project?.storyboard_config?.aspect_ratio)
+    setSelectedAspectRatio((prev) => (prev && aspectRatioOptions.some((item) => item.value === prev) ? prev : nextAspect))
+  }, [aspectRatioOptions, project?.storyboard_config?.aspect_ratio])
+
+  useEffect(() => {
+    const nextAspect = pickAllowedValue(step3AspectRatioOptions, project?.storyboard_config?.aspect_ratio)
+    setSelectedStep3AspectRatio((prev) => (prev && step3AspectRatioOptions.some((item) => item.value === prev) ? prev : nextAspect))
+  }, [step3AspectRatioOptions, project?.storyboard_config?.aspect_ratio])
+
+  useEffect(() => {
+    const nextResolution = pickAllowedValue(resolutionOptions, project?.storyboard_config?.resolution)
+    setSelectedResolution((prev) => (prev && resolutionOptions.some((item) => item.value === prev) ? prev : nextResolution))
+  }, [resolutionOptions, project?.storyboard_config?.resolution])
+
+  useEffect(() => {
+    const nextResolution = pickAllowedValue(step3ResolutionOptions, project?.storyboard_config?.resolution)
+    setSelectedStep3Resolution((prev) => (prev && step3ResolutionOptions.some((item) => item.value === prev) ? prev : nextResolution))
+  }, [step3ResolutionOptions, project?.storyboard_config?.resolution])
+
+  useEffect(() => {
+    const nextDuration = pickAllowedValue(durationOptions, persistedDuration, false)
+    setSelectedDuration((prev) => {
+      if (prev && (durationOptions.some((item) => item.value === prev) || prev === persistedDuration)) return prev
+      return nextDuration
+    })
+  }, [durationOptions, persistedDuration])
+
+  useEffect(() => {
+    const nextDuration = pickAllowedValue(step3DurationOptions, persistedDuration, false)
+    setSelectedStep3Duration((prev) => {
+      if (prev && (step3DurationOptions.some((item) => item.value === prev) || prev === persistedDuration)) return prev
+      return nextDuration
+    })
+  }, [step3DurationOptions, persistedDuration])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) return
+    if ((step3UsesVeoReferenceImages || step3UsesVeoLastFrame || selectedStep3Resolution === '1080p' || selectedStep3Resolution === '4k') && selectedStep3Duration && selectedStep3Duration !== '8') {
+      setSelectedStep3Duration('8')
+    }
+  }, [selectedModelSupportsVeoNativeControls, step3UsesVeoReferenceImages, step3UsesVeoLastFrame, selectedStep3Resolution, selectedStep3Duration])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) return
+    setSelectedStep3VeoPersonGeneration((prev) => prev || step3VeoPersonGenerationOptions[0]?.value || 'allow_adult')
+  }, [selectedModelSupportsVeoNativeControls, step3VeoPersonGenerationOptions])
+
+  useEffect(() => {
+    if (!selectedModelSupportsVeoNativeControls) {
+      setSelectedStep3VeoUseReferenceImages(false)
+      setSelectedStep3VeoUseLastFrame(false)
+    }
+  }, [selectedModelSupportsVeoNativeControls])
+
+  useEffect(() => {
+    if (selectedStep3VeoUseReferenceImages && step3VeoReferenceImages.length === 0) {
+      setSelectedStep3VeoUseReferenceImages(false)
+    }
+  }, [selectedStep3VeoUseReferenceImages, step3VeoReferenceImages])
+
+  useEffect(() => {
+    if (selectedStep3VeoUseLastFrame && !step3VeoLastFrameImageUrl) {
+      setSelectedStep3VeoUseLastFrame(false)
+    }
+  }, [selectedStep3VeoUseLastFrame, step3VeoLastFrameImageUrl])
+
+  useEffect(() => {
+    const persisted = String(project?.storyboard_config?.speech_pace || '').trim() as SpeechPaceOption | ''
+    if (persisted && SPEECH_PACE_OPTIONS.some((item) => item.value === persisted)) {
+      setSelectedSpeechPace(persisted)
+      return
+    }
+    setSelectedSpeechPace('normal')
+  }, [project?.storyboard_config?.speech_pace])
+
+  useEffect(() => {
+    setSelectedGenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
+  }, [project?.storyboard_config?.generate_audio])
+
+  useEffect(() => {
+    setSelectedStep3GenerateAudio(Boolean(project?.storyboard_config?.generate_audio))
+  }, [project?.storyboard_config?.generate_audio])
+
+  const refreshAll = async () => {
+    await Promise.all([mutateProject(), mutateEpisodes(), mutateStoryboards(), mutateTasks(), mutateLatestTaskDetail(), mutateAssets(), mutateAdCopyState()])
+  }
+
+  const acquireActionLock = (action: string) => {
+    if (actionLocksRef.current.has(action)) return false
+    actionLocksRef.current.add(action)
+    return true
+  }
+
+  const releaseActionLock = (action: string) => {
+    actionLocksRef.current.delete(action)
+  }
+
+  const runScopedAction = async (action: string, runner: () => Promise<unknown>, successTitle: string) => {
+    if (!acquireActionLock(action)) {
+      toast({ title: '当前操作正在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+    setGenerationAction(action)
+    try {
+      await runner()
+      await refreshAll()
+      toast({ title: successTitle, variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '操作失败', variant: 'destructive' })
+    } finally {
+      setGenerationAction(null)
+      releaseActionLock(action)
+    }
+  }
+
+  const saveAdCopyDraft = async () => {
+    setSavingCopyDraft(true)
+    try {
+      const res = await projectAPI.saveAdCopyDraft(projectId, {
+        original_script: editableOriginalScript.trim(),
+        optimization_prompt: editableOptimizationPrompt.trim(),
+        optimized_script: editableOptimizedScript.trim(),
+        persist_original: true,
+      })
+      const payload = unwrap<AdCopyOptimizationState>((res as { data?: unknown }).data)
+      if (payload) {
+        setEditableOriginalScript(payload.original_script || '')
+        setEditableOptimizationPrompt(payload.optimization_prompt || '')
+        setEditableOptimizedScript(payload.optimized_script || '')
+      }
+      await refreshAll()
+      toast({ title: '已保存当前文案工作区', variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '保存文案失败', variant: 'destructive' })
+    } finally {
+      setSavingCopyDraft(false)
+    }
+  }
+
+  const optimizeAdCopy = async () => {
+    const originalScript = editableOriginalScript.trim()
+    const optimizationPrompt = editableOptimizationPrompt.trim()
+    if (!originalScript) {
+      toast({ title: '请先填写原文，再开始优化', variant: 'destructive' })
+      return
+    }
+    if (!optimizationPrompt) {
+      toast({ title: '请先填写文案优化提示词', variant: 'destructive' })
+      return
+    }
+    setOptimizingCopy(true)
+    try {
+      await storyboardAPI.updateConfig(projectId, {
+        ad_copy_optimization_prompt: optimizationPrompt,
+      })
+      await projectAPI.optimizeAdCopy(projectId, {
+        original_script: originalScript,
+        optimization_prompt: optimizationPrompt,
+        persist_original: true,
+      })
+      setAdCopyOptimizationPending(true)
+      await refreshAll()
+      toast({ title: displayedOptimizedScript ? '已启动重新优化，结果会自动回填' : '已启动文案优化，结果会自动回填', variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '文案优化失败', variant: 'destructive' })
+    } finally {
+      setOptimizingCopy(false)
+    }
+  }
+
+  const rerunStoryboardPipeline = async () => {
+    if (!acquireActionLock('pipeline')) {
+      toast({ title: '步骤 1 已在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+
+    const scriptText = editableOriginalScript.trim()
+    if (!scriptText) {
+      toast({ title: '请先保留一版可用的原文，再开始按文本模型重拆分', variant: 'destructive' })
+      releaseActionLock('pipeline')
+      return
+    }
+    if (!splitConfigReady) {
+      toast({ title: '当前模型没有完整声明 aspect_ratio / resolution / duration，不能启动这条广告流水线', variant: 'destructive' })
+      releaseActionLock('pipeline')
+      return
+    }
+    if (project?.status === 'script_processing' || project?.progress?.stage === 'episode_splitting') {
+      toast({ title: '当前项目仍在拆分中，请等本轮完成后再重跑，避免再次触发 409', variant: 'destructive' })
+      releaseActionLock('pipeline')
+      return
+    }
+
+    setRerunAction('pipeline')
+    try {
+      await projectAPI.update(projectId, {
+        text_model_id: selectedTextModelId === 'default' ? undefined : Number(selectedTextModelId),
+      })
+      await storyboardAPI.updateConfig(projectId, {
+        video_model: effectiveConstraintVideoModel,
+        aspect_ratio: selectedAspectRatio,
+        resolution: selectedResolution,
+        duration: Number(selectedDuration),
+        speech_pace: selectedSpeechPace,
+        auto_split_after_optimization: true,
+        generate_audio: Boolean(selectedModelMeta?.native_audio && selectedGenerateAudio),
+      })
+
+      const filenameBase = (project?.title || `ad-project-${projectId}`).trim() || `ad-project-${projectId}`
+      const file = new File([scriptText], `${filenameBase}-pipeline.txt`, { type: 'text/plain' })
+      await projectAPI.uploadScript(projectId, file)
+      await projectAPI.generateEpisodes(projectId, undefined, { rebuild: true, autoStoryboard: true })
+      await refreshAll()
+      toast({
+        title: `已按当前文本模型、${selectedSpeechPaceMeta.label}语速，并参考所选视频时长约束，重跑“文本拆分 → 分镜文本”`,
+        variant: 'success',
+      })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '重跑拆分失败', variant: 'destructive' })
+    } finally {
+      setRerunAction(null)
+      releaseActionLock('pipeline')
+    }
+  }
+
+  const triggerAssetExtraction = async () => {
+    await runScopedAction('asset-all', () => assetAPI.extract(projectId), '已为整条广告生成可上传的人物 / 素材槽位')
+  }
+
+  const triggerStoryboardImageGeneration = async () => {
+    if (scopeAssets.length === 0) {
+      toast({ title: '当前范围还没有人物 / 素材槽位，请先点击“准备人物槽位”', variant: 'destructive' })
+      return
+    }
+    if (scopeStoryboards.length === 0) {
+      toast({ title: '当前范围还没有分镜文本，请先完成步骤 1', variant: 'destructive' })
+      return
+    }
+    await runScopedAction(
+      'storyboard-image-all',
+      () => storyboardAPI.generateAll(projectId, undefined, selectedStoryboardImageModel || undefined),
+      `已开始按当前范围批量生成分镜图，供步骤 3 作为首尾帧使用`,
+    )
+  }
+
+  const regenerateSingleAssetImage = async (assetId: number, assetName: string) => {
+    const action = `asset-regenerate-${assetId}`
+    await runScopedAction(
+      action,
+      () => assetAPI.retry(projectId, assetId),
+      `已重新提交参考图槽位「${assetName || `#${assetId}`}」的生成`,
+    )
+  }
+
+  const handleAssetUpload = async (assetId: number, event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setUploadingAssetId(assetId)
+    try {
+      await assetAPI.upload(projectId, assetId, file)
+      await refreshAll()
+      toast({ title: `素材 #${assetId} 上传完成`, variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '上传人物图失败', variant: 'destructive' })
+    } finally {
+      setUploadingAssetId(null)
+    }
+  }
+
+  const saveFirstFrameIdentityReview = async (status: 'approved' | 'rejected') => {
+    const note = status === 'approved'
+      ? '首镜角色已人工确认正确'
+      : '首镜角色与当前上传角色不一致，需重做'
+    await storyboardAPI.updateConfig(projectId, {
+      first_frame_identity_review_status: status,
+      first_frame_identity_reviewed_at: new Date().toISOString(),
+      first_frame_identity_review_note: note,
+      approved_first_frame_image_url: status === 'approved' ? String(firstStoryboard?.image_url || '').trim() : '',
+      character_consistency_enabled: true,
+      require_same_character: true,
+      character_anchor_asset_id: characterAnchorAsset?.id,
+      character_anchor_image_url: String(characterAnchorAsset?.image_url || '').trim() || undefined,
+      character_anchor_source: characterAnchorSource,
+    })
+    await mutateProject()
+  }
+
+  const clearFirstFrameIdentityReview = async () => {
+    await storyboardAPI.updateConfig(projectId, {
+      first_frame_identity_review_status: 'unreviewed',
+      first_frame_identity_reviewed_at: new Date().toISOString(),
+      first_frame_identity_review_note: '角色图/首镜已变化，需重新确认',
+      approved_first_frame_image_url: '',
+      character_consistency_enabled: true,
+      require_same_character: true,
+      character_anchor_asset_id: characterAnchorAsset?.id,
+      character_anchor_image_url: String(characterAnchorAsset?.image_url || '').trim() || undefined,
+      character_anchor_source: characterAnchorSource,
+    })
+    await mutateProject()
+  }
+
+  const handleFirstStoryboardUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !firstStoryboard) return
+
+    setUploadingAssetId(firstStoryboard.id)
+    try {
+      const uploadRes = await storageAPI.upload(projectId, file, {
+        bucket: 'images',
+        category: 'ad-video-step2-first-storyboard',
+      }) as { data?: { cdn_url?: string } }
+      const uploadedUrl = String(uploadRes?.data?.cdn_url || '').trim()
+      if (!uploadedUrl) throw new Error('首张分镜图上传成功，但未获取到可用链接')
+      const updateRes = await storyboardAPI.update(projectId, firstStoryboard.id, { image_url: uploadedUrl }) as { data?: Storyboard }
+      let persistedUrl = String(updateRes?.data?.image_url || '').trim()
+      if (!persistedUrl) {
+        const verifyRes = await storyboardAPI.get(projectId, firstStoryboard.id) as { data?: Storyboard }
+        persistedUrl = String(verifyRes?.data?.image_url || '').trim()
+      }
+      if (!persistedUrl) {
+        throw new Error('首张分镜图已上传，但写回分镜记录失败，请重试')
+      }
+      await mutateStoryboards((current) => {
+        const items = Array.isArray(current) ? current : []
+        return items.map((storyboard) => (
+          storyboard.id === firstStoryboard.id
+            ? {
+                ...storyboard,
+                image_url: persistedUrl,
+                status: 'completed',
+                error_msg: '',
+              }
+            : storyboard
+        ))
+      }, false)
+      await clearFirstFrameIdentityReview()
+      await refreshAll()
+      toast({ title: `分镜 #${firstStoryboard.sequence_number} 首图上传完成，已重置首镜角色确认`, variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '上传首张分镜图失败', variant: 'destructive' })
+    } finally {
+      setUploadingAssetId(null)
+    }
+  }
+
+  const handleCharacterAssetUpload = async (asset: Asset, event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setUploadingAssetId(asset.id)
+    try {
+      await assetAPI.upload(projectId, asset.id, file)
+      await clearFirstFrameIdentityReview()
+      await refreshAll()
+      toast({ title: `人物素材「${asset.name || `#${asset.id}`}」上传完成，已重置首镜角色确认`, variant: 'success' })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '上传人物图失败', variant: 'destructive' })
+    } finally {
+      setUploadingAssetId(null)
+    }
+  }
+
+  const toggleStoryboardCharacterBinding = async (storyboard: Storyboard, asset: Asset) => {
+    const currentIds = Array.isArray(storyboard.asset_ids) ? storyboard.asset_ids : []
+    const alreadyBound = currentIds.includes(asset.id)
+    if (alreadyBound) {
+      setFocusedStoryboardId(storyboard.id)
+      setFocusedAssetId(asset.id)
+      toast({ title: `分镜 #${storyboard.sequence_number} 已绑定人物「${asset.name || `#${asset.id}`}」`, variant: 'success' })
+      return
+    }
+    const nextIds = Array.from(new Set([...currentIds, asset.id]))
+
+    setBindingStoryboardId(storyboard.id)
+    setFocusedStoryboardId(storyboard.id)
+    setFocusedAssetId(asset.id)
+    try {
+      await storyboardAPI.update(projectId, storyboard.id, { asset_ids: nextIds })
+      await mutateStoryboards((current) => {
+        const items = Array.isArray(current) ? current : []
+        return items.map((item) => (
+          item.id === storyboard.id
+            ? { ...item, asset_ids: nextIds }
+            : item
+        ))
+      }, false)
+      await refreshAll()
+      toast({
+        title: `已将人物「${asset.name || `#${asset.id}`}」绑定到分镜 #${storyboard.sequence_number}`,
+        variant: 'success',
+      })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '更新分镜人物绑定失败', variant: 'destructive' })
+    } finally {
+      setBindingStoryboardId(null)
+    }
+  }
+
+  const startScopedVideoGeneration = async () => {
+    if (!acquireActionLock('video-start')) {
+      toast({ title: '步骤 3 已在进行中，请勿重复点击', variant: 'destructive' })
+      return
+    }
+
+    if (latestTask && String(latestTask.status || '').toLowerCase() === 'paused') {
+      setGenerationAction('video-start')
+      try {
+        await videoAPI.resume(projectId, latestTask.id)
+        await refreshAll()
+        await mutateLatestTaskDetail()
+        toast({ title: '已从上一步暂停处继续未完成的视频任务', variant: 'success' })
+      } catch (error) {
+        toast({ title: error instanceof Error ? error.message : '继续未完成视频任务失败', variant: 'destructive' })
+      } finally {
+        setGenerationAction(null)
+        releaseActionLock('video-start')
+      }
+      return
+    }
+
+    const isSerialMode = selectedStep3ExecutionMode === 'serial'
+
+    if (!isSerialMode && !allStoryboardFramesReady) {
+      toast({ title: `请先在步骤 2 把首尾帧分镜图补齐，当前仅完成 ${completedStoryboardImages} / ${displayStoryboards.length}`, variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!allCharacterStoryboardsBound) {
+      toast({ title: '请先在步骤 2 补齐含人物分镜的角色绑定，再进入步骤 3', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!firstStoryboardImageReady) {
+      toast({ title: '请先准备首镜图，再进入步骤 3', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!firstFrameIdentityApproved) {
+      toast({ title: '请先在步骤 2 确认首镜人物就是当前上传角色本人', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    if (!step3ConfigReady) {
+      toast({ title: '步骤 3 当前模型没有完整声明 aspect_ratio / resolution / duration，不能直接提交视频生成', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    const storyboardPool = scopeStoryboards
+      .slice()
+      .sort((a, b) => a.sequence_number - b.sequence_number)
+
+    if (storyboardPool.length === 0) {
+      toast({ title: '当前范围还没有分镜文本，请先完成步骤 1', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+    if (!isSerialMode && !storyboardPool.every((item) => String(item.image_url || '').trim())) {
+      toast({ title: '当前范围还有分镜图未生成完成，请先回步骤 2 补齐全部首尾帧分镜图', variant: 'destructive' })
+      releaseActionLock('video-start')
+      return
+    }
+
+    const stylePreset = project?.storyboard_config?.style_preset || autoSplit?.style_preset || undefined
+    const motionMode = project?.storyboard_config?.motion_mode || undefined
+    const clipDuration = Number(selectedStep3Duration || project?.storyboard_config?.duration || 0) || undefined
+    const veoSeedValue = Number(selectedStep3VeoSeed)
+
+    setGenerationAction('video-start')
+    try {
+      const payload = buildEpisodeVideoPayload(storyboardPool, undefined, {
+        serialScene: isSerialMode,
+        isCommentary: project ? detectCommentaryProject(project) : false,
+        project: project ?? undefined,
+      })
+      const renderConfigBase: Record<string, unknown> = {
+        aspect_ratio: selectedStep3AspectRatio,
+        resolution: selectedStep3Resolution,
+        generate_audio: selectedModelMeta?.native_audio ? selectedStep3GenerateAudio : undefined,
+        ad_execution_mode: selectedStep3ExecutionMode,
+      }
+      if (selectedModelSupportsVeoNativeControls) {
+        renderConfigBase.veo_person_generation = selectedStep3VeoPersonGeneration || undefined
+        renderConfigBase.veo_number_of_videos = 1
+        if (Number.isFinite(veoSeedValue) && veoSeedValue >= 0) {
+          renderConfigBase.veo_seed = veoSeedValue
+        }
+        if (step3UsesVeoReferenceImages) {
+          renderConfigBase.veo_reference_images = step3VeoReferenceImages
+        }
+        if (step3UsesVeoLastFrame) {
+          renderConfigBase.veo_last_frame_image_url = step3VeoLastFrameImageUrl
+        }
+      }
+      const renderConfig = applyStep3SafetySoftening(renderConfigBase, payload)
+      renderConfig.character_consistency_enabled = true
+      renderConfig.require_same_character = true
+      renderConfig.character_anchor_asset_id = characterAnchorAsset?.id
+      renderConfig.character_anchor_image_url = characterAnchorImageUrl || undefined
+      renderConfig.character_anchor_source = characterAnchorSource
+      renderConfig.identity_constraints = CHARACTER_IDENTITY_CONSTRAINTS
+      renderConfig.same_character_as_first_scene = true
+      renderConfig.approved_first_frame_image_url = String(project?.storyboard_config?.approved_first_frame_image_url || firstStoryboard?.image_url || '').trim() || undefined
+      await videoAPI.generate(projectId, {
+        image_urls: payload.image_urls,
+        scene_descriptions: payload.scene_descriptions,
+        dialogues: payload.dialogues,
+        durations: payload.durations,
+        camera_movements: payload.camera_movements,
+        moods: payload.moods,
+        spatial_anchors: payload.spatial_anchors,
+        subject_positions: payload.subject_positions,
+        transition_notes: payload.transition_notes,
+        scene_characters: payload.scene_characters,
+        scene_asset_ids: payload.scene_asset_ids,
+        scene_description: payload.scene_description,
+        scene_group_keys: payload.scene_group_keys,
+        character_consistency_enabled: true,
+        require_same_character: true,
+        character_anchor_asset_id: characterAnchorAsset?.id,
+        character_anchor_image_url: characterAnchorImageUrl || undefined,
+        character_anchor_source: characterAnchorSource,
+        identity_constraints: CHARACTER_IDENTITY_CONSTRAINTS,
+        same_character_as_first_scene: true,
+        model_name: effectiveSelectedVideoModel,
+        style_preset: stylePreset,
+        motion_mode: motionMode,
+        video_mode: project?.video_mode,
+        clip_duration_sec: clipDuration,
+        render_config: renderConfig,
+        serial_scene: isSerialMode,
+      })
+
+      await refreshAll()
+      toast({
+        title: '已启动整条广告的视频生成',
+        variant: 'success',
+      })
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '视频生成失败', variant: 'destructive' })
+    } finally {
+      setGenerationAction(null)
+      releaseActionLock('video-start')
+    }
+  }
+
+  const scopeLabel = '整条广告（不分集）'
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-white">广告项目详情 / 流水式作业</h1>
+          <p className="mt-2 text-sm text-slate-300">
+            这里不再堆散按钮。主流程固定为：先按目标视频配置拆分文本，再上传人物图/素材图，最后基于已完成分镜图启动视频生成。
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { void refreshAll() }}>立即刷新</Button>
+          <Button variant="outline" asChild><Link href="/ad-video/history">返回广告历史</Link></Button>
+          <Button variant="outline" asChild><Link href="/ad-video">返回工作台</Link></Button>
+        </div>
+      </div>
+
+      {isLoading || !project ? (
+        <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+          <CardContent className="p-6 text-sm text-slate-300">正在加载广告详情…</CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+            <CardHeader>
+              <CardTitle>广告详情内容</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Tabs defaultValue="copy" className="space-y-4">
+                <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-black/20 p-1 text-slate-300">
+                  <TabsTrigger value="copy">文案</TabsTrigger>
+                  <TabsTrigger value="storyboard">分镜</TabsTrigger>
+                  <TabsTrigger value="video">视频</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="copy" className="space-y-4">
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-cyan-100">文案优化提示词</div>
+                        <div className="mt-1 text-xs text-cyan-100/80">这里展示并编辑当前广告项目真实使用的优化提示词。前一步的目标不是泛化润色，而是把项目文案优化成更适合后续“按台词 / 口播为主进行拆分”的基准稿。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" onClick={() => { void saveAdCopyDraft() }} disabled={savingCopyDraft || optimizingCopy || adCopyOptimizationPending || pipelineBusy}>
+                          {savingCopyDraft ? '保存中…' : '保存原文 / 文案'}
+                        </Button>
+                        <Button onClick={() => { void optimizeAdCopy() }} disabled={optimizingCopy || adCopyOptimizationPending || savingCopyDraft || pipelineBusy}>
+                          {optimizingCopy ? '提交中…' : adCopyOptimizationPending ? '优化进行中…' : displayedOptimizedScript ? '重新优化' : '开始优化'}
+                        </Button>
+                      </div>
+                    </div>
+                    <Textarea
+                      value={editableOptimizationPrompt}
+                      onChange={(e) => setEditableOptimizationPrompt(e.target.value)}
+                      className="min-h-[180px] border-cyan-500/20 bg-black/20 text-slate-100 caret-cyan-300"
+                      placeholder="请输入文案优化提示词。"
+                    />
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-white">优化后的文案</div>
+                          <div className="mt-1 text-[11px] text-emerald-200/75">这里固定放真正的优化稿，真实来源仍是 `project.progress.auto_split.optimized_script`。</div>
+                        </div>
+                        <div className="text-[11px] text-emerald-200/75">{displayedOptimizedScript.length} 字</div>
+                      </div>
+                      {displayedOptimizedScript ? (
+                        <Textarea
+                          value={editableOptimizedScript}
+                          onChange={(e) => setEditableOptimizedScript(e.target.value)}
+                          className="min-h-[520px] border-emerald-500/20 bg-black/20 text-slate-100 caret-emerald-300"
+                          placeholder="这里保留当前要进入流水线的广告文案。"
+                        />
+                      ) : (
+                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+                          当前项目还没有真正优化后的文案。请先填写左侧原文和上方提示词，再点击“开始优化”。
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-white">原文</div>
+                          <div className="mt-1 text-[11px] text-slate-400">这里支持直接修改原文；点击上方“保存原文 / 文案”后会真实保存。下次点击“开始优化 / 重新优化”会以这里的当前文本为准。</div>
+                        </div>
+                        <div className="text-[11px] text-slate-500">{editableOriginalScript.trim().length || realOriginalScript.length} 字</div>
+                      </div>
+                      <Textarea
+                        value={editableOriginalScript}
+                        onChange={(e) => setEditableOriginalScript(e.target.value)}
+                        className="min-h-[520px] border-white/10 bg-black/20 text-slate-100 caret-cyan-300"
+                        placeholder="请输入或调整当前原文。"
+                      />
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="storyboard" className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-white">当前范围分镜</div>
+                      <div className="text-[11px] text-slate-400">当前范围：{scopeLabel}{step1Running && scopeStoryboards.length === 0 && previousStoryboardsRef.current.length > 0 ? ' · 正在重建，先显示上一版' : ''}</div>
+                    </div>
+                  </div>
+
+                  {displayStoryboards.length === 0 ? (
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-300">{step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前还没有分镜记录。'}</div>
+                  ) : displayStoryboards.map((storyboard, index) => (
+                    <div key={storyboard.id} className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="text-sm text-slate-100">分镜 #{storyboard.sequence_number} · {storyboard.status || '-'} · episode {storyboard.episode_id || '-'}</div>
+                        <div className="text-[11px] text-slate-400">引用素材：{storyboard.asset_ids?.length || 0}</div>
+                      </div>
+                      {index === 0 && String(storyboard.image_url || '').trim() && (
+                        <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={storyboard.image_url} alt={`storyboard-${storyboard.id}`} className="max-h-64 w-full object-cover" />
+                        </div>
+                      )}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium text-violet-200">台词 / 口播</div>
+                            <div className="text-[11px] text-violet-200/75">目标时长：{storyboard.duration || '-'} 秒</div>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                        </div>
+                        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-xs font-medium text-cyan-200">场景描述</div>
+                            <div className={`rounded-full border px-2 py-0.5 text-[10px] ${index === 0 ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'}`}>
+                              {index === 0 ? '首镜基准图' : '参与首尾帧预生成'}
+                            </div>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words text-sm text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                        </div>
+                      </div>
+                      <div className="grid gap-2 text-xs text-slate-400 md:grid-cols-4">
+                        <div>location：{storyboard.location || '-'}</div>
+                        <div>camera：{storyboard.camera_movement || '-'}</div>
+                        <div>asset_ids：{storyboard.asset_ids?.length ? storyboard.asset_ids.join(', ') : '-'}</div>
+                        <div>状态：{storyboard.status || '-'}</div>
+                      </div>
+                    </div>
+                  ))}
+                </TabsContent>
+
+                <TabsContent value="video" className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                    <div className="text-sm font-medium text-white">视频任务 / 完整视频</div>
+
+                    {tasks.length === 0 ? (
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-300">当前还没有视频任务记录。</div>
+                    ) : tasks.slice().sort((a, b) => Number(b.id) - Number(a.id)).map((task) => (
+                      <div key={task.id} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-sm text-slate-200">
+                        <div>task #{task.id} · {task.status || '-'} · actual {task.effective_model || task.model_name || '-'} · {task.created_at || '-'}</div>
+                        <div className="mt-1 text-xs text-slate-400">requested_alias: {task.requested_model || task.model_name || '-'} · runtime_provider: {task.runtime_provider || '-'}</div>
+                        {task.error_msg && <div className="mt-2 text-rose-300">错误：{task.error_msg}</div>}
+                        {humanizeVideoTaskError(task) && <div className="mt-1 text-amber-200/90">提示：{humanizeVideoTaskError(task)}</div>}
+                        {taskResultUrl(task) && <div className="mt-2 break-all"><a className="text-cyan-300 underline" href={taskResultUrl(task)} target="_blank" rel="noreferrer">打开结果视频</a></div>}
+                      </div>
+                    ))}
+
+                    {resultUrl && (
+                      <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30 p-3">
+                        <div className="mb-2 text-xs text-slate-400">最新完整视频预览</div>
+                        <video className="max-h-[420px] w-full rounded-lg bg-black" controls preload="metadata" src={resultUrl} />
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-slate-900/60 text-slate-100">
+            <CardHeader>
+              <CardTitle>广告流水线</CardTitle>
+              <CardDescription className="text-slate-400">顺序固定：1）文本拆分 → 2）人物图 / 分镜图准备 → 3）视频生成。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-3">
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step1') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step1Status)} ${activePipelineStep === 'step1' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 1</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step1Status)}</div>
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-white">按台词时长重拆分文本</div>
+                  <div className="mt-2 text-xs text-current/80">先确定视频模型、单分镜时长与语速，再按台词 / 口播承载量重跑整条广告文案；比例和分辨率用于同步约束构图与画面复杂度。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step1' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step2') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step2Status)} ${activePipelineStep === 'step2' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 2</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step2Status)}</div>
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-white">上传人物图并预生成首尾帧分镜图</div>
+                  <div className="mt-2 text-xs text-current/80">先准备人物 / 素材槽位，再为含人物分镜补齐角色绑定，最后批量生成整条广告的视频首尾帧分镜图。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step2' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
+                <button type="button" onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step3') }} className={`rounded-xl border p-4 text-left transition ${stepTone(step3Status)} ${activePipelineStep === 'step3' ? 'ring-2 ring-white/30' : 'hover:bg-white/5'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium">步骤 3</div>
+                    <div className="rounded-full border border-current/20 px-2 py-0.5 text-[10px]">{stepLabel(step3Status)}</div>
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-white">开始生成视频</div>
+                  <div className="mt-2 text-xs text-current/80">串行并不代表跳过分镜图准备。它的区别只是后续视频按顺序链式衔接，但提交前仍要先把分镜锚点图准备完整。</div>
+                  <div className="mt-3 text-[11px] text-current/80">{activePipelineStep === 'step3' ? '当前已展开' : '点击查看这一步的详细操作'}</div>
+                </button>
+              </div>
+
+              <div className="grid gap-4">
+                {activePipelineStep === 'step1' && (
+                  <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-4">
+                  <div>
+                    <div className="text-sm font-medium text-cyan-100">步骤 1：按文本模型重跑“文本 → 分镜文本”</div>
+                    <div className="mt-1 text-xs text-cyan-100/80">这里用文本模型完成广告文案优化与整条广告分镜拆分；下方视频模型只用于提供单分镜时长和后续视频能力约束，不是文本拆分模型。</div>
+                    {step1Running && (
+                      <div className="mt-2 inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-100">
+                        当前进行中：正在用文本模型重跑文本拆分 / 自动分镜，请勿重复点击
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="space-y-2 xl:col-span-2">
+                      <Label className="text-slate-100">文本模型（步骤 1 实际使用）</Label>
+                      <select
+                        value={selectedTextModelId}
+                        onChange={(e) => setSelectedTextModelId(e.target.value)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        <option value="default">系统默认</option>
+                        {textModelOptions.map((item) => (
+                          <option key={item.id} value={String(item.id)}>{item.label}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">这里选择的是步骤 1 文案优化 / 台词拆分实际使用的文本模型。默认回填创建项目时选中的文本模型；重跑前会先写回项目。</div>
+                      <div className="text-[11px] text-cyan-100/65">当前项目已保存的文本模型 ID：{project?.text_model_id ? String(project.text_model_id) : '未设置'}；当前下拉值：{selectedTextModelId || '空'}</div>
+                    </div>
+
+                    <div className="space-y-2 xl:col-span-2">
+                      <Label className="text-slate-100">约束模型（仅用于步骤 1 时长/能力约束）</Label>
+                      <select
+                        value={effectiveConstraintVideoModel}
+                        onChange={(e) => setSelectedConstraintVideoModel(e.target.value)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        <option value="">请选择模型</option>
+                        {availableModels.map((item) => (
+                          <option key={item.key} value={item.key}>{formatVideoModelLabel(item, item.key)}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">画面比例</Label>
+                      <select
+                        value={selectedAspectRatio}
+                        onChange={(e) => setSelectedAspectRatio(e.target.value)}
+                        disabled={aspectRatioOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择比例</option>
+                        {aspectRatioOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">画面比例不只是输出参数，也会参与步骤 1 的构图约束：它会影响主体排布、左右留白、景别选择和空间层次。</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">分辨率</Label>
+                      <select
+                        value={selectedResolution}
+                        onChange={(e) => setSelectedResolution(e.target.value)}
+                        disabled={resolutionOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择分辨率</option>
+                        {resolutionOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">分辨率会影响单镜细节密度。分辨率较低时，步骤 1 会倾向减少同镜头里的小字、复杂背景和过多主体，优先保证卖点清晰。</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">单分镜时长</Label>
+                      <select
+                        value={selectedDuration}
+                        onChange={(e) => setSelectedDuration(e.target.value)}
+                        disabled={durationOptions.length === 0}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">请选择时长</option>
+                        {durationOptions.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label || item.value}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">单分镜时长会直接约束单镜可承载的台词 / 口播长度；步骤 1 会优先按台词承载量判断该合并还是继续拆分，再补足动作与画面。</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">10 秒语速档位</Label>
+                      <select
+                        value={selectedSpeechPace}
+                        onChange={(e) => setSelectedSpeechPace(e.target.value as SpeechPaceOption)}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900"
+                      >
+                        {SPEECH_PACE_OPTIONS.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">按 10 秒口播承载量控制步骤 1 的拆分密度，防止分镜拆分不够。当前说明：{selectedSpeechPaceMeta.hint}</div>
+                    </div>
+                  </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-slate-100">语音输出</Label>
+                      <select
+                        value={selectedModelMeta?.native_audio ? (selectedGenerateAudio ? 'enabled' : 'disabled') : 'unsupported'}
+                        onChange={(e) => setSelectedGenerateAudio(e.target.value === 'enabled')}
+                        disabled={!selectedModelMeta?.native_audio}
+                        className="flex h-10 w-full rounded-xl border border-surface-200 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {selectedModelMeta?.native_audio ? (
+                          <>
+                            <option value="disabled">不生成语音</option>
+                            <option value="enabled">生成语音（原生）</option>
+                          </>
+                        ) : (
+                          <option value="unsupported">当前模型不支持语音</option>
+                        )}
+                      </select>
+                      <div className="text-[11px] text-cyan-100/75">
+                        {selectedModelMeta?.native_audio ? '当前模型已声明 native_audio，可选择是否继续透传原生语音能力。' : '当前模型未声明 native_audio，因此这里不可开启语音。'}
+                      </div>
+                    </div>
+
+                  {videoModelMismatch && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      当前项目创建时保存的视频模型 key 是 `{videoModelMismatch}`，但它不在当前 `/api/v1/videos/model-status` 的可用列表里；页面已临时回退到 `{selectedConstraintModelLabel || selectedGenerationModelLabel || '未选择'}` 这个展示模型。请确认运行态模型配置是否变更。
+                    </div>
+                  )}
+
+                  {!splitConfigReady && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      当前模型必须同时声明 aspect_ratio / resolution / duration，才能进入这条广告流水线。
+                    </div>
+                  )}
+
+                  {durationMismatch && (
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100">
+                      当前项目创建时保存的单分镜时长是 `{persistedDuration}` 秒，但它不在当前模型声明的时长列表里；页面会优先保留项目持久化值，不再静默回退成默认的 5 秒。请确认运行态模型参数是否变更。
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label className="text-slate-100">分镜拆分提示词</Label>
+                      <span className="text-[11px] text-cyan-100/75">就在开始步骤 1 之前修改；保存后会在下次重跑时生效</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-medium text-cyan-100/85">步骤 1 内置分镜拆分规则（只读）</div>
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-[11px] text-cyan-50 whitespace-pre-wrap break-words">{storyboardSplitBuiltinPrompt}</div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[11px] font-medium text-slate-200">项目级补充规则（可编辑）</div>
+                        <span className="text-[11px] text-slate-400">只保存你额外追加的规则，不覆盖系统底座</span>
+                      </div>
+                      <Textarea
+                        value={editableStoryboardSplitPrompt}
+                        onChange={(event) => setEditableStoryboardSplitPrompt(event.target.value)}
+                        className="min-h-[180px] border-white/10 bg-black/20 text-slate-100"
+                        placeholder="这里填写项目级台词拆分 / 分镜补充规则，例如：同一段口播尽量合并、以台词句群为主切分、无台词镜头比例要低、产品卖点优先由主讲镜头承载。"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-medium text-emerald-100/85">本次实际生效预览</div>
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-[11px] text-emerald-50 whitespace-pre-wrap break-words">{storyboardSplitPromptPreview}</div>
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-slate-300">
+                      {adCopyState?.storyboard_split_prompt_hint || '上方已拆成两层：步骤 1 内置分镜拆分规则（只读） + 项目级补充规则（可编辑）。最下方绿色区域展示的是本次真正会生效的完整“步骤 1 分镜拆分提示词”预览。'}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      disabled={pipelineBusy || step1Running || !editableOriginalScript.trim() || !splitConfigReady}
+                      onClick={() => void rerunStoryboardPipeline()}
+                    >
+                      {step1Running ? '步骤 1 进行中…' : rerunAction === 'pipeline' ? '正在按当前配置重拆分…' : '开始步骤 1：按文本模型重拆分（参考视频时长 + 语速约束）'}
+                    </Button>
+                    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] text-cyan-100/80">
+                      {step1Hint}
+                    </div>
+                    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-50">
+                      提醒：步骤 1 会直接重建整条广告的分镜文本，因此请以这次回流后的全量结果为准。
+                    </div>
+                  </div>
+                  </div>
+                )}
+
+                {activePipelineStep === 'step2' && (
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-medium text-violet-100">步骤 2：人物绑定与首尾帧分镜图预生成</div>
+                      <div className="mt-1 text-xs text-violet-100/80">这一步不再只准备首镜。现在要先把角色素材绑定到对应分镜，再提前生成整条广告要用到的分镜图，供后续视频生成直接作为首尾帧参考。</div>
+                      <div className="mt-2 text-[11px] text-violet-100/75">当前模式：{step3ExecutionModeLabel}。{step2StoryboardPrepHint}</div>
+                      {step2Running && (
+                        <div className="mt-2 inline-flex rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-[11px] text-violet-100">
+                          当前进行中：正在准备素材槽位 / 上传参考图 / 补齐人物绑定 / 批量生成首尾帧分镜图，请勿重复点击
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">当前范围</div>
+                        <div className="mt-1 text-sm text-white">{scopeLabel}</div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">含人物分镜绑定</div>
+                        <div className="mt-1 text-sm text-white">{characterBoundStoryboardCount} / {storyboardsWithCharacters.length}</div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">首尾帧分镜图</div>
+                        <div className="mt-1 text-sm text-white">{completedStoryboardImages} / {displayStoryboards.length}</div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">首镜角色确认</div>
+                        <div className="mt-1 text-sm text-white">{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-violet-100/85">
+                        <div className="text-[11px] text-violet-200/70">文本检查范围</div>
+                        <div className="mt-1 text-sm text-white">共 {displayStoryboards.length} 条分镜文本</div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-white">先在步骤 2 确定视频执行方式</div>
+                          <div className="mt-1 text-[11px] text-violet-100/80">串行 / 并行会直接影响这里怎么看待和检查这批分镜图，所以前置到步骤 2。步骤 3 只读取这里的选择，不再在最后一步临时改。</div>
+                        </div>
+                        <div className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2 py-0.5 text-[11px] text-violet-100">当前：{step3ExecutionModeLabel}</div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] md:items-start">
+                        <select
+                          value={selectedStep3ExecutionMode}
+                          onChange={(e) => setSelectedStep3ExecutionMode(e.target.value === 'parallel' ? 'parallel' : 'serial')}
+                          disabled={pipelineBusy || step2Running || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-violet-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="serial">串行，按分镜顺序链式衔接</option>
+                          <option value="parallel">并行，各分镜独立生成</option>
+                        </select>
+                        <div className="rounded-lg border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-[11px] text-violet-50">
+                          <div>{step2StoryboardPrepLabel}</div>
+                          <div className="mt-1 text-violet-100/80">{step2StoryboardPrepHint}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        disabled={pipelineBusy || !step2Enabled || scopeAssets.length === 0}
+                        onClick={() => void triggerStoryboardImageGeneration()}
+                      >
+                        {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : `2）${step2StoryboardPrepLabel}`}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={!step3Enabled}
+                        onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step3') }}
+                      >
+                        去步骤 3 生成视频
+                      </Button>
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-violet-100/80">
+                      {step2Hint}
+                      {step2PendingReasons.length > 0 && (
+                        <div className="mt-2 space-y-1 text-amber-200/90">
+                          {step2PendingReasons.map((reason, index) => (
+                            <div key={`step2-pending-${index}`}>- {reason}</div>
+                          ))}
+                        </div>
+                      )}
+                      {step2Done && (
+                        <div className="mt-2 text-emerald-200/90">
+                          当前范围的人物绑定、首尾帧分镜图和首镜确认都已完成，可以直接点上方“去步骤 3 生成视频”。
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-white">Step2 主内容</div>
+                        <div className="text-[11px] text-violet-100/80">先补齐人物绑定，再把整条广告要用到的分镜图提前生成为视频首尾帧</div>
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">人物参考图与分镜绑定</div>
+                            <div className="mt-1 text-[11px] text-slate-400">先在这里上传 / 替换角色图，再把角色素材显式绑定到对应分镜。步骤 3 会优先消费这些绑定关系，并使用已生成好的分镜图做首尾帧约束。</div>
+                          </div>
+                          <div className="text-[11px] text-violet-100/80">当前角色素材：{characterAssets.length} 个</div>
+                        </div>
+
+                        {characterAssets.length > 0 && (
+                          <div className="grid gap-3 rounded-lg border border-white/10 bg-black/10 p-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                            <div className="space-y-2">
+                              <Label className="text-slate-200">本地资源库搜索（按人物名称）</Label>
+                              <Input
+                                value={characterAssetSearch}
+                                onChange={(event) => setCharacterAssetSearch(event.target.value)}
+                                placeholder="输入人物名称，例如：李恩泽"
+                                className="border-white/10 bg-slate-950/50 text-slate-100"
+                              />
+                              <div className="text-[11px] text-slate-400">这里会在当前项目的本地角色素材库里按人物名称优先搜索，也兼容描述 / ID。你也可以在下方人物卡片里一键按同名素材搜索。</div>
+                            </div>
+                            <div className="text-[11px] text-slate-400">搜索结果：{filteredCharacterAssets.length} / {characterAssets.length}</div>
+                          </div>
+                        )}
+
+                        {characterAssets.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-white/10 bg-black/10 p-4 text-sm text-slate-400">
+                            当前步骤 2 还没有角色素材。可以先点上方“准备人物 / 素材槽位”，然后回到这里上传人物图并做分镜绑定。
+                          </div>
+                        ) : filteredCharacterAssets.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-white/10 bg-black/10 p-4 text-sm text-slate-400">
+                            本地资源库里没有匹配“{characterAssetSearch.trim()}”的人物素材。可以换个名字关键词试试。
+                          </div>
+                        ) : (
+                          <div className="grid gap-3 xl:grid-cols-2">
+                            {filteredCharacterAssets.map((asset) => {
+                              const imageUrl = String(asset.image_url || '').trim()
+                              const boundStoryboards = (assetToStoryboardMap.get(asset.id) || []).slice().sort((a, b) => a.sequence_number - b.sequence_number)
+                              const isFocused = focusedAssetId === asset.id
+                              const isSelectedAnchor = characterAnchorAsset?.id === asset.id
+                              const sameNameCount = countSameNameCharacterAssets(asset.name || '')
+                              return (
+                                <div
+                                  key={`step2-character-asset-${asset.id}`}
+                                  className={`rounded-lg border p-3 space-y-3 ${isSelectedAnchor ? 'border-emerald-400/40 bg-emerald-500/10' : isFocused ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-medium text-white">人物 #{asset.id} · {asset.name || '未命名角色'}</div>
+                                      <div className="mt-1 text-[11px] text-slate-400">状态：{imageUrl ? '已上传人物图' : '待上传人物图'} · 类型：{asset.type}</div>
+                                      {asset.name ? (
+                                        <div className="mt-1 text-[11px] text-slate-400">当前库同名素材：{sameNameCount} 个</div>
+                                      ) : null}
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-8 px-2 text-[11px] text-slate-300 hover:text-white"
+                                        onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
+                                      >
+                                        {isFocused ? '取消高亮' : '高亮关联分镜'}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 px-2 text-[11px]"
+                                        disabled={!String(asset.name || '').trim()}
+                                        onClick={() => setCharacterAssetSearch(String(asset.name || '').trim())}
+                                      >
+                                        按人物名搜同库素材
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                    <span className={`rounded-full border px-2 py-0.5 ${isSelectedAnchor ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-white/10 bg-white/5 text-slate-300'}`}>
+                                      {isSelectedAnchor ? '当前主角色锚点' : '可设为主角色锚点'}
+                                    </span>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant={isSelectedAnchor ? 'secondary' : 'outline'}
+                                      className="h-8 px-2 text-[11px]"
+                                      disabled={!imageUrl}
+                                      onClick={() => setSelectedCharacterAnchorAssetId(asset.id)}
+                                    >
+                                      {isSelectedAnchor ? '当前用于步骤 3' : '设为步骤 3 主角色'}
+                                    </Button>
+                                  </div>
+
+                                  {imageUrl ? (
+                                    <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={imageUrl} alt={`character-asset-${asset.id}`} className="h-48 w-full object-cover" />
+                                    </div>
+                                  ) : (
+                                    <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-slate-500">
+                                      还没有人物参考图，请先上传。
+                                    </div>
+                                  )}
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                      {uploadingAssetId === asset.id ? '上传中…' : imageUrl ? '替换人物图' : '上传人物图'}
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        disabled={uploadingAssetId !== null || pipelineBusy || !step2Enabled}
+                                        onChange={(event) => { event.stopPropagation(); void handleCharacterAssetUpload(asset, event) }}
+                                      />
+                                    </label>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
+                                      disabled={pipelineBusy || !step2Enabled}
+                                      onClick={() => void regenerateSingleAssetImage(asset.id, asset.name || `#${asset.id}`)}
+                                    >
+                                      重新生成角色图
+                                    </Button>
+                                  </div>
+
+                                  <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-slate-300">
+                                    <div className="font-medium text-white">当前绑定分镜</div>
+                                    {boundStoryboards.length > 0 ? (
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {boundStoryboards.map((storyboard) => (
+                                          <button
+                                            key={`character-bound-storyboard-${asset.id}-${storyboard.id}`}
+                                            type="button"
+                                            className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100 transition hover:bg-cyan-500/20"
+                                            onClick={() => setFocusedStoryboardId((current) => current === storyboard.id ? null : storyboard.id)}
+                                          >
+                                            分镜 #{storyboard.sequence_number}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <div className="mt-2 text-slate-400">当前范围内还没有绑定到任何分镜。</div>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">第 1 个分镜图片</div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {firstStoryboard
+                                ? `分镜 #${firstStoryboard.sequence_number} · episode ${firstStoryboard.episode_id || '-'} · asset_ids：${firstStoryboard.asset_ids?.length ? firstStoryboard.asset_ids.join(', ') : '-'}`
+                                : '当前范围还没有分镜，先完成步骤 1'}
+                            </div>
+                            <div className="mt-2 text-[11px] text-violet-100/80">
+                              角色锚点来源：{characterAnchorSource === 'asset' ? '角色素材图' : characterAnchorSource === 'approved_first_frame' ? '已确认首镜图' : characterAnchorSource === 'storyboard_image' ? '当前首镜图' : '暂无'}
+                              {characterAnchorAsset ? ` · 人物 #${characterAnchorAsset.id} ${characterAnchorAsset.name || ''}` : ''}
+                            </div>
+                          </div>
+                          <div className={`rounded-full border px-2 py-0.5 text-[11px] ${firstStoryboardImageReady ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-violet-400/30 bg-violet-500/10 text-violet-100'}`}>
+                            {firstStoryboardImageReady ? '已准备' : '待上传 / 待生成'}
+                          </div>
+                        </div>
+
+                        {firstStoryboard ? (
+                          <>
+                            {String(firstStoryboard.image_url || '').trim() ? (
+                              <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={firstStoryboard.image_url} alt={`first-storyboard-${firstStoryboard.id}`} className="max-h-56 w-full object-cover" />
+                              </div>
+                            ) : (
+                              <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-slate-500">
+                                当前还没有第 1 张分镜图。你可以直接本地上传首镜基准图，或先用上方按钮批量生成整条广告的首尾帧分镜图。
+                              </div>
+                            )}
+
+                            {firstStoryboardAssets.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {firstStoryboardAssets.map((asset) => (
+                                  <span key={`first-storyboard-asset-${asset.id}`} className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-100">
+                                    素材 #{asset.id} · {asset.name || '未命名素材'}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-xs font-medium text-amber-100">首镜角色一致性确认</div>
+                                  <div className="mt-1 text-[11px] text-amber-100/75">首镜将作为后续角色一致性的基准。若人物不是当前上传角色本人，请不要继续进入步骤 3。</div>
+                                </div>
+                                <div className={`rounded-full border px-2 py-0.5 text-[11px] ${firstFrameIdentityApproved ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : firstFrameIdentityReviewStatus === 'rejected' ? 'border-rose-400/30 bg-rose-500/10 text-rose-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                  {firstFrameIdentityApproved ? '已确认角色正确' : firstFrameIdentityReviewStatus === 'rejected' ? '已标记需重做' : '待确认'}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="h-9 rounded-lg bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-500"
+                                  disabled={pipelineBusy || !firstStoryboardImageReady}
+                                  onClick={() => void saveFirstFrameIdentityReview('approved')}
+                                >
+                                  确认角色正确，继续
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-9 rounded-lg border-rose-400/30 bg-rose-500/10 px-3 text-xs text-rose-100 hover:bg-rose-500/20"
+                                  disabled={pipelineBusy || !firstStoryboardImageReady}
+                                  onClick={() => void saveFirstFrameIdentityReview('rejected')}
+                                >
+                                  角色不对，重新生成首镜
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                              <div className="space-y-2">
+                                <Label className="text-violet-100">首分镜图像模型</Label>
+                                <select
+                                  value={selectedStoryboardImageModel}
+                                  onChange={(e) => setSelectedStoryboardImageModel(e.target.value)}
+                                  disabled={pipelineBusy || !step2Enabled}
+                                  className="flex h-10 w-full rounded-xl border border-violet-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <option value="">使用系统默认图像模型</option>
+                                  {availableImageModels.map((item) => (
+                                    <option key={`storyboard-image-model-${item.key}`} value={item.key}>{item.key}</option>
+                                  ))}
+                                </select>
+                                <div className="text-[11px] text-violet-100/75">这里控制的是步骤 2 批量生成分镜图时优先使用的图像模型；你也可以不选，继续用系统默认。</div>
+                              </div>
+
+                              <div className="flex flex-wrap items-end gap-2 md:justify-end">
+                                <label className="inline-flex cursor-pointer items-center rounded-lg border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20">
+                                  {uploadingAssetId === firstStoryboard.id ? '上传中…' : firstStoryboardImageReady ? '本地上传替换第 1 张分镜图' : '本地上传第 1 张分镜图'}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    disabled={uploadingAssetId !== null || !step2Enabled || pipelineBusy || !firstStoryboard}
+                                    onChange={(event) => { event.stopPropagation(); void handleFirstStoryboardUpload(event) }}
+                                  />
+                                </label>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-9 rounded-lg border-cyan-400/30 bg-cyan-500/10 px-3 text-xs text-cyan-100 hover:bg-cyan-500/20"
+                                  disabled={pipelineBusy || !step2Enabled || !firstStoryboard}
+                                  onClick={() => void triggerStoryboardImageGeneration()}
+                                >
+                                  {generationAction?.startsWith('storyboard-image-') ? '正在批量生成分镜图…' : `补生成当前批次${selectedStep3ExecutionMode === 'serial' ? '首尾帧分镜图' : '分镜图'}`}
+                                </Button>
+                              </div>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+
+                      <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">分镜列表</div>
+                            <div className="mt-1 text-[11px] text-slate-400">按镜头顺序把分镜图、台词、场景描述和人物绑定合并在同一张卡片里，避免在图片区和文本区之间反复对照。</div>
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-[11px] text-violet-100/80">
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{completedStoryboardImages} / {displayStoryboards.length} 已有图</span>
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{characterBoundStoryboardCount} / {storyboardsWithCharacters.length} 人物已绑定</span>
+                            <span className="rounded-full border border-violet-400/20 bg-violet-500/10 px-2 py-0.5">{step3ExecutionModeLabel}</span>
+                          </div>
+                        </div>
+
+                        <div className="max-h-[760px] space-y-3 overflow-auto pr-1">
+                          {displayStoryboards.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-black/20 p-4 text-xs text-violet-100/80">
+                              {step1Running ? '当前正在重跑步骤 1，后端会先删旧分镜再重建新分镜，请稍等这一轮回流。' : '当前范围还没有分镜文本，因此也还没有可展示或绑定的分镜。'}
+                            </div>
+                          ) : displayStoryboards.map((storyboard, index) => {
+                            const imageUrl = String(storyboard.image_url || '').trim()
+                            const hasImage = Boolean(imageUrl)
+                            const boundAssets = storyboardAssetDetailMap.get(storyboard.id) || []
+                            const boundCharacterAssets = boundAssets.filter((asset) => asset.type === 'character')
+                            const requiredCharacters = Array.isArray(storyboard.characters) ? storyboard.characters : []
+                            const hasRequiredCharacters = requiredCharacters.length > 0
+                            const characterBindingReady = !hasRequiredCharacters || boundCharacterAssets.some((asset) => String(asset.image_url || '').trim())
+                            const isFocused = focusedStoryboardId === storyboard.id || focusedStoryboardIds.has(storyboard.id)
+                            return (
+                              <div key={`step2-storyboard-row-${storyboard.id}`} className={`rounded-xl border p-3 transition ${isFocused ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/20'}`}>
+                                <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <div className="text-sm font-medium text-white">#{storyboard.sequence_number} · 分镜 {index + 1}</div>
+                                        <div className="mt-1 text-[11px] text-slate-400">episode {storyboard.episode_id || '-'} · {storyboard.duration || '-'} 秒 · {storyboard.status || '-'}</div>
+                                      </div>
+                                      <div className={`rounded-full border px-2 py-0.5 text-[10px] ${hasImage ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/30 bg-amber-500/10 text-amber-100'}`}>
+                                        {hasImage ? '图已就绪' : '待补图'}
+                                      </div>
+                                    </div>
+
+                                    {hasImage ? (
+                                      <a href={imageUrl} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border border-white/10 bg-black/30">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img src={imageUrl} alt={`step2-storyboard-image-${storyboard.id}`} className="h-36 w-full object-cover transition hover:opacity-90" />
+                                      </a>
+                                    ) : (
+                                      <div className="flex h-36 items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/10 px-3 text-center text-xs text-slate-500">
+                                        当前还没有生成这张分镜图
+                                      </div>
+                                    )}
+
+                                    <div className="space-y-1 text-[11px] text-slate-400">
+                                      <div className={characterBindingReady ? 'text-emerald-200/90' : 'text-amber-200/90'}>
+                                        人物绑定：{hasRequiredCharacters ? `${boundCharacterAssets.length} 个已绑定` : '无需绑定人物'}
+                                      </div>
+                                      {index === 0 ? (
+                                        <div className={firstFrameIdentityApproved ? 'text-emerald-200/90' : 'text-amber-200/90'}>
+                                          首镜确认：{firstFrameIdentityApproved ? '已确认角色正确' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}
+                                        </div>
+                                      ) : (
+                                        <div>{selectedStep3ExecutionMode === 'serial' ? '串行过渡锚点' : '并行段落参考图'}</div>
+                                      )}
+                                      {imageUrl && <div className="truncate text-violet-100/60" title={imageUrl}>{imageUrl}</div>}
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-3">
+                                    <div className="grid gap-3 xl:grid-cols-2">
+                                      <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3">
+                                        <div className="mb-2 text-xs font-medium text-violet-200">台词 / 口播</div>
+                                        <div className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{storyboard.dialogue || '暂无台词'}</div>
+                                      </div>
+
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                                        <div className="mb-2 text-xs font-medium text-cyan-200">场景描述</div>
+                                        <div className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">{storyboard.scene_description || '暂无场景描述'}</div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2 text-[11px]">
+                                      {requiredCharacters.length > 0 ? requiredCharacters.map((name) => (
+                                        <span key={`storyboard-required-character-${storyboard.id}-${name}`} className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-amber-100">
+                                          需人物：{name}
+                                        </span>
+                                      )) : (
+                                        <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-slate-400">无人物要求</span>
+                                      )}
+                                      {boundAssets.map((asset) => (
+                                        <button
+                                          key={`storyboard-bound-asset-${storyboard.id}-${asset.id}`}
+                                          type="button"
+                                          className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-cyan-100 transition hover:bg-cyan-500/20"
+                                          onClick={() => setFocusedAssetId((current) => current === asset.id ? null : asset.id)}
+                                        >
+                                          已绑：{asset.name || `素材#${asset.id}`}
+                                        </button>
+                                      ))}
+                                    </div>
+
+                                    {characterAssets.length > 0 && (
+                                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <div className="text-xs font-medium text-amber-100">人物绑定</div>
+                                          <div className="text-[11px] text-amber-100/75">点击角色绑定到当前分镜；已绑定项会保留</div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                          {characterAssets.map((asset) => {
+                                            const isBound = (storyboard.asset_ids || []).includes(asset.id)
+                                            const isActive = focusedAssetIds.has(asset.id) || focusedAssetId === asset.id
+                                            return (
+                                              <button
+                                                key={`storyboard-character-toggle-${storyboard.id}-${asset.id}`}
+                                                type="button"
+                                                disabled={bindingStoryboardId === storyboard.id || pipelineBusy || !step2Enabled}
+                                                onClick={() => void toggleStoryboardCharacterBinding(storyboard, asset)}
+                                                className={`rounded-full border px-3 py-1 text-[11px] transition ${isBound ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-100' : 'border-white/10 bg-black/20 text-slate-300'} ${isActive ? 'ring-1 ring-cyan-300/60' : ''} disabled:cursor-not-allowed disabled:opacity-60`}
+                                              >
+                                                {bindingStoryboardId === storyboard.id ? '保存中…' : `${isBound ? '已绑定' : '点击绑定'} · ${asset.name || `人物#${asset.id}`}`}
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {activePipelineStep === 'step3' && (
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-medium text-emerald-100">步骤 3：基于已准备好的分镜首尾帧提交视频</div>
+                      <div className="mt-1 text-xs text-emerald-100/80">这里要求当前范围的分镜图先准备完整。提交时会优先带上这批分镜图作为各段视频的起止参考，不再只靠首镜兜底后再补图。</div>
+                      {step3Running && (
+                        <div className="mt-2 inline-flex rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] text-emerald-100">
+                          当前进行中：正在提交视频任务，请勿重复点击
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">视频生成模型（步骤 3 实际使用）</Label>
+                        <select
+                          value={effectiveSelectedVideoModel}
+                          onChange={(e) => setSelectedGenerationVideoModel(e.target.value)}
+                          disabled={step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择模型</option>
+                          {videoModelsForStep3.map((item) => {
+                            const params = item.params || []
+                            const keys = new Set(params.map((param) => param.key))
+                            const missing = ['aspect_ratio', 'resolution', 'duration'].filter((key) => !keys.has(key))
+                            const suffix = item.available
+                              ? missing.length > 0 ? `（缺少 ${missing.join(' / ')}，参数需手动补齐）` : ''
+                              : '（当前运行态不可用）'
+                            return <option key={item.key} value={item.key} disabled={!item.available}>{formatVideoModelActualLabel(item, item.key)}{suffix}</option>
+                          })}
+                        </select>
+                        <div className="text-[11px] text-emerald-100/75">这里会显示步骤 3 的别名和当前运行态声明的实际 provider model；真正提交给 video-service 的 `model_name` 仍然是内部 key，回流任务里的 `effective_model` 会展示最终生效模型名。如果当前模型容易被拒，可以先切到别的模型，再按这个模型支持的参数重选后提交。</div>
+                        <div className="rounded-lg border border-emerald-400/20 bg-black/20 px-3 py-2 text-[11px] text-emerald-50">
+                          当前别名：{selectedGenerationModelLabel || '未选择'}
+                          <br />
+                          当前实际 provider model：{selectedGenerationProviderModel || '未声明'}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-emerald-100/85">
+                        <div>当前范围：{scopeLabel}</div>
+                        <div>目标模型：{selectedGenerationModelActualLabel || '未选择'}</div>
+                        <div>执行方式：{step3ExecutionModeLabel}</div>
+                        <div>{step3ExecutionModeHint}</div>
+                        <div>视频配置：{selectedStep3AspectRatio || '-'} / {selectedStep3Resolution || '-'} / {selectedStep3Duration || '-'} 秒</div>
+                        {selectedModelSupportsVeoNativeControls && (
+                          <div>Veo 原生约束：人物策略 {selectedStep3VeoPersonGeneration || '-'} / 参考图 {step3UsesVeoReferenceImages ? `${step3VeoReferenceImages.length} 张` : '关闭'} / 尾帧 {step3UsesVeoLastFrame ? '开启' : '关闭'} / seed {selectedStep3VeoSeed || '-'}</div>
+                        )}
+                        <div>当前可提交分镜图：{completedStoryboardImages} / {displayStoryboards.length}</div>
+                        <div>含人物分镜绑定：{characterBoundStoryboardCount} / {storyboardsWithCharacters.length}</div>
+                        <div>首镜角色确认：{firstFrameIdentityApproved ? '已确认' : firstFrameIdentityReviewStatus === 'rejected' ? '需重做' : '待确认'}</div>
+                        <div>角色锚点：{characterAnchorImageUrl ? `${characterAnchorSource}${characterAnchorAsset ? ` / #${characterAnchorAsset.id} ${characterAnchorAsset.name || ''}` : ''}` : '缺失'}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">执行方式（已在步骤 2 确定）</Label>
+                        <div className="flex h-10 w-full items-center rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900">
+                          {step3ExecutionModeLabel}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-[11px] text-emerald-100/75">{step3ExecutionModeHint}</div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2 text-[11px]"
+                            disabled={step3Running}
+                            onClick={() => { userSelectedPipelineStepRef.current = true; setActivePipelineStep('step2') }}
+                          >
+                            回步骤 2 调整
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 画面比例</Label>
+                        <select
+                          value={selectedStep3AspectRatio}
+                          onChange={(e) => setSelectedStep3AspectRatio(e.target.value)}
+                          disabled={step3AspectRatioOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择比例</option>
+                          {step3AspectRatioOptions.map((item) => (
+                            <option key={`step3-aspect-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 分辨率</Label>
+                        <select
+                          value={selectedStep3Resolution}
+                          onChange={(e) => setSelectedStep3Resolution(e.target.value)}
+                          disabled={step3ResolutionOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择分辨率</option>
+                          {step3ResolutionOptions.map((item) => (
+                            <option key={`step3-resolution-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 单分镜时长</Label>
+                        <select
+                          value={selectedStep3Duration}
+                          onChange={(e) => setSelectedStep3Duration(e.target.value)}
+                          disabled={step3DurationOptions.length === 0 || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <option value="">请选择时长</option>
+                          {step3DurationOptions.map((item) => (
+                            <option key={`step3-duration-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-emerald-100">步骤 3 语音输出</Label>
+                        <select
+                          value={selectedModelMeta?.native_audio ? (selectedStep3GenerateAudio ? 'enabled' : 'disabled') : 'unsupported'}
+                          onChange={(e) => setSelectedStep3GenerateAudio(e.target.value === 'enabled')}
+                          disabled={!selectedModelMeta?.native_audio || step3Running}
+                          className="flex h-10 w-full rounded-xl border border-emerald-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {selectedModelMeta?.native_audio ? (
+                            <>
+                              <option value="disabled">不生成语音</option>
+                              <option value="enabled">生成语音（原生）</option>
+                            </>
+                          ) : (
+                            <option value="unsupported">当前模型不支持语音</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+
+                    {selectedModelSupportsVeoNativeControls && (
+                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-4 space-y-3">
+                        <div>
+                          <div className="text-sm font-medium text-cyan-100">Veo 3.1 原生高级约束</div>
+                          <div className="mt-1 text-xs text-cyan-100/80">这里不是通用 reference2video / startEnd2video，而是直接透传 Veo 自己的 reference images、last frame、person generation、seed 约束。当前串行任务里，尾帧约束只会用于最后一个 clip。</div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">人物生成策略</Label>
+                            <select
+                              value={selectedStep3VeoPersonGeneration}
+                              onChange={(e) => setSelectedStep3VeoPersonGeneration(e.target.value)}
+                              disabled={step3Running}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {(step3VeoPersonGenerationOptions.length > 0 ? step3VeoPersonGenerationOptions : [{ value: 'allow_adult', label: 'allow_adult' }]).map((item) => (
+                                <option key={`step3-veo-person-${item.value}`} value={item.value}>{item.label || item.value}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Seed</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={selectedStep3VeoSeed}
+                              onChange={(e) => setSelectedStep3VeoSeed(e.target.value)}
+                              disabled={step3Running}
+                              placeholder="留空则让 provider 自选"
+                              className="border-cyan-200/30 bg-white text-surface-900"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Reference images</Label>
+                            <select
+                              value={step3UsesVeoReferenceImages ? 'enabled' : 'disabled'}
+                              onChange={(e) => setSelectedStep3VeoUseReferenceImages(e.target.value === 'enabled')}
+                              disabled={step3Running || step3VeoReferenceImages.length === 0}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <option value="disabled">关闭</option>
+                              <option value="enabled">开启（最多 3 张）</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-cyan-100">Last frame</Label>
+                            <select
+                              value={step3UsesVeoLastFrame ? 'enabled' : 'disabled'}
+                              onChange={(e) => setSelectedStep3VeoUseLastFrame(e.target.value === 'enabled')}
+                              disabled={step3Running || !step3VeoLastFrameImageUrl}
+                              className="flex h-10 w-full rounded-xl border border-cyan-200/30 bg-white px-3 py-2 text-sm text-surface-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <option value="disabled">关闭</option>
+                              <option value="enabled">开启（最终镜头尾帧）</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 text-[11px] text-cyan-50/90">
+                          <div className="rounded border border-cyan-400/15 bg-black/10 p-3">
+                            <div className="font-medium text-cyan-100">参考图来源</div>
+                            {step3VeoReferenceImages.length > 0 ? (
+                              <div className="mt-2 space-y-1 break-all">
+                                {step3VeoReferenceImages.map((url, index) => (
+                                  <div key={`step3-veo-ref-${index}`}>#{index + 1} {url}</div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-cyan-100/70">当前没有可复用的人物锚点图，因此 reference images 开关会保持关闭。</div>
+                            )}
+                          </div>
+
+                          <div className="rounded border border-cyan-400/15 bg-black/10 p-3 break-all">
+                            <div className="font-medium text-cyan-100">尾帧约束来源</div>
+                            <div className="mt-2">{step3VeoLastFrameImageUrl || '当前范围内没有可用的最后一张分镜图'}</div>
+                            <div className="mt-2 text-cyan-100/70">Google 文档要求：1080p / 4K 或 reference images 场景必须使用 8 秒，这里会自动把时长钉到 8 秒。</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2 text-xs text-emerald-50">
+                      <div className="font-medium text-emerald-100">步骤 3 当前生成模型能力声明：{selectedGenerationModelActualLabel || '未选择'}</div>
+                      {selectedModelMeta ? (
+                        <>
+                          <div>available：{selectedModelMeta.available ? 'true' : 'false'}；native_audio：{selectedModelMeta.native_audio ? 'true' : 'false'}</div>
+                          {selectedModelParamKeys.size > 0 && <div>param keys：{Array.from(selectedModelParamKeys).join(' / ')}</div>}
+                          {selectedModelParams.length > 0 ? (
+                            <div className="space-y-2">
+                              {selectedModelParams.map((param) => (
+                                <div key={`step3-${param.key}`} className="rounded border border-emerald-400/15 bg-black/10 p-2">
+                                  <div><span className="text-emerald-100">{param.label || param.key}</span> <span className="text-emerald-200/70">({param.key})</span></div>
+                                  <div className="text-emerald-100/80">默认值：{param.default || '未声明'}</div>
+                                  <div className="text-emerald-100/75">可选值：{formatModelParamValues(param)}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-emerald-100/75">当前模型没有返回 params 声明。</div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-emerald-100/75">当前未匹配到该模型的运行态能力声明；建议先切到一个能正常返回能力声明的模型，再提交生成，避免 provider 拒绝时难以判断原因。</div>
+                      )}
+                    </div>
+
+                    <Button
+                      disabled={pipelineBusy || !step3Enabled || (!latestTaskIsPaused && (!step2StoryboardReady || !allCharacterStoryboardsBound || !firstFrameIdentityApproved))}
+                      onClick={() => void startScopedVideoGeneration()}
+                    >
+                      {generationAction === 'video-start'
+                        ? '正在提交/继续视频任务…'
+                        : latestTaskIsPaused
+                          ? '从上一步暂停处继续未完成任务'
+                          : '开始生成整条广告视频'}
+                    </Button>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-[11px] text-emerald-100/80">
+                      {step3Hint}
+                      {step3PendingReasons.length > 0 && (
+                        <div className="mt-2 space-y-1 text-amber-200/90">
+                          {step3PendingReasons.map((reason, index) => (
+                            <div key={`step3-pending-${index}`}>- {reason}</div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2 text-amber-200/90">补充提醒：如果首段返回 `InputImageSensitiveContentDetected`、`HTTP 451` 或类似“real-person/sensitive image”的拒绝，通常先查首图是否过于像真人肖像；这类情况会让后续 clip 继续报 `serial chain broken`，但那是连锁结果，不是每一段都单独坏了。</div>
+                      <div className="mt-2 text-emerald-100/75">当前页面会在提交前自动做一层“降敏软化”：弱化真实姓名、portrait / photorealistic / RAW photo 等强真人肖像化措辞，并把 scene descriptions / dialogues / scene characters 一并按软化后的版本透传给 video-service。</div>
+                    </div>
+
+                    <div className="text-[11px] text-emerald-100/75">
+                      真正提交给视频服务的是当前范围内这批已经准备好的分镜图序列；系统会把它们带进视频请求里，优先作为每段视频的起止参考，同时附带这里选中的视频模型、分镜文案、台词、镜头运动、角色/素材引用等字段。
+                    </div>
+
+                    <div className="rounded-lg border border-white/10 bg-black/20 p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-white">Step3 每个分镜的视频记录（最新任务）</div>
+                          <div className="mt-1 text-[11px] text-emerald-100/75">这里按分镜顺序直接展示“这个分镜生成出来的视频记录”，并额外标出上一分镜传给下一段的有效锚点、当前分镜产出的有效尾帧，方便你在步骤 3 里判断串行连续性有没有真的接上。</div>
+                        </div>
+                        <Button variant="outline" onClick={() => { void mutateLatestTaskDetail() }}>
+                          刷新这份串行记录
+                        </Button>
+                      </div>
+
+                      {!latestTask ? (
+                        <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">当前还没有视频任务。</div>
+                      ) : !latestTaskDetail ? (
+                        <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">正在读取 task #{latestTask.id} 的 clip 明细…</div>
+                      ) : (
+                        <>
+                          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs text-emerald-100/85">
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">最新任务：#{latestTaskDetail.task.id}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">状态：{latestTaskDetail.task.status || '-'}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">模型：{latestTaskDetail.task.model_name || '-'}</div>
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-3">分镜视频记录：{latestStoryboardVideoRecords.length}</div>
+                          </div>
+
+                          {latestTaskDetail.task.result_url && (
+                            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-50 break-all">
+                              成片：<a className="text-cyan-300 underline" href={latestTaskDetail.task.result_url} target="_blank" rel="noreferrer">{latestTaskDetail.task.result_url}</a>
+                            </div>
+                          )}
+
+                          {latestStoryboardVideoRecords.length === 0 ? (
+                            <div className="rounded-lg border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">这个任务的分镜视频记录还没回流出来。</div>
+                          ) : (
+                            <div className="max-h-[720px] space-y-3 overflow-auto pr-1">
+                              {latestStoryboardVideoRecords.map((clip, index) => {
+                                const previousClip = index > 0 ? latestStoryboardVideoRecords[index - 1] : null
+                                const inheritedAnchor = index === 0
+                                  ? ''
+                                  : previousClip?.end_frame_image_url || ''
+                                return (
+                                  <div key={`step3-clip-${clip.id ?? `${clip.clip_order}-${clip.scene_seq ?? index}`}`} className="rounded-lg border border-white/10 bg-slate-950/40 p-4 space-y-3">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-sm font-medium text-white">第 {index + 1} 个分镜的视频记录</div>
+                                        <div className="mt-1 text-[11px] text-slate-300">
+                                          clip #{clip.id ?? '-'} · order {clip.clip_order} · scene_seq {clip.scene_seq ?? '-'}
+                                        </div>
+                                      </div>
+                                      <div className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">{clip.status || '待回流'}</div>
+                                    </div>
+
+                                    {clip.clip_url ? (
+                                      <div className="overflow-hidden rounded-lg border border-emerald-500/20 bg-black/30 p-3 space-y-2">
+                                        <div className="text-xs font-medium text-emerald-100">这个分镜生成出来的视频</div>
+                                        <video className="max-h-[320px] w-full rounded-lg bg-black" controls preload="metadata" src={clip.clip_url} />
+                                      </div>
+                                    ) : (
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400">
+                                        这个分镜的视频结果还没有回流出来。
+                                      </div>
+                                    )}
+
+                                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs text-slate-200">
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-cyan-100">本分镜实际首帧来源</div>
+                                        {clip.source_image_url ? (
+                                          <>
+                                            <a href={clip.source_image_url} target="_blank" rel="noreferrer" className="block">
+                                              <img src={clip.source_image_url} alt={`第${index + 1}段分镜首帧来源`} className="h-36 w-full rounded-md object-cover bg-black/30 transition hover:opacity-90" />
+                                            </a>
+                                            <a className="break-all text-cyan-300 underline" href={clip.source_image_url} target="_blank" rel="noreferrer">{clip.source_image_url}</a>
+                                          </>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                      <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-fuchsia-100">上一分镜已产出的有效尾帧锚点</div>
+                                        {inheritedAnchor ? (
+                                          <>
+                                            <a href={inheritedAnchor} target="_blank" rel="noreferrer" className="block">
+                                              <img src={inheritedAnchor} alt={`第${index + 1}段分镜继承锚点`} className="h-36 w-full rounded-md object-cover bg-black/30 transition hover:opacity-90" />
+                                            </a>
+                                            <a className="break-all text-fuchsia-300 underline" href={inheritedAnchor} target="_blank" rel="noreferrer">{inheritedAnchor}</a>
+                                          </>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                        <div className="font-medium text-amber-100">本分镜产出的有效尾帧</div>
+                                        {clip.end_frame_image_url ? (
+                                          <>
+                                            <img src={clip.end_frame_image_url} alt={`第${index + 1}段分镜有效尾帧`} className="h-36 w-full rounded-md object-cover bg-black/30" />
+                                            <a className="break-all text-amber-300 underline" href={clip.end_frame_image_url} target="_blank" rel="noreferrer">{clip.end_frame_image_url}</a>
+                                          </>
+                                        ) : (
+                                          <div className="text-slate-400">空</div>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs text-slate-200">
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">生成这段视频用的场景描述</div>
+                                        <div className="whitespace-pre-wrap break-words text-slate-300">{clip.prompt_scene_description || '空'}</div>
+                                      </div>
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">生成这段视频用的台词 / 口播</div>
+                                        <div className="whitespace-pre-wrap break-words text-slate-300">{clip.prompt_dialogue || '空'}</div>
+                                      </div>
+                                      <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-2">
+                                        <div className="font-medium text-white">补充参数</div>
+                                        <div className="space-y-1 text-slate-300">
+                                          <div>镜头运动：{clip.prompt_camera_movement || '-'}</div>
+                                          <div>情绪：{clip.prompt_mood || '-'}</div>
+                                          <div>角色：{Array.isArray(clip.prompt_scene_characters) && clip.prompt_scene_characters.length ? clip.prompt_scene_characters.join(', ') : '-'}</div>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-6">
+                                      <div>scene_group_key：{clip.scene_group_key || '-'}</div>
+                                      <div>effective_model：{clip.effective_model || clip.model_used || '-'}</div>
+                                      <div>requested_alias：{clip.requested_model || '-'}</div>
+                                      <div>runtime_provider：{clip.runtime_provider || '-'}</div>
+                                      <div>duration_sec：{clip.duration_sec ?? '-'}</div>
+                                      <div>error：{clip.error_msg || '-'}</div>
+                                    </div>
+                                    {humanizeVideoErrorMessage(clip.error_msg) && (
+                                      <div className="text-[11px] text-amber-200/90">提示：{humanizeVideoErrorMessage(clip.error_msg)}</div>
+                                    )}
+                                    <div className="grid gap-2 text-[11px] text-slate-300 md:grid-cols-3 xl:grid-cols-6">
+                                      <div>requested_mode：{clip.requested_generate_mode || '-'}</div>
+                                      <div>final_mode：{clip.final_generate_mode || '-'}</div>
+                                      <div>model_family：{clip.model_family || '-'}</div>
+                                      <div>project_refs：{Array.isArray(clip.project_identity_refs) ? clip.project_identity_refs.length : 0}</div>
+                                      <div>character_refs：{Array.isArray(clip.character_refs) ? clip.character_refs.length : 0}</div>
+                                      <div>asset_refs：{Array.isArray(clip.asset_refs) ? clip.asset_refs.length : 0}</div>
+                                    </div>
+                                    {Array.isArray(clip.reference_bindings) && clip.reference_bindings.length > 0 && (
+                                      <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-[11px] text-cyan-50/90">
+                                        <div className="font-medium text-cyan-100">reference bindings</div>
+                                        <div className="mt-2 space-y-1">
+                                          {clip.reference_bindings.map((binding, bindingIdx) => (
+                                            <div key={`${clip.clip_order}-binding-${bindingIdx}`} className="break-all">{binding}</div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+        </>
+      )}
+    </div>
+  )
+}

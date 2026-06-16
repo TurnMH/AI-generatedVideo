@@ -1,4 +1,4 @@
-import type { Storyboard } from '@/lib/api'
+import type { Storyboard } from '@/types'
 
 type StoryboardVideoPromptInput = Pick<Storyboard, 'scene_description' | 'dialogue' | 'prompt_used'>
 

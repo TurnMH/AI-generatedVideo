@@ -1,6 +1,12 @@
 package service
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestBuildEpisodeExtractionChunksKeepsEpisodesSeparate(t *testing.T) {
 	t.Parallel()
@@ -22,5 +28,36 @@ func TestBuildEpisodeExtractionChunksKeepsEpisodesSeparate(t *testing.T) {
 	}
 	if chunks[0].Text == chunks[1].Text {
 		t.Fatal("episode extraction chunks should not collapse multiple episodes into the same text chunk")
+	}
+}
+
+func TestUserFacingExtractionError(t *testing.T) {
+	t.Parallel()
+
+	if got := userFacingExtractionError(fmt.Errorf("llm call: context deadline exceeded")); !strings.Contains(got, "超时") {
+		t.Fatalf("userFacingExtractionError() = %q, want timeout hint", got)
+	}
+	if got := userFacingExtractionError(errors.New("no assets extracted from episode")); !strings.Contains(got, "未能从剧本中识别") {
+		t.Fatalf("userFacingExtractionError() = %q, want empty extraction hint", got)
+	}
+}
+
+func TestBuildExtractionRoutesIncludesFallback(t *testing.T) {
+	t.Parallel()
+
+	svc := &ExtractService{
+		llmBaseURL:      "https://primary.example/v1",
+		llmAPIKey:       "primary-key",
+		llmModel:        "gpt-5.4",
+		fallbackBaseURL: "https://fallback.example/v2",
+		fallbackAPIKey:  "fallback-key",
+		fallbackModel:   "glm-5",
+	}
+	routes := svc.buildExtractionRoutes(context.Background(), "")
+	if len(routes) != 2 {
+		t.Fatalf("len(routes) = %d, want 2", len(routes))
+	}
+	if routes[0].model != "gpt-5.4" || routes[1].model != "glm-5" {
+		t.Fatalf("routes = %+v, want primary then fallback", routes)
 	}
 }

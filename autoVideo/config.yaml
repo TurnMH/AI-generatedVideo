@@ -57,9 +57,10 @@ project-service:
   image:
     base_url: "http://localhost:8005"
   llm:
+    # 分镜拆分默认使用 gpt-5.4（需指向提供 gpt-5.4 的 OpenAI 兼容渠道）
     base_url: "https://api.example.com/v1"
     api_key: "replace-with-project-llm-key"
-    model: "gpt-4.1-mini"
+    model: "gpt-5.4"
     timeout: 120
     fallback_base_url: "https://fallback.example.com/v2"
     fallback_api_key: "replace-with-project-fallback-key"
@@ -116,12 +117,20 @@ character-service:
     producer_topic: "asset.generate.result"
   image:
     base_url: "http://localhost:8005"
-    default_model: "doubao-seedream-4-0-250828"
+    default_model: "gpt-image-2"
   llm:
+    # 人物提示词润色默认使用 gpt-5.4
     base_url: "https://api.example.com/v1"
     api_key: "replace-with-character-llm-key"
-    model: "gpt-4.1"
+    model: "gpt-5.4"
+    fallback_base_url: "https://fallback.example.com/v2"
+    fallback_api_key: "replace-with-character-fallback-key"
+    fallback_model: "glm-5"
     vision_model: "gpt-4.1"
+    # 视觉质检独立渠道：留空则与上面的 base_url/api_key 相同。
+    # 当文本渠道（gpt-5.4）不提供视觉模型时，填写支持图片输入的渠道（如 gpt-4.1）。
+    vision_base_url: ""
+    vision_api_key: ""
     timeout: 180
   gemini:
     bases: "https://gemini-channel.example.com"
@@ -161,6 +170,13 @@ image-service:
     openai_keys:
       - "replace-with-openai-image-key"
     openai_models: "gpt-image-1,gpt-image-1.5"
+    # Dedicated gpt-image-2 channel(s) — 默认图片模型，独立 base+key（不复用上面的 openai 池），
+    # 支持多渠道故障转移：gpt_image2_bases[i] 与 gpt_image2_keys[i] 一一对应，
+    # 某渠道封号/限流/欠费时自动切到下一条。
+    gpt_image2_bases:
+      - "https://api2img.shubiaobiao.com/v1"
+    gpt_image2_keys:
+      - "replace-with-gpt-image2-key"
     tongyi_key: "replace-with-tongyi-key"
     dashscope_base: "https://dashscope.aliyuncs.com/api/v1"
     tongyi_models: "wanx-v1,wanx2.1-t2i-turbo,wanx2.1-t2i-plus,wan2.5-i2i-preview"
@@ -170,6 +186,10 @@ image-service:
     gemini_bases: "https://gemini-image.example.com"
     gemini_keys: "replace-with-gemini-image-key"
     gemini_flash_model: "gemini-3.1-flash-image-preview"
+    # 备用渠道：gemini-3-pro-image-preview / gemini-3.1-flash-image-preview 走 /images/generations
+    # 的 fallback 渠道，主 gemini-chat 渠道失败时自动切换。
+    gemini_image_fallback_base: ""
+    gemini_image_fallback_key: ""
     baidu_image_key: "replace-with-baidu-image-key"
     baidu_image_base: "https://vod.bj.baidubce.com/v3/aigc/image"
     baidu_image_model: "NB"
@@ -249,7 +269,7 @@ video-service:
     replicate_key: ""
     llm_key: "replace-with-video-llm-key"
     llm_base: "https://api.example.com/v1"
-    llm_model: "gpt-4.1-mini"
+    llm_model: "gpt-5.4"
   ffmpeg:
     bin: "ffmpeg"
     temp_dir: "/tmp/autovideo"

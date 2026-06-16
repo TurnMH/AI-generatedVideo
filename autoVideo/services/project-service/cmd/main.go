@@ -127,6 +127,7 @@ func main() {
 			cfg.LLM.Model,
 		)
 		kafkaConsumer.SetCharacterBaseURL(cfg.Character.BaseURL)
+		storyboardSvc.SetImageGenerationPreparer(kafkaConsumer)
 
 		// Recover stale storyboards from previous crashes
 		storyboardSvc.ResumeStaleStoryboards()
@@ -212,6 +213,7 @@ func main() {
 		storyboards.POST("/pause-generation", storyboardHandler.PauseGeneration)
 		storyboards.POST("/resume-generation", storyboardHandler.ResumeGeneration)
 		storyboards.PATCH("/config", storyboardHandler.UpdateConfig)
+		storyboards.GET("/:sid/image-generation-preview", storyboardHandler.ImageGenerationPreview)
 		storyboards.GET("/:sid", storyboardHandler.GetStoryboard)
 		storyboards.PATCH("/:sid", storyboardHandler.UpdateStoryboard)
 		storyboards.DELETE("/:sid", storyboardHandler.DeleteStoryboard)
@@ -232,8 +234,8 @@ func main() {
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
 		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

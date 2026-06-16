@@ -10,6 +10,7 @@ import {
 import { buildVideoSceneDescription } from '@/lib/projects/storyboard-video-prompt'
 import { formatStoryboardSpeechForVideo } from '@/lib/projects/storyboard-dubbing'
 import { isCommentaryProject as detectCommentaryProject } from '@/lib/projects/commentary-project'
+import { pipelineAPI, projectAPI, scriptAPI, storyboardAPI, videoAPI } from '@/lib/api'
 import type { Project, Storyboard } from '@/types'
 import { TaskQueue } from '@/components/task/TaskQueue'
 import { Button } from '@/components/ui/button'
@@ -214,7 +215,7 @@ export default function GeneratePage() {
   }
 
   const buildVideoLaunchPlan = (storyboards: Storyboard[]): VideoLaunchPlan => {
-    const isCommentary = detectCommentaryProject(project)
+    const isCommentary = project ? detectCommentaryProject(project) : false
     const ordered = [...storyboards].sort((a, b) => a.sequence_number - b.sequence_number)
     const serialGroups = new Map<string, Storyboard[]>()
     const eligibleSbs: Storyboard[] = []

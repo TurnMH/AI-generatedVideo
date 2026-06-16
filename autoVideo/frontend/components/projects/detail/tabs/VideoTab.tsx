@@ -142,6 +142,8 @@ import {
   storyboardStylePresetPatch,
 } from '@/lib/projects/persist-storyboard-runtime-config'
 import { buildProjectVideoRenderConfig } from '@/lib/projects/storyboard-runtime-config'
+import { buildClipPreviewFromTask, resolveStoryboardIdForClip } from '@/lib/projects/storyboard-av-preview'
+import { ClipPreviewModal, type ClipPreviewState } from '@/components/projects/detail/ClipPreviewModal'
 
 type TabKey = WorkflowStepKey
 
@@ -156,7 +158,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoEpisodeFilter])
   const [generating, setGenerating] = useState(false)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [clipPreview, setClipPreview] = useState<ClipPreviewState | null>(null)
   // AI 串行失败诊断弹窗
   const [aiAnalysisClip, setAiAnalysisClip] = useState<VClip | null>(null)
   // clip 详情弹窗（串行/并行均可查看）
@@ -906,6 +908,29 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
     }
     return map
   }, [sbDubbingTasksRaw])
+
+  const storyboardById = useMemo(() => new Map(storyboards.map((sb) => [sb.id, sb])), [storyboards])
+
+  const openClipPreview = (
+    clipUrl: string,
+    clipOrder: number,
+    clipDurationSec: number,
+    task: Pick<VTask, 'render_config'>,
+    title?: string,
+  ) => {
+    const storyboardId = resolveStoryboardIdForClip(task.render_config, clipOrder)
+    const dubbingTask = storyboardId ? storyboardDubbingTaskMap.get(storyboardId) : undefined
+    const storyboardUpdatedAt = storyboardId ? storyboardById.get(storyboardId)?.updated_at : undefined
+    setClipPreview(buildClipPreviewFromTask({
+      clipUrl,
+      clipOrder,
+      clipDurationSec,
+      renderConfig: task.render_config,
+      dubbingTask,
+      storyboardUpdatedAt,
+      title,
+    }))
+  }
 
   const defaultClipDurationSec = useMemo(() => {
     const durSel = videoParamSelections[selectedVideoModel]?.duration
@@ -2362,7 +2387,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                           <div className="flex items-start gap-4">
                             <div className="flex h-14 w-24 items-center justify-center overflow-hidden rounded-md bg-surface-900 text-surface-400">
                               {t.status === 'succeeded' && (t.result_url || t.hls_url) ? (
-                                <button onClick={() => setPreviewUrl(t.result_url || t.hls_url)} className="flex h-full w-full items-center justify-center hover:text-white transition-colors">
+                                <button onClick={() => setClipPreview({ videoUrl: t.result_url || t.hls_url })} className="flex h-full w-full items-center justify-center hover:text-white transition-colors">
                                   <Play className="h-6 w-6 text-white" />
                                 </button>
                               ) : isActive ? (
@@ -2466,7 +2491,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                             )}
                             {t.status === 'succeeded' && (t.result_url || t.hls_url) && (
                               <>
-                                <Button size="sm" variant="ghost" onClick={() => setPreviewUrl(t.result_url || t.hls_url)} title="预览视频">
+                                <Button size="sm" variant="ghost" onClick={() => setClipPreview({ videoUrl: t.result_url || t.hls_url })} title="预览视频">
                                   <Play className="h-4 w-4" />
                                 </Button>
                                 <a href={t.result_url || t.hls_url} download target="_blank" rel="noopener noreferrer">
@@ -2640,7 +2665,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                           className="relative flex h-20 w-32 shrink-0 items-center justify-center overflow-hidden rounded-md border border-surface-200 bg-surface-900 text-surface-300"
                                           onClick={() => {
                                             if (clip.status === 'succeeded' && clip.clip_url) {
-                                              setPreviewUrl(clip.clip_url)
+                                              openClipPreview(clip.clip_url, clip.clip_order, clip.duration_sec, t, `片段 ${clip.clip_order + 1}`)
                                             } else {
                                               setClipDetailInfo({ clip, task: t })
                                             }
@@ -2761,7 +2786,7 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
                                           </Button>
                                         ) : null}
                                         {clip.status === 'succeeded' && clip.clip_url ? (
-                                          <Button size="sm" variant="ghost" onClick={() => setPreviewUrl(clip.clip_url)}>
+                                          <Button size="sm" variant="ghost" onClick={() => openClipPreview(clip.clip_url, clip.clip_order, clip.duration_sec, t, `片段 ${clip.clip_order + 1}`)}>
                                             <Play className="mr-1 h-3.5 w-3.5" /> 预览
                                           </Button>
                                         ) : null}
@@ -3039,35 +3064,8 @@ export function VideoTab({ projectId, project, episodeId }: { projectId: number;
         </DialogContent>
       </Dialog>
 
-      {/* Video preview — fullscreen modal */}
-      {previewUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={() => setPreviewUrl(null)}>
-          <div className="relative w-full max-w-4xl mx-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-white/70">视频预览</span>
-              <div className="flex items-center gap-2">
-                <a
-                  href={previewUrl}
-                  download
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 rounded-md bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/20 transition-colors"
-                >
-                  <Download className="h-3.5 w-3.5" /> 下载视频
-                </a>
-                <Button size="sm" variant="ghost" className="text-white hover:bg-white/10" onClick={() => setPreviewUrl(null)} title="关闭预览">
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            <div className="overflow-hidden rounded-lg bg-black shadow-2xl">
-              <video className="w-full max-h-[80vh]" controls autoPlay key={previewUrl}>
-                <source src={previewUrl} type="video/mp4" />
-                您的浏览器不支持视频播放
-              </video>
-            </div>
-          </div>
-        </div>
+      {clipPreview && (
+        <ClipPreviewModal preview={clipPreview} onClose={() => setClipPreview(null)} />
       )}
     </div>
   )

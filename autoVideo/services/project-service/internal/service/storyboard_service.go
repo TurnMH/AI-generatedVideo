@@ -53,6 +53,7 @@ type StoryboardService struct {
 	httpClient          *http.Client
 	autoVideoMu         sync.Mutex
 	autoVideoInflight   map[uint64]time.Time
+	imageGenPreparer    StoryboardImageGenerationPreparer
 }
 
 // NewStoryboardService —— 创建分镜服务实例
@@ -77,6 +78,10 @@ func (s *StoryboardService) DeleteByProjectID(projectID uint64) error {
 // SetKafkaProducer wires up the Kafka producer for async generation.
 func (s *StoryboardService) SetKafkaProducer(p *KafkaProducer) {
 	s.kafkaProducer = p
+}
+
+func (s *StoryboardService) SetImageGenerationPreparer(p StoryboardImageGenerationPreparer) {
+	s.imageGenPreparer = p
 }
 
 // SetLogger —— 设置分镜服务的日志记录器
@@ -502,61 +507,8 @@ func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, ve
 	{
 		// If PromptUsed is empty (e.g. created before refinement or description was edited),
 		// fall back to SceneDescription so image generator always has meaningful input.
-		promptUsed := sb.PromptUsed
-		if strings.TrimSpace(promptUsed) == "" {
-			promptUsed = sb.SceneDescription
-		}
-		// Look up the preceding storyboard for visual continuity context.
-		// Only the English prompt is useful; Chinese or full generated prompts are handled
-		// at generation time so we pass the raw stored value and let the consumer filter.
-		// For serial projects, the immediately preceding storyboard may be a non-first-clip
-		// with no image_url (image generation was skipped). In that case we fall back to the
-		// nearest preceding storyboard that actually has a generated image.
-		var prevPromptUsed string
-		var prevImageURL string
-		if strings.TrimSpace(sb.SceneGroupKey) != "" {
-			if !sb.IsSceneFirstClip {
-				if prevSB, _ := s.repo.FindAdjacentInSceneBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); prevSB != nil {
-					prevPromptUsed = prevSB.PromptUsed
-					prevImageURL = prevSB.ImageURL
-					if prevImageURL == "" {
-						if anchor := s.repo.FindPrecedingWithImageInScene(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); anchor != nil {
-							prevImageURL = anchor.ImageURL
-							if prevPromptUsed == "" {
-								prevPromptUsed = anchor.PromptUsed
-							}
-						}
-					}
-				}
-			}
-		} else if prevSB, _ := s.repo.FindAdjacentBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); prevSB != nil {
-			prevPromptUsed = prevSB.PromptUsed
-			prevImageURL = prevSB.ImageURL
-			if prevImageURL == "" {
-				if anchor := s.repo.FindPrecedingWithImage(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); anchor != nil {
-					prevImageURL = anchor.ImageURL
-					if prevPromptUsed == "" {
-						prevPromptUsed = anchor.PromptUsed
-					}
-				}
-			}
-		}
-		genReq := StoryboardGenerateRequest{
-			StoryboardID:     sb.ID,
-			VersionID:        versionID,
-			ProjectID:        sb.ProjectID,
-			SceneDescription: sb.SceneDescription,
-			Characters:       []string(sb.Characters),
-			Location:         sb.Location,
-			CameraMovement:   sb.CameraMovement,
-			Mood:             sb.Mood,
-			AspectRatio:      sb.AspectRatio,
-			PromptUsed:       promptUsed,
-			ModelName:        modelName,
-			PrevPromptUsed:   prevPromptUsed,
-			PrevImageURL:     prevImageURL,
-			AssetIDs:         []int64(sb.AssetIDs),
-		}
+		genReq := s.buildStoryboardGenerateRequest(sb, modelName)
+		genReq.VersionID = versionID
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.kafkaProducer.Publish(ctx, genReq); err != nil {
@@ -681,6 +633,10 @@ type CreateStoryboardReq struct {
 	SceneDescription string   `json:"scene_description"`
 	Characters       []string `json:"characters"`
 	Location         string   `json:"location"`
+	LocationZone     string   `json:"location_zone"`
+	SpatialAnchor    string   `json:"spatial_anchor"`
+	SubjectPositions string   `json:"subject_positions"`
+	TransitionNote   string   `json:"transition_note"`
 	CameraMovement   string   `json:"camera_movement"`
 	Duration         int      `json:"duration"`
 	AspectRatio      string   `json:"aspect_ratio"`
@@ -718,6 +674,10 @@ func (s *StoryboardService) Create(projectID uint64, req CreateStoryboardReq) (*
 		SceneDescription: req.SceneDescription,
 		Characters:       pq.StringArray(req.Characters),
 		Location:         req.Location,
+		LocationZone:     req.LocationZone,
+		SpatialAnchor:    req.SpatialAnchor,
+		SubjectPositions: req.SubjectPositions,
+		TransitionNote:   req.TransitionNote,
 		CameraMovement:   req.CameraMovement,
 		Duration:         duration,
 		AspectRatio:      aspectRatio,
@@ -782,7 +742,16 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 
 	if v, ok := updates["scene_description"]; ok {
 		if str, ok := v.(string); ok {
-			sb.SceneDescription = sanitizeUserSceneDescription(str)
+			cleaned := sanitizeUserSceneDescription(str)
+			if cleaned != sb.SceneDescription {
+				// 用户改写了画面描述：清空上一次回写的完整英文提示词，
+				// 否则重绘时管线可能仍以旧 prompt_used 为主导，导致编辑不生效。
+				// 下次生成会基于新的描述重新翻译/构建提示词。
+				sb.PromptUsed = ""
+				// 编辑描述等于回到自动模式，解除最终提示词锁定。
+				sb.PromptLocked = false
+			}
+			sb.SceneDescription = cleaned
 		}
 	}
 	if v, ok := updates["characters"]; ok {
@@ -799,6 +768,16 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 	if v, ok := updates["location"]; ok {
 		if str, ok := v.(string); ok {
 			sb.Location = str
+		}
+	}
+	if v, ok := updates["location_zone"]; ok {
+		if str, ok := v.(string); ok {
+			sb.LocationZone = str
+		}
+	}
+	if v, ok := updates["spatial_anchor"]; ok {
+		if str, ok := v.(string); ok {
+			sb.SpatialAnchor = str
 		}
 	}
 	if v, ok := updates["camera_movement"]; ok {
@@ -848,6 +827,11 @@ func (s *StoryboardService) Update(id uint64, updates map[string]interface{}) (*
 			} else {
 				sb.PromptUsed = str
 			}
+		}
+	}
+	if v, ok := updates["prompt_locked"]; ok {
+		if locked, ok := v.(bool); ok {
+			sb.PromptLocked = locked
 		}
 	}
 	if v, ok := updates["asset_ids"]; ok {
@@ -901,12 +885,15 @@ func (s *StoryboardService) fitStoryboardDialogue(sb *model.Storyboard) {
 	if duration <= 0 {
 		duration = clipDuration
 	}
-	sb.Dialogue = speechtext.FitStoryboardDialogue(
-		sb.Dialogue,
-		duration,
-		speechPace,
-		productionmode.ResolveProfile(project).IsCommentaryComic(),
-	)
+	profile := productionmode.ResolveProfile(project)
+	if !profile.SkipPostProcessing {
+		sb.Dialogue = speechtext.FitStoryboardDialogue(
+			sb.Dialogue,
+			duration,
+			speechPace,
+			profile.IsCommentaryComic(),
+		)
+	}
 }
 
 // Generate —— 触发单个分镜的图片生成，创建新版本并发布 Kafka 消息
@@ -960,6 +947,92 @@ func (s *StoryboardService) Generate(id uint64, modelName string) (*model.Storyb
 		return nil, err
 	}
 
+	return sb, nil
+}
+
+// GenerateWithModels —— 一次为单条分镜按多个模型并行生成：每个模型各产出一个新版本，便于对比择优。
+// modelNames 为空时回退到 modelName / 默认模型，等价于单模型 Generate。
+func (s *StoryboardService) GenerateWithModels(id uint64, modelName string, modelNames []string) (*model.Storyboard, error) {
+	models := normalizeStoryboardModelNames(modelName, modelNames)
+	if len(models) <= 1 {
+		single := ""
+		if len(models) == 1 {
+			single = models[0]
+		}
+		return s.Generate(id, single)
+	}
+	// 受单条分镜版本上限约束，最多并行 maxVersionsPerStoryboard 个模型。
+	if len(models) > maxVersionsPerStoryboard {
+		models = models[:maxVersionsPerStoryboard]
+	}
+
+	sb, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if s.isProjectGenerationPaused(sb.ProjectID) {
+		return nil, fmt.Errorf("project storyboard generation is paused")
+	}
+
+	// 为新版本腾出空间：删除最旧版本直到 count + len(models) <= 上限。
+	if count, cerr := s.repo.CountVersions(id); cerr == nil {
+		for count+len(models) > maxVersionsPerStoryboard {
+			versions, gerr := s.repo.GetVersions(id)
+			if gerr != nil || len(versions) == 0 {
+				break
+			}
+			oldest := versions[len(versions)-1] // GetVersions 按版本号倒序，末位最旧
+			if derr := s.repo.DeleteVersion(oldest.ID); derr != nil {
+				break
+			}
+			count--
+		}
+	}
+
+	// 计算基准版本号（取现有最大版本号），并先取消所有现有版本的 current 标记。
+	baseNum := sb.CurrentVersion
+	if versions, gerr := s.repo.GetVersions(id); gerr == nil {
+		for _, v := range versions {
+			if v.VersionNumber > baseNum {
+				baseNum = v.VersionNumber
+			}
+		}
+	}
+	_ = s.repo.SwitchVersion(id, 0)
+
+	var firstErr error
+	published := 0
+	lastNum := baseNum
+	for i, m := range models {
+		num := baseNum + 1 + i
+		ver := &model.StoryboardVersion{
+			StoryboardID:  id,
+			VersionNumber: num,
+			PromptUsed:    sb.PromptUsed,
+			IsCurrent:     i == len(models)-1, // 最后一个新建版本设为当前
+		}
+		if err := s.repo.CreateVersion(ver); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := s.publishStoryboardGeneration(sb, ver.ID, m, true); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		published++
+		lastNum = num
+	}
+	if published == 0 {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return nil, fmt.Errorf("no model published for storyboard %d", id)
+	}
+	sb.CurrentVersion = lastNum
 	return sb, nil
 }
 
@@ -1380,4 +1453,76 @@ func (s *StoryboardService) EpisodeCompletedCounts(projectID uint64) (map[uint64
 // GetCompletedWithImages returns all completed storyboards that have a generated image.
 func (s *StoryboardService) GetCompletedWithImages(projectID uint64) ([]model.Storyboard, error) {
 	return s.repo.GetCompletedWithImages(projectID)
+}
+
+func (s *StoryboardService) buildStoryboardGenerateRequest(sb *model.Storyboard, modelName string) StoryboardGenerateRequest {
+	promptUsed := sb.PromptUsed
+	if !sb.PromptLocked && strings.TrimSpace(promptUsed) == "" {
+		promptUsed = sb.SceneDescription
+	}
+	var prevPromptUsed string
+	var prevImageURL string
+	if strings.TrimSpace(sb.SceneGroupKey) != "" {
+		if !sb.IsSceneFirstClip {
+			if prevSB, _ := s.repo.FindAdjacentInSceneBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); prevSB != nil {
+				prevPromptUsed = prevSB.PromptUsed
+				prevImageURL = prevSB.ImageURL
+				if prevImageURL == "" {
+					if anchor := s.repo.FindPrecedingWithImageInScene(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID, sb.SceneGroupKey); anchor != nil {
+						prevImageURL = anchor.ImageURL
+						if prevPromptUsed == "" {
+							prevPromptUsed = anchor.PromptUsed
+						}
+					}
+				}
+			}
+		}
+	} else if prevSB, _ := s.repo.FindAdjacentBySequence(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); prevSB != nil {
+		prevPromptUsed = prevSB.PromptUsed
+		prevImageURL = prevSB.ImageURL
+		if prevImageURL == "" {
+			if anchor := s.repo.FindPrecedingWithImage(sb.ProjectID, sb.SequenceNumber, sb.EpisodeID); anchor != nil {
+				prevImageURL = anchor.ImageURL
+				if prevPromptUsed == "" {
+					prevPromptUsed = anchor.PromptUsed
+				}
+			}
+		}
+		if prevImageURL == "" && locationHubsMatch(prevSB.Location, sb.Location) && strings.TrimSpace(prevSB.ImageURL) != "" {
+			prevImageURL = prevSB.ImageURL
+		}
+	}
+	return StoryboardGenerateRequest{
+		StoryboardID:     sb.ID,
+		ProjectID:        sb.ProjectID,
+		SceneDescription: sb.SceneDescription,
+		Characters:       []string(sb.Characters),
+		Location:         sb.Location,
+		LocationZone:     sb.LocationZone,
+		SpatialAnchor:    sb.SpatialAnchor,
+		SubjectPositions: sb.SubjectPositions,
+		TransitionNote:   sb.TransitionNote,
+		CameraMovement:   sb.CameraMovement,
+		Mood:             sb.Mood,
+		AspectRatio:      sb.AspectRatio,
+		PromptUsed:       promptUsed,
+		ModelName:        modelName,
+		PrevPromptUsed:   prevPromptUsed,
+		PrevImageURL:     prevImageURL,
+		AssetIDs:         []int64(sb.AssetIDs),
+		RawPrompt:        sb.PromptLocked && strings.TrimSpace(sb.PromptUsed) != "",
+	}
+}
+
+// PreviewImageGeneration returns the exact payload that would be sent to image-service.
+func (s *StoryboardService) PreviewImageGeneration(ctx context.Context, storyboardID uint64, modelName string) (*StoryboardImageGenerationParams, error) {
+	if s.imageGenPreparer == nil {
+		return nil, fmt.Errorf("image generation preview unavailable")
+	}
+	sb, err := s.GetByID(storyboardID)
+	if err != nil {
+		return nil, err
+	}
+	genReq := s.buildStoryboardGenerateRequest(sb, modelName)
+	return s.imageGenPreparer.PrepareStoryboardImageGeneration(ctx, genReq)
 }

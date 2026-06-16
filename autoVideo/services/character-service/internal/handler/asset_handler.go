@@ -211,6 +211,30 @@ func fetchGeminiPartsFromChannels(ctx context.Context, client *http.Client, chan
 	return nil, lastErr
 }
 
+// GetExtractionStatus GET /api/v1/projects/:pid/assets/extraction-status?episode_id=123
+func (h *AssetHandler) GetExtractionStatus(c *gin.Context) {
+	pid, err := parseProjectID(c)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	var episodeID *uint64
+	if raw := strings.TrimSpace(c.Query("episode_id")); raw != "" {
+		if parsed, parseErr := strconv.ParseUint(raw, 10, 64); parseErr == nil {
+			episodeID = &parsed
+		} else {
+			response.Error(c, http.StatusBadRequest, "invalid episode id")
+			return
+		}
+	}
+	status, err := h.svc.GetExtractionStatus(pid, episodeID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.Success(c, status)
+}
+
 // ListAssets —— 获取项目下的资产列表，支持按类型、状态筛选和分页
 // ListAssets GET /api/v1/projects/:pid/assets?type=character&status=completed&page=1&page_size=50
 func (h *AssetHandler) ListAssets(c *gin.Context) {
@@ -838,6 +862,11 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
 		jwtToken = parts[1]
 	}
+	var req struct {
+		ModelName string `json:"model_name"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	opts := service.ExtractionOptions{ModelName: strings.TrimSpace(req.ModelName)}
 	go func() {
 		h.extractSem <- struct{}{}
 		defer func() { <-h.extractSem }()
@@ -850,7 +879,7 @@ func (h *AssetHandler) ExtractEpisodeAssets(c *gin.Context) {
 				)
 			}
 		}()
-		if _, err := h.extractSvc.ExtractFromEpisode(context.Background(), pid, eid, jwtToken); err != nil {
+		if _, err := h.extractSvc.ExtractFromEpisode(context.Background(), pid, eid, jwtToken, opts); err != nil {
 			h.logger.Error("async episode extraction failed",
 				zap.Uint64("project_id", pid),
 				zap.Uint64("episode_id", eid),
@@ -882,6 +911,11 @@ func (h *AssetHandler) ExtractAssets(c *gin.Context) {
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 {
 		jwtToken = parts[1]
 	}
+	var req struct {
+		ModelName string `json:"model_name"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	opts := service.ExtractionOptions{ModelName: strings.TrimSpace(req.ModelName)}
 
 	// Run extraction asynchronously
 	go func() {
@@ -901,7 +935,7 @@ func (h *AssetHandler) ExtractAssets(c *gin.Context) {
 			return
 		}
 
-		if _, err := h.extractSvc.ExtractFromProject(context.Background(), pid, jwtToken); err != nil {
+		if _, err := h.extractSvc.ExtractFromProject(context.Background(), pid, jwtToken, opts); err != nil {
 			h.logger.Error("async asset extraction failed",
 				zap.Uint64("project_id", pid),
 				zap.Error(err),

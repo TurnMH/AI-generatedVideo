@@ -48,6 +48,16 @@ type ModelsConfig struct {
 	OpenAIKeys      []string
 	OpenAIBase      string
 	OpenAIModels    []string // extra model names to expose via OpenAI-compatible key
+	// Dedicated gpt-image-2 channel(s), isolated from the generic OpenAI pool above.
+	// Supports multi-channel failover: GPTImage2Bases and GPTImage2Keys are parallel
+	// slices (key[i] is paired with base[i]); on a channel failure the generator
+	// transparently falls through to the next channel. If fewer bases than keys are
+	// configured the last base is reused (or GPTImage2Base as a single fallback).
+	// When GPTImage2Keys is non-empty, gpt-image-2 and its -all/-u variants are
+	// registered against these channels instead of OpenAIBase.
+	GPTImage2Base  string
+	GPTImage2Bases []string
+	GPTImage2Keys  []string
 	TongyiKey       string
 	TongyiKeys      []string
 	DashScopeBase   string
@@ -63,6 +73,13 @@ type ModelsConfig struct {
 	GeminiBases      []string
 	GeminiFlashModel string   // API model name for the flash-image generator (default: gemini-2.5-flash-image)
 	GeminiModels     []string // extra model aliases registered via Gemini generator
+	// Secondary failover channel for the flagship gemini image models
+	// (gemini-3-pro-image-preview / gemini-3.1-flash-image-preview). This channel
+	// serves them via the DALL-E-style /images/generations endpoint (t2i only, no
+	// multi-ref fusion), so it is wired as a FALLBACK behind the primary gemini-chat
+	// generator. When set, those two models gain a working backup channel.
+	GeminiImageFallbackBase string
+	GeminiImageFallbackKey  string
 	// Baidu BCE image generation (vod.bj.baidubce.com/v3/aigc/image) — async task-based
 	// Available models: NB, NBP, NB2, I4YG1, I4FG1, I4G1
 	// ⚠️  GET polling requires BCE-AUTH-V1 HMAC; bce-v3 Bearer token is NOT accepted for GET.
@@ -315,6 +332,17 @@ func Load() *Config {
 		viper.GetStringSlice("models.openai_models"),
 		viper.GetString("models.openai_models"),
 	)
+	cfg.Models.GPTImage2Base = viper.GetString("models.gpt_image2_base")
+	cfg.Models.GPTImage2Bases = mergeKeys(
+		cfg.Models.GPTImage2Base,
+		viper.GetStringSlice("models.gpt_image2_bases"),
+		viper.GetString("models.gpt_image2_bases"),
+	)
+	cfg.Models.GPTImage2Keys = mergeKeys(
+		viper.GetString("models.gpt_image2_key"),
+		viper.GetStringSlice("models.gpt_image2_keys"),
+		viper.GetString("models.gpt_image2_keys"),
+	)
 	cfg.Models.TongyiKey = viper.GetString("models.tongyi_key")
 	cfg.Models.TongyiKeys = mergeKeys(
 		cfg.Models.TongyiKey,
@@ -359,6 +387,8 @@ func Load() *Config {
 		viper.GetStringSlice("models.gemini_models"),
 		viper.GetString("models.gemini_models"),
 	)
+	cfg.Models.GeminiImageFallbackBase = viper.GetString("models.gemini_image_fallback_base")
+	cfg.Models.GeminiImageFallbackKey = viper.GetString("models.gemini_image_fallback_key")
 	// Baidu BCE image channel
 	cfg.Models.BaiduImageKey = viper.GetString("models.baidu_image_key")
 	cfg.Models.BaiduImageAK = viper.GetString("models.baidu_image_ak")

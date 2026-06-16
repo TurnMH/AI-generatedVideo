@@ -30,6 +30,10 @@ type StoryboardGenerateRequest struct {
 	SceneDescription string   `json:"scene_description"`
 	Characters       []string `json:"characters"`
 	Location         string   `json:"location"`
+	LocationZone     string   `json:"location_zone,omitempty"`
+	SpatialAnchor    string   `json:"spatial_anchor,omitempty"`
+	SubjectPositions string   `json:"subject_positions,omitempty"`
+	TransitionNote   string   `json:"transition_note,omitempty"`
 	CameraMovement   string   `json:"camera_movement"`
 	Mood             string   `json:"mood,omitempty"`
 	AspectRatio      string   `json:"aspect_ratio"`
@@ -43,6 +47,9 @@ type StoryboardGenerateRequest struct {
 	// use it as a visual continuity anchor for color grading and style consistency.
 	PrevImageURL string  `json:"prev_image_url,omitempty"`
 	AssetIDs     []int64 `json:"asset_ids,omitempty"`
+	// RawPrompt: 高级模式，用户手工锁定了最终提示词。为 true 且 PromptUsed 非空时，
+	// 消费端直接原样使用 PromptUsed，跳过翻译 / 提示词组装 / 一致性拼接。
+	RawPrompt bool `json:"raw_prompt,omitempty"`
 }
 
 // StoryboardGenerateResult is published after generation completes or fails.
@@ -286,180 +293,19 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message) {
 		zap.Uint64("version_id", req.VersionID),
 	)
 
-	projectVisualPrompt := ""
-	imageStylePrefix := ""
-	stylePreset := stylepreset.Default
-	negativePrompt := buildStoryboardNegativePrompt(nil)
-	var locationDescs map[string]string // from project keyword library profiles
-	projectUserID := uint64(1)          // default; overridden below when project is loaded
-	if project, projectErr := c.projectRepo.FindByIDNoAuth(req.ProjectID); projectErr == nil {
-		projectVisualPrompt = buildProjectVisualPrompt(project)
-		stylePreset = storyboardStylePreset(project)
-		negativePrompt = buildStoryboardNegativePrompt(project)
-		imageStylePrefix = project.ImageStylePrefix
-		// Build location description map from stored visual profiles for consistency.
-		locationDescs = buildLocationDescMap(project.KeywordLibrary)
-		projectUserID = project.UserID
-	} else {
-		c.logger.Warn("load project visual config for storyboard generation", zap.Uint64("project_id", req.ProjectID), zap.Error(projectErr))
+	bundle, err := c.prepareStoryboardImageBundle(ctx, req)
+	if err != nil {
+		c.logger.Error("prepare storyboard image bundle failed", zap.Uint64("storyboard_id", req.StoryboardID), zap.Error(err))
+		return
 	}
-	// Translate any Chinese text to English so SDXL/DALL-E understands it.
-	// Only translate SceneDescription if PromptUsed is empty or Chinese — if PromptUsed is
-	// already an English prompt (e.g. from LLM refinement at creation time), SceneDescription
-	// is redundant and translating it wastes an LLM call.
-	originalLocation := req.Location
-	req.PromptUsed = c.translateIfNeeded(ctx, req.PromptUsed)
-	if strings.TrimSpace(req.PromptUsed) == "" || containsChinese(req.PromptUsed) || isFullGeneratedPrompt(req.PromptUsed) {
-		req.SceneDescription = c.translateIfNeeded(ctx, req.SceneDescription)
-	}
-	req.Location = c.translateIfNeeded(ctx, req.Location)
-	// Preserve the original (possibly Chinese) character names for DB lookups BEFORE
-	// translating them. The character/asset tables are keyed by the original DB name,
-	// so translating first would cause every map lookup below to silently fail for
-	// Chinese projects (no CHARACTER LOCK text, no style_reference_url picked up).
-	originalCharacters := make([]string, len(req.Characters))
-	copy(originalCharacters, req.Characters)
-	for i, ch := range req.Characters {
-		req.Characters[i] = c.translateIfNeeded(ctx, ch)
-	}
-
-	// Fetch character appearance descriptions and inject into prompt (char-c2).
-	charAppearances := c.fetchCharacterAppearances(ctx, req.ProjectID, originalCharacters)
-	// Fetch project skill hints for image generation enrichment.
-	skillHints := c.fetchProjectSkillHints(ctx, req.ProjectID)
-
-	// Fetch generated asset reference images for visual consistency (char-c10).
-	// Use the primary character's generated image as style_reference_url so models
-	// that support reference input (Tongyi/wanx i2i, Gemini, Baidu) produce visually
-	// consistent characters instead of text-only descriptions.
-	// We also collect prompt_used because it carries the era/region/ethnicity/gender
-	// wardrobe constraints that were baked into the asset image — preferring that
-	// over the plain Character.appearance_desc keeps the storyboard text aligned
-	// with what the asset image actually depicts.
-	directAssetRefs := c.fetchAssetReferencesByIDs(ctx, req.ProjectID, req.AssetIDs)
-	directAssetMaps := buildAssetReferenceMaps(directAssetRefs)
-
-	// BUG-3 FIX: replace two separate fetchAssetReferenceData calls (one for "character",
-	// one for "scene") with a single batch fetch that retrieves ALL completed assets in one
-	// HTTP round-trip and splits them by type in memory.
-	charRefImages, charAssetPrompts, sceneRefImages := c.fetchAllAssetRefsOnce(ctx, req.ProjectID)
-	charRefImages = mergeAssetReferenceMap(charRefImages, directAssetMaps.CharacterImages)
-	charAssetPrompts = mergeAssetReferenceMap(charAssetPrompts, directAssetMaps.CharacterPrompts)
-	sanitizeCharacterPromptMapForStoryboard(charAssetPrompts)
-	sceneRefImages = mergeAssetReferenceMap(sceneRefImages, directAssetMaps.SceneImages)
-
-	// Pick the first listed character that has a generated image as the primary reference.
-	var styleReferenceURL string
-	// Also collect every available character asset image so multi-image-aware
-	// generators (Gemini parts[], gpt-image-1 image[], Baidu messages.content[])
-	// can see every subject that appears in the panel. Order is preserved to
-	// match the text order of characters in the prompt.
-	var referenceImageURLs []string
-	seenRef := make(map[string]struct{})
-	for _, name := range originalCharacters {
-		imgURL, ok := charRefImages[strings.ToLower(strings.TrimSpace(name))]
-		if !ok || imgURL == "" {
-			continue
-		}
-		if styleReferenceURL == "" {
-			styleReferenceURL = imgURL
-		}
-		if _, dup := seenRef[imgURL]; !dup {
-			seenRef[imgURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, imgURL)
-		}
-	}
-	if styleReferenceURL == "" {
-		lookupLocation := strings.ToLower(strings.TrimSpace(originalLocation))
-		if lookupLocation != "" {
-			styleReferenceURL = sceneRefImages[lookupLocation]
-		}
-		if styleReferenceURL == "" && req.Location != "" {
-			styleReferenceURL = sceneRefImages[strings.ToLower(strings.TrimSpace(req.Location))]
-		}
-	}
-	if styleReferenceURL == "" {
-		for _, imageURL := range directAssetMaps.SceneImages {
-			if strings.TrimSpace(imageURL) != "" {
-				styleReferenceURL = imageURL
-				break
-			}
-		}
-	}
-	if styleReferenceURL == "" {
-		for _, imageURL := range directAssetMaps.PropImages {
-			if strings.TrimSpace(imageURL) != "" {
-				styleReferenceURL = imageURL
-				break
-			}
-		}
-	}
-	lookupLocation := strings.ToLower(strings.TrimSpace(originalLocation))
-	if lookupLocation == "" {
-		lookupLocation = strings.ToLower(strings.TrimSpace(req.Location))
-	}
-	if lookupLocation != "" {
-		if sceneURL := sceneRefImages[lookupLocation]; sceneURL != "" {
-			if _, dup := seenRef[sceneURL]; !dup {
-				seenRef[sceneURL] = struct{}{}
-				referenceImageURLs = append(referenceImageURLs, sceneURL)
-			}
-		}
-	}
-	for _, sceneURL := range directAssetMaps.SceneImages {
-		if sceneURL == "" {
-			continue
-		}
-		if _, dup := seenRef[sceneURL]; !dup {
-			seenRef[sceneURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, sceneURL)
-		}
-	}
-	for _, propURL := range directAssetMaps.PropImages {
-		if propURL == "" {
-			continue
-		}
-		if _, dup := seenRef[propURL]; !dup {
-			seenRef[propURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, propURL)
-		}
-	}
-	// Append the previous storyboard's generated image as a visual continuity anchor.
-	// This lets multi-ref models (Gemini, gpt-image-1, Baidu) use it for color grading
-	// and overall style consistency across consecutive panels. Single-ref models
-	// (styleReferenceURL) are unaffected because they only read the first ref.
-	if prevURL := strings.TrimSpace(req.PrevImageURL); prevURL != "" {
-		if _, dup := seenRef[prevURL]; !dup {
-			referenceImageURLs = append(referenceImageURLs, prevURL)
-		}
-	}
-
-	modelName := req.ModelName
-	if modelName == "" {
-		modelName = "dalle"
-	}
-	// Append model-specific negative prompt tokens for diffusion models.
-	negativePrompt = appendModelNegativeTokens(negativePrompt, modelName)
-	negativePrompt = appendStoryboardAntiSheetNegativeTokens(negativePrompt)
-	// D: environment/prop-only frames (no characters listed) must actively exclude people,
-	// otherwise diffusion models hallucinate incidental figures in landscape/prop shots.
-	if len(req.Characters) == 0 {
-		negativePrompt = appendNoPeopleNegativeTokens(negativePrompt)
-	}
-	referenceImageURLs = filterStoryboardReferenceURLs(referenceImageURLs)
-	referenceImageURLs = prioritizeStoryboardReferenceImages(referenceImageURLs)
-	styleReferenceURL = resolveStoryboardStyleReferenceURL(styleReferenceURL, referenceImageURLs)
 	c.logger.Info("storyboard references prepared",
 		zap.Uint64("storyboard_id", req.StoryboardID),
-		zap.String("model", modelName),
-		zap.Int("character_count", len(originalCharacters)),
-		zap.Int("direct_asset_count", len(req.AssetIDs)),
-		zap.String("style_reference_url", styleReferenceURL),
-		zap.Int("reference_image_count", len(referenceImageURLs)),
-		zap.Bool("has_prev_image", strings.TrimSpace(req.PrevImageURL) != ""),
+		zap.String("model", bundle.ModelName),
+		zap.String("style_reference_url", bundle.StyleReferenceURL),
+		zap.Int("reference_image_count", len(bundle.ReferenceImageURLs)),
 	)
-	prompt := buildImagePromptWithAppearances(req, stylePreset, projectVisualPrompt, imageStylePrefix, charAppearances, locationDescs, skillHints, modelName, originalCharacters, charAssetPrompts)
-	imageURL, err := c.callImageServiceWithRetry(ctx, req.ProjectID, projectUserID, prompt, modelName, req.StoryboardID, stylePreset, negativePrompt, req.AspectRatio, styleReferenceURL, referenceImageURLs)
+
+	imageURL, err := c.callImageServiceWithRetry(ctx, req.ProjectID, bundle.ProjectUserID, bundle.Prompt, bundle.ModelName, req.StoryboardID, bundle.StylePreset, bundle.NegativePrompt, bundle.AspectRatio, bundle.StyleReferenceURL, bundle.ReferenceImageURLs)
 
 	result := StoryboardGenerateResult{
 		StoryboardID: req.StoryboardID,
@@ -482,7 +328,7 @@ func (c *KafkaConsumer) handle(ctx context.Context, msg kafka.Message) {
 		result.Status = "completed"
 		result.ImageURL = imageURL
 		// Save the full built English prompt so the UI EN toggle shows the actual generation prompt.
-		_ = c.storyboardSvc.UpdateGenerationResult(req.StoryboardID, req.VersionID, imageURL, "completed", "", prompt)
+		_ = c.storyboardSvc.UpdateGenerationResult(req.StoryboardID, req.VersionID, imageURL, "completed", "", bundle.Prompt)
 		go func(projectID uint64) {
 			triggerCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
@@ -543,56 +389,46 @@ func buildImagePrompt(req StoryboardGenerateRequest, stylePreset, projectVisualP
 // req.Characters (translated) is still used for the surface "Featured subjects" text so
 // downstream diffusion models receive English tokens.
 // modelName is used to append model-specific quality suffix tokens (T4).
-func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset, projectVisualPrompt, imageStylePrefix string, charAppearances map[string]string, locationDescs map[string]string, skillHints string, modelName string, originalCharacters []string, charAssetPrompts map[string]string) string {
-	opening := storyboardOpeningSentence(stylePreset)
-	parts := []string{opening}
-	// Prepend project-level global style prefix if set (e.g. "anime style, clean linework")
-	if prefix := strings.TrimSpace(imageStylePrefix); prefix != "" {
-		parts = append(parts, "Visual style: "+prefix+".")
+func truncateForImagePrompt(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if s == "" || maxRunes <= 0 {
+		return s
 	}
-	// Inject skill-based modifiers (combat/special/etc.) after style prefix.
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes]) + "…"
+}
+
+func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset, projectVisualPrompt, imageStylePrefix string, charAppearances map[string]string, locationDescs map[string]string, skillHints string, modelName string, originalCharacters []string, charAssetPrompts map[string]string) string {
+	parts := []string{storyboardOpeningSentence(stylePreset)}
+	if prefix := strings.TrimSpace(imageStylePrefix); prefix != "" {
+		parts = append(parts, prefix+".")
+	}
 	if sh := strings.TrimSpace(skillHints); sh != "" {
 		parts = append(parts, sh)
 	}
-	// Primary dramatic beat: prefer the stored English PromptUsed over translating SceneDescription.
-	// LLM-refined English prompts (set at storyboard creation) are higher quality than on-the-fly
-	// translations. Full generated prompts saved back after a previous generation are detected by
-	// isFullGeneratedPrompt and fall back to SceneDescription to avoid redundant nesting.
+
 	pu := strings.TrimSpace(req.PromptUsed)
 	scene := strings.TrimSpace(req.SceneDescription)
 	usedPromptUsedAsPrimary := pu != "" && !containsChinese(pu) && !isFullGeneratedPrompt(pu)
-	if usedPromptUsedAsPrimary {
-		parts = append(parts, "Primary dramatic beat: "+pu+".")
-	} else if scene != "" && !containsChinese(scene) {
-		parts = append(parts, "Primary dramatic beat: "+scene+".")
-	} else {
-		// Fallback B: translation failed — preserve raw source text so the prompt still
-		// carries the dramatic intent. Many modern multilingual models accept Chinese input;
-		// without this the prompt would collapse to a generic template.
+	switch {
+	case usedPromptUsedAsPrimary:
+		parts = append(parts, pu+".")
+	case scene != "" && !containsChinese(scene):
+		parts = append(parts, scene+".")
+	default:
 		if raw := pickBeatFallback(pu, scene); raw != "" {
-			parts = append(parts, "Primary dramatic beat (source language, best-effort): "+raw+".")
+			parts = append(parts, raw+".")
 		}
 	}
-	// Inject previous storyboard frame as visual continuity anchor (for single-frame re-generation).
-	if prevCtx := strings.TrimSpace(req.PrevPromptUsed); prevCtx != "" && !containsChinese(prevCtx) {
-		// Cap length to avoid bloating the prompt with a very long prior frame description.
-		if len(prevCtx) > 400 {
-			prevCtx = prevCtx[:400] + "…"
-		}
-		parts = append(parts, "VISUAL CONTINUITY — previous scene (use the previous frame only for scene layout, blocking, camera framing, lighting rhythm, and overall color continuity. Do NOT change character identity from this section. Character face, age impression, hairstyle, skin tone, accessories, and wardrobe must continue to follow the canonical character descriptions and reference images first; only pose, expression, gesture, blocking, and framing may evolve): "+prevCtx)
-	}
-	hasCharacters := len(req.Characters) > 0
-	if hasCharacters {
-		parts = append(parts, "Featured subjects: "+strings.Join(req.Characters, ", ")+".")
+
+	if len(req.Characters) > 0 {
+		parts = append(parts, "Characters: "+strings.Join(req.Characters, ", ")+".")
 	} else {
-		// D: environment/prop-only frame — prevent models from inventing incidental people.
-		parts = append(parts, "Environment / prop-only frame: no visible human figures; focus on setting, atmosphere, and object detail.")
+		parts = append(parts, "No visible people; focus on environment and props.")
 	}
-	// Inject per-character appearance descriptions for visual consistency.
-	// Prefer Asset.prompt_used (carries the era/region/ethnicity/gender wardrobe
-	// constraints baked into the reference image) over Character.appearance_desc
-	// (plain user/LLM summary). Look up by ORIGINAL (pre-translation) name so
-	// Chinese-named characters aren't silently missed.
+
 	if len(charAppearances) > 0 || len(charAssetPrompts) > 0 {
 		var descParts []string
 		for i, name := range req.Characters {
@@ -604,66 +440,57 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 			if strings.TrimSpace(desc) == "" {
 				desc = charAppearances[lookupKey]
 			}
-			if strings.TrimSpace(desc) != "" {
-				descParts = append(descParts, strings.TrimSpace(name)+": "+strings.TrimSpace(desc))
+			if desc = truncateForImagePrompt(desc, 160); desc != "" {
+				descParts = append(descParts, strings.TrimSpace(name)+": "+desc)
 			}
 		}
 		if len(descParts) > 0 {
-			parts = append(parts, "CHARACTER LOCK — every listed subject must match these canonical descriptions exactly across all storyboard frames. This character lock has higher priority than visual continuity notes, scene carry-over, or generic style cues. DO NOT alter face shape, facial proportions, eye/nose/mouth/jaw structure, age impression, skin tone, hairstyle, hair color, makeup, garment layers, fabric colors, accessories, or body build between frames unless the scene description explicitly changes outfit: "+strings.Join(descParts, " | ")+".")
+			parts = append(parts, "Keep character identity consistent with: "+strings.Join(descParts, "; ")+".")
 		}
 	}
-	constraintHints := deriveStoryboardConstraintHints(req, originalCharacters, charAppearances, charAssetPrompts)
-	if constraintHints.PoseConstraint != "" || constraintHints.ActionConstraint != "" || constraintHints.SpatialConstraint != "" || constraintHints.WardrobeConstraint != "" {
-		parts = append(parts, "PRE-GEN CONSTRAINT PRIORITY — resolve constraints in this order: canonical face and wardrobe lock first, then pose/action continuity, then spatial blocking and screen direction, then lighting/style polish.")
-		if constraintHints.PoseConstraint != "" {
-			parts = append(parts, "POSE AND GESTURE LOCK — keep the body posture, hand shape, head angle, eyeline, and weight distribution readable and consistent with these cues: "+constraintHints.PoseConstraint+".")
-		}
-		if constraintHints.ActionConstraint != "" {
-			parts = append(parts, "ACTION STAGING — make the current frame look like one clean beat inside a continuous motion chain, not an unrelated pose jump: "+constraintHints.ActionConstraint+".")
-		}
-		if spatial := strings.TrimSpace(constraintHints.SpatialConstraint); spatial != "" && utf8.RuneCountInString(spatial) >= 12 {
-			parts = append(parts, "SPATIAL NOTE — only if already established in the scene text, keep these relations stable: "+spatial+".")
-		}
-		if constraintHints.WardrobeConstraint != "" {
-			parts = append(parts, "WARDROBE AND GROOMING LOCK — unless the scene explicitly calls for a costume change, preserve outfit silhouette, garment layers, accessories, hair styling, and makeup: "+constraintHints.WardrobeConstraint+".")
-		}
-	}
+
 	if trimmedLocation := strings.TrimSpace(req.Location); trimmedLocation != "" {
-		// If we have a stored visual description for this location, use it for consistency.
 		locDesc := ""
 		if len(locationDescs) > 0 {
-			locDesc = locationDescs[strings.ToLower(trimmedLocation)]
+			hubKey := strings.ToLower(NormalizeLocationHub(trimmedLocation))
+			zoneKey := strings.ToLower(strings.TrimSpace(req.LocationZone))
+			if zoneKey == "" {
+				_, zoneLabel := ParseLocationHubAndZone(trimmedLocation)
+				zoneKey = strings.ToLower(strings.TrimSpace(zoneLabel))
+			}
+			if zoneKey != "" {
+				locDesc = locationDescs[hubKey+"|"+zoneKey]
+			}
+			if locDesc == "" && zoneKey != "" {
+				locDesc = locationDescs[hubKey+"|"+NormalizeLocationViewType(zoneKey)]
+			}
+			if locDesc == "" {
+				locDesc = locationDescs[strings.ToLower(trimmedLocation)]
+			}
+			if locDesc == "" {
+				locDesc = locationDescs[hubKey]
+			}
 		}
 		if locDesc != "" {
-			parts = append(parts, "Environment and setting: "+trimmedLocation+" — "+locDesc+".")
+			parts = append(parts, "Setting: "+trimmedLocation+" — "+truncateForImagePrompt(locDesc, 120)+".")
 		} else {
-			parts = append(parts, "Environment and setting: "+trimmedLocation+".")
+			parts = append(parts, "Setting: "+trimmedLocation+".")
 		}
 	}
+
 	if moodCue := storyboardMoodCue(req.Mood); moodCue != "" {
 		parts = append(parts, moodCue)
-	}
-	if cameraCue := storyboardCameraCue(req.CameraMovement); cameraCue != "" {
-		parts = append(parts, cameraCue)
 	}
 	if aspectCue := storyboardAspectRatioCue(req.AspectRatio); aspectCue != "" {
 		parts = append(parts, aspectCue)
 	}
-	// Only add as "additional requirements" when PromptUsed wasn't already used as the primary beat,
-	// and only if it's not a full saved-back generated prompt, and not Chinese (translation may have failed).
 	if !usedPromptUsedAsPrimary {
 		if trimmedPrompt := strings.TrimSpace(req.PromptUsed); trimmedPrompt != "" && !isFullGeneratedPrompt(trimmedPrompt) && !containsChinese(trimmedPrompt) {
-			parts = append(parts, "Additional visual requirements: "+trimmedPrompt+".")
+			parts = append(parts, truncateForImagePrompt(trimmedPrompt, 280)+".")
 		}
 	}
-	parts = append(parts,
-		"Frame one decisive story moment with clear subject hierarchy, readable blocking, believable foreground-midground-background separation, and lighting that supports the narrative beat.",
-		"Keep anatomy, costumes, props, and environment consistent and production-ready. Clothing must strictly match each character's gender — never render female garments (chest-high ruqun, pibo sashes, hairpin buns) on male characters, or male garments on female characters.",
-		"Facial expressions and body language should read as natural, micro-expression-level human performance (subtle brow, eye, and mouth movement) — avoid stiff mannequin poses, frozen smiles, or exaggerated anime reactions in live-action frames. Ensure limb articulation and weight distribution feel physically plausible.",
-		"Output a single cinematic storyboard frame with no text, no subtitle, no watermark, no split screen, and no collage layout.",
-		"Do NOT render a character reference sheet, turnaround sheet, model sheet, or multi-panel layout. Use character references only for face, hairstyle, and wardrobe identity — not for sheet composition.",
-	)
-	// Append model-specific quality suffix tokens (T4: per-model keyword optimization).
+
+	parts = append(parts, "Single still storyboard frame. No text, watermark, split layout, or character reference sheet.")
 	if qualitySuffix := modelQualitySuffix(modelName, stylePreset); qualitySuffix != "" {
 		parts = append(parts, qualitySuffix)
 	}
@@ -696,15 +523,15 @@ func modelQualitySuffix(modelName, stylePreset string) string {
 func storyboardOpeningSentence(stylePreset string) string {
 	switch stylepreset.Canonical(stylePreset) {
 	case "live-action-film":
-		return "Create a single photorealistic cinematic film keyframe for professional video production. No anime, no cartoon, no illustration style."
+		return "Single photorealistic cinematic still frame. No anime, cartoon, or illustration."
 	case "live-action-short":
-		return "Create a single photorealistic short drama keyframe for professional video production. No anime, no cartoon, no illustration style."
+		return "Single photorealistic drama still frame. No anime, cartoon, or illustration."
 	case "anime-2d":
-		return "Create a single 2D anime-style storyboard keyframe with clean line art and cel-shaded colors."
+		return "Single 2D anime-style still frame with clean line art and cel-shaded colors."
 	case "anime-3d":
-		return "Create a single 3D anime CG-style storyboard keyframe with toon-shaded volumetric depth."
+		return "Single 3D anime CG still frame with toon-shaded depth."
 	default:
-		return "Create a single polished storyboard keyframe for a film/video production."
+		return "Single polished storyboard still frame."
 	}
 }
 
@@ -911,39 +738,41 @@ func (c *KafkaConsumer) fetchCharacterAppearances(ctx context.Context, projectID
 // (no type filter) and returns three maps split by asset type in memory.
 // This replaces the prior two-call pattern (separate calls for "character" and "scene")
 // and reduces per-frame HTTP overhead from 2+ round-trips to 1.
-func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uint64) (charImages, charPrompts, sceneImages map[string]string) {
+func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uint64) (charImages, charPrompts, sceneImages map[string]string, sceneEntries []sceneAssetEntry) {
 	if c.characterBaseURL == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	batchURL := fmt.Sprintf("%s/api/v1/projects/%d/assets?status=completed&page_size=500", c.characterBaseURL, projectID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, batchURL, nil)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	c.applyServiceAuthHeader(httpReq, projectID)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		c.logger.Warn("fetchAllAssetRefsOnce failed", zap.Uint64("project_id", projectID), zap.Error(err))
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	type assetItem struct {
-		Name        string   `json:"name"`
-		Type        string   `json:"type"`
-		ImageURL    string   `json:"image_url"`
-		PromptUsed  string   `json:"prompt_used"`
-		PanelImages []string `json:"panel_images"`
+		Name        string                 `json:"name"`
+		Type        string                 `json:"type"`
+		ImageURL    string                 `json:"image_url"`
+		PromptUsed  string                 `json:"prompt_used"`
+		PanelImages []string               `json:"panel_images"`
+		Metadata    map[string]interface{} `json:"metadata"`
 	}
 	parseItems := func(items []assetItem) {
 		charImages = make(map[string]string)
 		charPrompts = make(map[string]string)
 		sceneImages = make(map[string]string)
+		sceneEntries = nil
 		for _, item := range items {
 			key := strings.ToLower(strings.TrimSpace(item.Name))
 			if key == "" {
@@ -961,8 +790,11 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 				if item.ImageURL != "" {
 					sceneImages[key] = item.ImageURL
 				}
+				entry := parseSceneAssetEntry(item.Name, item.ImageURL, item.PanelImages, item.Metadata)
+				if entry.ImageURL != "" {
+					sceneEntries = append(sceneEntries, entry)
+				}
 			}
-			// prop/item/clothing/vehicle etc. are not needed for scene/char ref maps
 		}
 	}
 
@@ -973,7 +805,7 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	}
 	if err := json.Unmarshal(body, &paginated); err == nil && len(paginated.Data.Items) > 0 {
 		parseItems(paginated.Data.Items)
-		return charImages, charPrompts, sceneImages
+		return charImages, charPrompts, sceneImages, sceneEntries
 	}
 	var legacy struct {
 		Data []assetItem `json:"data"`
@@ -981,7 +813,7 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	if err2 := json.Unmarshal(body, &legacy); err2 == nil && len(legacy.Data) > 0 {
 		parseItems(legacy.Data)
 	}
-	return charImages, charPrompts, sceneImages
+	return charImages, charPrompts, sceneImages, sceneEntries
 }
 
 // fetchAssetReferenceImages —— 获取项目已生成完成的资产图片，用于分镜生成时的视觉一致性参考 (char-c10)
@@ -1072,23 +904,16 @@ func (c *KafkaConsumer) fetchAssetReferenceData(ctx context.Context, projectID u
 
 // keyword library JSON. Returns a map of lowercase location name → description.
 func buildLocationDescMap(kwLibJSON []byte) map[string]string {
-	if len(kwLibJSON) == 0 {
+	idx := buildLocationProfileIndex(kwLibJSON)
+	if len(idx.HubDesc) == 0 && len(idx.ZoneDesc) == 0 {
 		return nil
 	}
-	var lib struct {
-		LocationProfiles []struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		} `json:"location_profiles"`
+	m := make(map[string]string, len(idx.HubDesc)+len(idx.ZoneDesc))
+	for k, v := range idx.HubDesc {
+		m[k] = v
 	}
-	if err := json.Unmarshal(kwLibJSON, &lib); err != nil || len(lib.LocationProfiles) == 0 {
-		return nil
-	}
-	m := make(map[string]string, len(lib.LocationProfiles))
-	for _, p := range lib.LocationProfiles {
-		if p.Name != "" && p.Description != "" {
-			m[strings.ToLower(strings.TrimSpace(p.Name))] = p.Description
-		}
+	for k, v := range idx.ZoneDesc {
+		m[k] = v
 	}
 	if len(m) == 0 {
 		return nil
@@ -1278,7 +1103,12 @@ func containsChinese(s string) bool {
 // visual requirements" — they already contain all structured prompt parts and would cause
 // redundant nesting if included again.
 func isFullGeneratedPrompt(s string) bool {
-	return strings.HasPrefix(s, "Create a single")
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "Create a single") ||
+		strings.HasPrefix(s, "Single photorealistic") ||
+		strings.HasPrefix(s, "Single 2D anime") ||
+		strings.HasPrefix(s, "Single 3D anime") ||
+		strings.HasPrefix(s, "Single polished storyboard")
 }
 
 // translateIfNeeded translates text that contains Chinese characters to English

@@ -147,6 +147,8 @@ func main() {
 		cfg.ModelService.BaseURL,
 	)
 	assetSvc.SetVolcAssetClient(volcAssetClient)
+	// 视觉质检独立渠道：文本润色走 gpt-5.4（纯文本渠道），四视图视觉质检仍走支持图片输入的渠道。
+	assetSvc.SetVisionChannel(cfg.LLM.VisionBaseURL, cfg.LLM.VisionAPIKey)
 
 	// ── Kafka ────────────────────────────────────────────────────────────────
 	var kafkaProducer *service.KafkaProducer
@@ -205,6 +207,7 @@ func main() {
 		assetSvc,
 		skillRepo,
 		cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model,
+		cfg.LLM.FallbackBaseURL, cfg.LLM.FallbackAPIKey, cfg.LLM.FallbackModel,
 		llmTimeout,
 		cfg.ProjectService.BaseURL, jwtUserSecret,
 		log,
@@ -334,6 +337,7 @@ func main() {
 			cgroups.DELETE("/:gid/variants/:aid", characterGroupHandler.RemoveVariant)
 
 			assets := projects.Group("/assets")
+			assets.GET("/extraction-status", assetHandler.GetExtractionStatus)
 			assets.GET("", assetHandler.ListAssets)
 			assets.DELETE("", assetHandler.DeleteAllAssets)
 			assets.POST("", assetHandler.CreateAsset)

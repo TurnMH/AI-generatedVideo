@@ -7,7 +7,7 @@ func TestPreferredRatioIntent(t *testing.T) {
 
 	cases := map[string]RatioIntent{
 		"portrait":        RatioPortrait,
-		"character-sheet": RatioPortrait,
+		"character-sheet": RatioLandscape,
 		"poster":          RatioPortrait,
 		"storyboard":      RatioLandscape,
 		"scene-concept":   RatioLandscape,
@@ -232,7 +232,7 @@ func TestTaskTypeRatioDefaults(t *testing.T) {
 	defaults := TaskTypeRatioDefaults()
 	expected := map[string]RatioIntent{
 		"portrait":        RatioPortrait,
-		"character-sheet": RatioPortrait,
+		"character-sheet": RatioLandscape,
 		"poster":          RatioPortrait,
 		"storyboard":      RatioLandscape,
 		"scene-concept":   RatioLandscape,

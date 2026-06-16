@@ -320,12 +320,15 @@ export interface Storyboard {
   current_version: number
   image_url: string
   prompt_used: string
+  /** 高级模式：为 true 时图片生成原样使用 prompt_used，跳过自动组装 */
+  prompt_locked?: boolean
   status: StoryboardStatus
   error_msg?: string
   is_voided: boolean
   is_manual_edited: boolean
   agent_history: ChatMessage[]
   asset_ids: number[]
+  location_zone?: string
   spatial_anchor?: string
   subject_positions?: string
   transition_note?: string
@@ -335,6 +338,24 @@ export interface Storyboard {
   versions?: StoryboardVersion[]
   created_at: string
   updated_at: string
+}
+
+/** Exact payload sent to image-service when generating a storyboard frame. */
+export interface StoryboardImageGenerationParams {
+  prompt: string
+  prompt_display_zh?: string
+  prompt_auto_supplements_zh?: string
+  negative_prompt: string
+  model_name: string
+  style_preset: string
+  aspect_ratio: string
+  width: number
+  height: number
+  style_reference_url?: string
+  reference_image_urls: string[]
+  is_character_sheet: boolean
+  raw_prompt_mode: boolean
+  task_type: string
 }
 
 // ─── CharacterGroup ──────────────────────────────────────────

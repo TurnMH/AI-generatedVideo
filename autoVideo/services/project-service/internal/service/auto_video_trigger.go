@@ -220,12 +220,16 @@ func (s *StoryboardService) TriggerAutoVideoIfReady(ctx context.Context, project
 			if duration <= 0 {
 				duration = 5
 			}
-			dialogue := speechtext.FitStoryboardDialogue(
-				speechtext.SanitizeForSpeech(sb.Dialogue),
-				duration,
-				storyboardConfigString(project.StoryboardConfig, "speech_pace"),
-				productionmode.ResolveProfile(project).IsCommentaryComic(),
-			)
+			profile := productionmode.ResolveProfile(project)
+			dialogue := sb.Dialogue
+			if !profile.SkipPostProcessing {
+				dialogue = speechtext.FitStoryboardDialogue(
+					speechtext.SanitizeForSpeech(sb.Dialogue),
+					duration,
+					storyboardConfigString(project.StoryboardConfig, "speech_pace"),
+					profile.IsCommentaryComic(),
+				)
+			}
 			payload.Dialogues = append(payload.Dialogues, dialogue)
 			if sb.Duration > 0 {
 				payload.Durations = append(payload.Durations, float64(sb.Duration))

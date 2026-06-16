@@ -387,6 +387,26 @@ func projectImageStylePreset(profile *projectVisualProfile) string {
 	return stylepreset.Canonical(strings.TrimSpace(stringValue(profile.StoryboardConfig["style_preset"])))
 }
 
+// removeNegativeTerms returns parts with the given terms removed (exact, case-insensitive match).
+// 用于剔除与"同一个角色多视角三视图"语义冲突的 universal 反义词（如 duplicate subject）。
+func removeNegativeTerms(parts []string, terms ...string) []string {
+	if len(parts) == 0 || len(terms) == 0 {
+		return parts
+	}
+	drop := make(map[string]struct{}, len(terms))
+	for _, t := range terms {
+		drop[strings.ToLower(strings.TrimSpace(t))] = struct{}{}
+	}
+	out := parts[:0]
+	for _, p := range parts {
+		if _, skip := drop[strings.ToLower(strings.TrimSpace(p))]; skip {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 func buildProjectImageNegativePrompt(profile *projectVisualProfile, assetType string) string {
 	parts := []string{
 		// Universal quality failures
@@ -440,27 +460,36 @@ func buildProjectImageNegativePrompt(profile *projectVisualProfile, assetType st
 
 	switch normalizedType {
 	case "character", "角色", "人物":
+		parts = append(parts, characterInsectNegativeTerms()...)
 		parts = append(parts,
 			"crowd", "multiple people", "occluded face", "tiny distant figure",
-			// 4-panel layout failure modes (for turnaround reference sheets)
-			"(2x2 grid:1.5)", "(4x1 vertical stack:1.4)", "(single pose only:1.5)",
-			"(missing close-up panel:1.4)", "(missing back view:1.4)",
-			"(different characters in different panels:1.5)",
-			"(inconsistent costume across panels:1.4)",
+		)
+		// 真人与动漫角色统一为单图四视图（最左大头照特写 + 正面/侧面/背面全身横向并排，同一个人重复）。
+		// 必须剔除 universal 中会阻止"同一个人多视角重复"的反义词，否则模型只画一个身形。
+		parts = removeNegativeTerms(parts, "duplicate subject", "collage", "split screen")
+		parts = append(parts,
+			// 版面失败模式：要横向一排（大头照 + 三个全身视图），而非网格/竖排/单姿势。
+			"(2x2 grid:1.5)", "(vertical stack:1.4)", "(single pose only:1.4)",
+			"(only one view:1.4)", "(missing closeup headshot:1.4)",
+			"(missing side view:1.3)", "(missing back view:1.3)",
+			// 身份一致性：所有视图必须是同一个人，禁止变成不同人物。
+			"(different characters per view:1.5)", "(different person per view:1.5)",
+			"(inconsistent costume across views:1.4)",
 			"(inconsistent body proportions:1.4)",
+			"(different face in closeup:1.4)",
 			"panel number labels", "caption under panel",
 		)
 		if isLiveAction {
+			// 真人写实角色额外的面部/手部/身体缺陷反义词。
 			parts = append(parts,
 				// Face / expression defects
 				"warped face", "asymmetrical eyes", "bad teeth", "unnatural expression",
 				"lazy eye", "melting face",
 				// Hand / finger defects
 				"bad hands", "extra fingers", "fused fingers", "missing fingers",
-				"extra limbs", "floating limbs",
-				// Body completeness — reference sheets must show full body
-				"(floating torso:1.5)", "(cut off at waist:1.5)", "(missing legs:1.5)",
-				"(headless:1.5)", "(not full body:1.5)", "(cropped at knees:1.5)",
+				"floating limbs",
+				// Full-body figures must be complete
+				"(floating torso:1.4)", "(headless:1.4)",
 			)
 		}
 	case "scene", "场景":

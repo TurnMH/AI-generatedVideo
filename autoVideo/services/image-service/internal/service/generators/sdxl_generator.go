@@ -473,7 +473,9 @@ func joinPromptParts(parts ...string) string {
 func sdxlStylePrompt(style string) string {
 	switch style {
 	case "guofeng", "guofeng-myth":
-		return "classical chinese fantasy illustration, flowing costume detail, elegant brushwork, wuxia atmosphere"
+		// 注意：不要用 "flowing costume detail"，否则人物服装在分镜里会出现飘逸/被吹起，
+		// 与角色设定图不一致。改为强调精致而稳定的传统服饰细节。
+		return "classical chinese fantasy illustration, intricate traditional costume detail, elegant brushwork, wuxia atmosphere"
 	case "ink-poetry":
 		return "ink wash painting, poetic composition, soft watercolor texture, negative space"
 	default:

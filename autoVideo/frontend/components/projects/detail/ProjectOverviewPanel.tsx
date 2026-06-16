@@ -22,14 +22,6 @@ type ProjectOverviewPanelProps = {
   onNextAction: () => void
 }
 
-const stepStatusClass: Record<ProjectOverviewStepView['status'], string> = {
-  done: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  current: 'border-primary-200 bg-primary-50 text-primary-700',
-  pending: 'border-surface-200 bg-surface-50 text-surface-500',
-  failed: 'border-red-200 bg-red-50 text-red-700',
-  skipped: 'border-surface-200 bg-surface-50 text-surface-400',
-}
-
 export function ProjectOverviewPanel({
   project,
   episodeCount,
@@ -43,6 +35,50 @@ export function ProjectOverviewPanel({
   nextAction,
   onNextAction,
 }: ProjectOverviewPanelProps) {
+  // Merge projectControlStages (3 stages) and workflowSteps (5/6 steps) into a unified list of stages
+  const unifiedStages = workflowSteps.map((step, index) => {
+    let stageKey: string = ''
+    if (step.key === 'script') stageKey = 'split'
+    else if (step.key === 'assets') stageKey = 'assets'
+    else if (step.key === 'storyboard-split') stageKey = 'storyboard'
+
+    const matchedStage = projectControlStages.find((s) => s.key === stageKey)
+
+    if (matchedStage) {
+      return {
+        key: step.key,
+        label: matchedStage.label,
+        status: matchedStage.status,
+        detail: matchedStage.detail,
+        progress: matchedStage.progress,
+      }
+    }
+
+    let status: 'pending' | 'running' | 'done' = 'pending'
+    if (step.status === 'done') status = 'done'
+    else if (step.status === 'current') status = 'running'
+    else if (step.status === 'failed') status = 'pending'
+
+    let progress = 0
+    if (status === 'done') progress = 1
+    else if (status === 'running') progress = 0.5
+
+    return {
+      key: step.key,
+      label: step.label,
+      status,
+      detail: step.hint,
+      progress,
+    }
+  })
+
+  const unifiedDoneCount = unifiedStages.filter((stage) => stage.status === 'done').length
+  const unifiedOverallProgress = Math.round(
+    (unifiedStages.reduce((sum, stage) => sum + Math.min(Math.max(stage.progress, 0), 1), 0) / unifiedStages.length) * 100,
+  )
+
+  const activeStage = unifiedStages.find((stage) => stage.status === 'running')
+
   return (
     <div className="rounded-3xl border border-surface-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center gap-2 text-xs text-surface-500">
@@ -104,8 +140,8 @@ export function ProjectOverviewPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-surface-900">
-              {pipelineSnapshot.isActive && projectControlCurrentStage
-                ? `当前进行中 · ${projectControlCurrentStage.label}`
+              {pipelineSnapshot.isActive && activeStage
+                ? `当前进行中 · ${activeStage.label}`
                 : pipelineSnapshot.episodeSplitDone && !pipelineSnapshot.isActive
                   ? '分集已完成'
                   : '项目总控进度'}
@@ -120,18 +156,18 @@ export function ProjectOverviewPanel({
           </div>
           <div className="text-right">
             <p className="text-[11px] uppercase tracking-[0.18em] text-surface-400">Progress</p>
-            <p className="text-2xl font-semibold text-surface-900">{projectControlOverallProgress}%</p>
-            <p className="text-[11px] text-surface-500">已完成 {projectControlDoneCount}/3 阶段</p>
+            <p className="text-2xl font-semibold text-surface-900">{unifiedOverallProgress}%</p>
+            <p className="text-[11px] text-surface-500">已完成 {unifiedDoneCount}/{unifiedStages.length} 阶段</p>
           </div>
         </div>
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
           <div
             className="h-full rounded-full bg-primary-500 transition-all duration-500"
-            style={{ width: `${projectControlOverallProgress}%` }}
+            style={{ width: `${unifiedOverallProgress}%` }}
           />
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {projectControlStages.map((stage, index) => {
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+          {unifiedStages.map((stage, index) => {
             const isRunning = stage.status === 'running'
             const isDone = stage.status === 'done'
             return (
@@ -159,15 +195,6 @@ export function ProjectOverviewPanel({
             )
           })}
         </div>
-      </div>
-
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {workflowSteps.map((step) => (
-          <div key={step.key} className={`rounded-xl border px-3 py-2.5 ${stepStatusClass[step.status]}`}>
-            <p className="text-sm font-semibold">{step.label}</p>
-            <p className="mt-1 text-xs leading-5 opacity-90">{step.hint}</p>
-          </div>
-        ))}
       </div>
     </div>
   )

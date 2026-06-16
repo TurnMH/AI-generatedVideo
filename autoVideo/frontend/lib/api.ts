@@ -219,6 +219,9 @@ export const chatAPI = {
 
 export const utilsAPI = {
   translatePrompt: (text: string) => scriptApi.post('/api/v1/utils/translate', { text }),
+  // 走主 API（project-service / gateway），长 prompt 翻译需要更长超时
+  translatePromptDisplay: (text: string, to: 'zh' | 'en' = 'zh') =>
+    api.post('/api/v1/utils/translate', { text, to }, { timeout: 120000 }),
   optimizeVideoPrompt: (data: {
     prompt: string
     target_model?: string
@@ -295,6 +298,8 @@ export const sceneAPI = {
 export const assetAPI = {
   list: (projectId: number, params?: { type?: string; episode_id?: number; keyword?: string }) =>
     api.get(`/api/v1/projects/${projectId}/assets`, { params }),
+  getExtractionStatus: (projectId: number, params?: { episode_id?: number }) =>
+    api.get(`/api/v1/projects/${projectId}/assets/extraction-status`, { params }),
   listPaginated: (projectId: number, params?: { type?: string; status?: string; episode_id?: number; keyword?: string; page?: number; page_size?: number }) =>
     api.get(`/api/v1/projects/${projectId}/assets`, { params: { page: 1, page_size: 50, ...params } }),
   get: (projectId: number, id: number) =>
@@ -307,10 +312,10 @@ export const assetAPI = {
     api.delete(`/api/v1/projects/${projectId}/assets/${id}`),
   deleteAll: (projectId: number) =>
     api.delete(`/api/v1/projects/${projectId}/assets`),
-  extract: (projectId: number, force?: boolean) =>
-    api.post(`/api/v1/projects/${projectId}/assets/extract${force ? '?force=true' : ''}`, {}, { timeout: 180000 }),
-  extractEpisode: (projectId: number, episodeId: number) =>
-    api.post(`/api/v1/projects/${projectId}/assets/extract-episode/${episodeId}`, {}, { timeout: 180000 }),
+  extract: (projectId: number, force?: boolean, opts?: { modelName?: string }) =>
+    api.post(`/api/v1/projects/${projectId}/assets/extract${force ? '?force=true' : ''}`, opts?.modelName ? { model_name: opts.modelName } : {}, { timeout: 180000 }),
+  extractEpisode: (projectId: number, episodeId: number, opts?: { modelName?: string }) =>
+    api.post(`/api/v1/projects/${projectId}/assets/extract-episode/${episodeId}`, opts?.modelName ? { model_name: opts.modelName } : {}, { timeout: 180000 }),
   generateBatch: (
     projectId: number,
     assetIds: number[],
@@ -419,6 +424,11 @@ export const storyboardAPI = {
   },
   get: (projectId: number, id: number) =>
     api.get(`/api/v1/projects/${projectId}/storyboards/${id}`),
+  getImageGenerationPreview: (projectId: number, storyboardId: number, modelName?: string) =>
+    api.get(`/api/v1/projects/${projectId}/storyboards/${storyboardId}/image-generation-preview`, {
+      params: modelName ? { model_name: modelName } : undefined,
+      timeout: 120000,
+    }),
   stats: (projectId: number) =>
     api.get(`/api/v1/projects/${projectId}/storyboards/stats`),
   episodeStats: (projectId: number) =>
@@ -427,8 +437,11 @@ export const storyboardAPI = {
     api.post(`/api/v1/projects/${projectId}/storyboards`, data),
   update: (projectId: number, id: number, data: Partial<Storyboard>) =>
     api.patch(`/api/v1/projects/${projectId}/storyboards/${id}`, data),
-  generate: (projectId: number, id: number, modelName?: string) =>
-    api.post(`/api/v1/projects/${projectId}/storyboards/${id}/generate`, modelName ? { model_name: modelName } : {}),
+  generate: (projectId: number, id: number, modelName?: string, options?: { modelNames?: string[] }) =>
+    api.post(`/api/v1/projects/${projectId}/storyboards/${id}/generate`, {
+      ...(modelName ? { model_name: modelName } : {}),
+      ...(options?.modelNames?.length ? { model_names: options.modelNames } : {}),
+    }),
   retry: (projectId: number, id: number, modelName?: string) =>
     api.post(`/api/v1/projects/${projectId}/storyboards/${id}/retry`, modelName ? { model_name: modelName } : {}),
   retryFailed: (projectId: number, modelName?: string, episodeId?: number, options?: { modelNames?: string[] }) =>
@@ -747,45 +760,44 @@ export interface VoiceCatalogItem {
   category?: string
 }
 
-export interface VoiceCatalogResponse {
-  code: number
-  data: {
-    items?: VoiceCatalogItem[]
-    recommended?: VoiceCatalogItem[]
-    summary?: Record<string, unknown>
+export interface VoiceCatalogData {
+  items?: VoiceCatalogItem[]
+  recommended?: VoiceCatalogItem[]
+  summary?: Record<string, unknown>
+}
+
+/** @deprecated Use VoiceCatalogData — api.get<T> already unwraps to { code, data: T }. */
+export type VoiceCatalogResponse = VoiceCatalogData
+
+export interface VoicePreviewData {
+  audio_url: string
+  duration_sec?: number
+  voice_key?: string
+  voice_name?: string
+  text?: string
+}
+
+/** @deprecated Use VoicePreviewData — api.get<T> already unwraps to { code, data: T }. */
+export type VoicePreviewResponse = VoicePreviewData
+
+export interface ApplyRecommendedVoicesData {
+  items?: {
+    character_id: number
+    name: string
+    applied?: boolean
+    skipped?: boolean
+    voice_model?: string
+    reason?: string
+  }[]
+  summary?: {
+    total?: number
+    applied?: number
+    skipped?: number
   }
 }
 
-export interface VoicePreviewResponse {
-  code: number
-  data: {
-    audio_url: string
-    duration_sec?: number
-    voice_key?: string
-    voice_name?: string
-    text?: string
-  }
-}
-
-export interface ApplyRecommendedVoicesResponse {
-  code: number
-  data: {
-    items?: {
-      character_id: number
-      name: string
-      applied?: boolean
-      skipped?: boolean
-      voice_model?: string
-      reason?: string
-    }[]
-    summary?: {
-      total?: number
-      applied?: number
-      skipped?: number
-      dry_run?: boolean
-    }
-  }
-}
+/** @deprecated Use ApplyRecommendedVoicesData — api.get<T> already unwraps to { code, data: T }. */
+export type ApplyRecommendedVoicesResponse = ApplyRecommendedVoicesData
 
 export const dubbingAPI = {
   generate: (
@@ -856,17 +868,17 @@ export const dubbingAPI = {
   listVoices: () =>
     api.get<{ code: number; data: { voices: { key: string; name: string; label: string }[] } }>('/api/v1/voices'),
   listVoiceCatalog: (projectId: number) =>
-    api.get<VoiceCatalogResponse>(`/api/v1/projects/${projectId}/dubbing/voices`),
+    api.get<VoiceCatalogData>(`/api/v1/projects/${projectId}/dubbing/voices`),
   previewVoice: (
     projectId: number,
     data: { voice_model?: string; voice_rate?: string; voice_pitch?: string; voice_volume?: string; text?: string }
   ) =>
-    api.post<VoicePreviewResponse>(`/api/v1/projects/${projectId}/dubbing/voices/preview`, data),
+    api.post<VoicePreviewData>(`/api/v1/projects/${projectId}/dubbing/voices/preview`, data),
   applyRecommendedVoices: (
     projectId: number,
     data?: { style?: string; dry_run?: boolean }
   ) =>
-    api.post<ApplyRecommendedVoicesResponse>(`/api/v1/projects/${projectId}/dubbing/voices/apply-recommended`, data ?? {}),
+    api.post<ApplyRecommendedVoicesData>(`/api/v1/projects/${projectId}/dubbing/voices/apply-recommended`, data ?? {}),
   generateForStoryboard: (
     projectId: number,
     storyboardId: number,

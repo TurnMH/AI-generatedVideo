@@ -1,4 +1,5 @@
 import type { Asset, Storyboard } from '@/types'
+import { parseAssetExtractionState } from '@/lib/projects/asset-extraction'
 
 export type EpisodeAssetStats = {
   total: number
@@ -8,6 +9,8 @@ export type EpisodeAssetStats = {
   generating: number
   failed: number
   extracting: boolean
+  extractionFailed: boolean
+  extractionError: string
 }
 
 export type EpisodeStoryboardStats = {
@@ -26,8 +29,9 @@ export type SerialStoryboardStats = {
   firstClipReady: number
 }
 
-export function computeEpisodeAssetStats(episodeAssets: Asset[]): EpisodeAssetStats {
-  const extracting = episodeAssets.some((asset) => asset.status === 'extracting')
+export function computeEpisodeAssetStats(episodeAssets: Asset[], episodeId?: number): EpisodeAssetStats {
+  const extractionState = parseAssetExtractionState(episodeAssets, episodeId)
+  const extracting = extractionState.inProgress
   const visibleAssets = episodeAssets.filter((asset) => asset.name !== '__extracting__' && asset.status !== 'extracting')
   const completed = visibleAssets.filter((asset) => asset.status === 'completed').length
   const paused = visibleAssets.filter((asset) => asset.status === 'paused').length
@@ -41,6 +45,8 @@ export function computeEpisodeAssetStats(episodeAssets: Asset[]): EpisodeAssetSt
     generating,
     failed,
     extracting,
+    extractionFailed: extractionState.failed,
+    extractionError: extractionState.errorMessage,
   }
 }
 

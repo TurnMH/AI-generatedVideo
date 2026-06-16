@@ -348,6 +348,11 @@ if [ -f "$COMPOSE_FULL" ]; then
   log "强制刷新 project 容器以应用最新镜像..."
   AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d --no-deps --force-recreate project
 
+  # Gateway 只在启动时读取 config.local.yaml；配置变更后必须重建容器，否则
+  # /storyboards/:id/dubbing 等 pattern 路由会继续走 project-service 并返回 404。
+  log "强制刷新 gateway 容器以加载最新路由配置..."
+  AUTOVIDEO_TAG="$TAG" docker compose -f "$COMPOSE_FULL" --env-file "$ENV_FILE" up -d --no-deps --force-recreate gateway
+
   # 等待 Gateway 就绪
   log "等待 API Gateway 响应..."
   RETRY=0

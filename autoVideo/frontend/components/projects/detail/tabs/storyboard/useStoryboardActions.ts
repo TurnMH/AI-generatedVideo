@@ -469,6 +469,44 @@ export function useStoryboardActions({
     }
   }
 
+  // handleGenerateModels —— 单条分镜「确认生成」：支持多选模型并行出多版本。
+  // 选 0/1 个模型时走原有 retry/generate 路径；选多个时调用单条 generate 的 model_names 扇出。
+  const handleGenerateModels = async (sb: Storyboard, modelKeys: string[]) => {
+    if (!storyboardAssetsReady) {
+      toast({ title: storyboardGenerateBlockedText, variant: 'destructive' })
+      return
+    }
+    if (!canTriggerStoryboardImage(sb)) {
+      toast({ title: '当前分镜正在生成中', variant: 'destructive' })
+      return
+    }
+    const keys = (modelKeys || []).filter(Boolean)
+    try {
+      if (keys.length <= 1) {
+        await triggerStoryboardImageGeneration(projectId, sb, keys[0] || sbProjectImageModelKey || undefined)
+      } else {
+        await storyboardAPI.generate(projectId, sb.id, undefined, { modelNames: keys })
+      }
+      const labels = keys.map((k) => SB_MODEL_OPTIONS.find((m) => m.key === k)?.label || k)
+      toast({
+        title: sb.status === 'failed' ? '重新生成已启动' : `${storyboardGenerateLabel}已启动`,
+        description: sb.prompt_locked
+          ? (keys.length > 1
+            ? `高级模式 · 并行 ${keys.length} 个模型：${labels.join('、')}`
+            : `高级模式 · ${labels[0] ? `模型：${labels[0]}` : `使用项目默认模型：${storyboardDefaultImageModelLabel}`}`)
+          : (keys.length > 1
+            ? `并行 ${keys.length} 个模型：${labels.join('、')}`
+            : (labels[0] ? `模型：${labels[0]}` : `使用项目默认模型：${storyboardDefaultImageModelLabel}`)),
+        variant: 'success',
+      })
+      mutateSb()
+      mutateStats()
+    } catch (e: unknown) {
+      const message = getApiErrorMessage(e)
+      toast({ title: '生成失败', description: message || undefined, variant: 'destructive' })
+    }
+  }
+
   const runStoryboardBatchJobs = async (jobs: Array<() => Promise<unknown>>, concurrency = 4) => {
     let cursor = 0
     let success = 0
@@ -747,9 +785,9 @@ export function useStoryboardActions({
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useOneShotTriggerEffect(sbGenerateTrigger, () => handleGenerateAll(undefined), onSbGenerateTriggerConsumed)
+  useOneShotTriggerEffect(sbGenerateTrigger, () => { void handleGenerateAll(undefined) }, onSbGenerateTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useOneShotTriggerEffect(sbRegenerateTrigger, () => handleForceGenerateEpisode(undefined), onSbRegenerateTriggerConsumed)
+  useOneShotTriggerEffect(sbRegenerateTrigger, () => { void handleForceGenerateEpisode(undefined) }, onSbRegenerateTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useOneShotTriggerEffect(sbPauseTrigger, () => handlePauseGeneration(), onSbPauseTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -969,6 +1007,7 @@ export function useStoryboardActions({
     handleConfirmEpisodeVideoGeneration,
     handleGenerateAllEpisodeVideos,
     handleGenerateOne,
+    handleGenerateModels,
     openBatchStoryboardDialog,
     executeBatchStoryboardAction,
     handlePauseGeneration,

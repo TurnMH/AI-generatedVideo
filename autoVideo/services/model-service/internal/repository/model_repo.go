@@ -34,7 +34,8 @@ func (r *ModelRepo) List(ctx context.Context, modelTypes ...string) ([]*model.Mo
 	default:
 		q = q.Where("type IN ?", modelTypes)
 	}
-	err := q.Order("is_active DESC, sort_order ASC, priority DESC").Find(&models).Error
+	// 按厂商（provider）分组排序：活跃优先 → 厂商字母序 → 组内 sort_order / 优先级。
+	err := q.Order("is_active DESC, provider ASC, sort_order ASC, priority DESC").Find(&models).Error
 	return models, err
 }
 
@@ -65,9 +66,10 @@ func (r *ModelRepo) ListFiltered(ctx context.Context, f model.ListFilter) ([]*mo
 	case "input_price_desc":
 		q = q.Order("input_price DESC NULLS LAST")
 	case "sort_order":
-		q = q.Order("sort_order ASC, priority DESC")
+		q = q.Order("is_active DESC, provider ASC, sort_order ASC, priority DESC")
 	default:
-		q = q.Order("sort_order ASC, priority DESC")
+		// 默认按厂商分组排序，便于前端按厂商展示模型列表。
+		q = q.Order("is_active DESC, provider ASC, sort_order ASC, priority DESC")
 	}
 
 	err := q.Find(&models).Error

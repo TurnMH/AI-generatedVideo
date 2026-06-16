@@ -20,6 +20,9 @@ type AssetGenerateRequest struct {
 	PromptSuffix string `json:"prompt_suffix,omitempty"` // extra text appended after style-aware composition
 	StylePreset  string `json:"style_preset,omitempty"`  // overrides project-level style when set
 	ModelName    string `json:"model_name,omitempty"`
+	// RawPrompt: 当为 true 且 Prompt 非空时，消费端把 Prompt 当作用户手工锁定的「最终提示词」直接使用，
+	// 跳过 LLM 精炼 / 套版面模板 / 视觉 hint 拼接 / 最终润色，完全由用户掌控成图提示词。
+	RawPrompt bool `json:"raw_prompt,omitempty"`
 }
 
 // AssetGenerateResult is published to Kafka after generation completes or fails.

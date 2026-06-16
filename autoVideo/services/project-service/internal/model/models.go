@@ -103,6 +103,10 @@ type Storyboard struct {
 	SceneDescription string              `gorm:"type:text" json:"scene_description"`
 	Characters       pq.StringArray      `gorm:"type:text[]" json:"characters"`
 	Location         string              `gorm:"size:200" json:"location"`
+	LocationZone     string              `gorm:"size:50;default:''" json:"location_zone"`
+	SpatialAnchor    string              `gorm:"type:text;default:''" json:"spatial_anchor"`
+	SubjectPositions string              `gorm:"type:text;default:''" json:"subject_positions"`
+	TransitionNote   string              `gorm:"type:text;default:''" json:"transition_note"`
 	CameraMovement   string              `gorm:"size:100" json:"camera_movement"`
 	Duration         int                 `gorm:"default:4" json:"duration"`
 	AspectRatio      string              `gorm:"size:20;default:16:9" json:"aspect_ratio"`
@@ -113,6 +117,9 @@ type Storyboard struct {
 	CurrentVersion   int                 `gorm:"default:1" json:"current_version"`
 	ImageURL         string              `gorm:"type:text" json:"image_url"`
 	PromptUsed       string              `gorm:"type:text" json:"prompt_used"`
+	// PromptLocked 为 true 时，图片生成直接使用 PromptUsed（高级模式手工最终提示词），
+	// 跳过翻译 / 风格前缀 / 一致性拼接 / 负面组装等自动管线。
+	PromptLocked     bool                `gorm:"default:false" json:"prompt_locked"`
 	VideoPrompt      string              `gorm:"type:text;default:''" json:"video_prompt"`
 	Status           string              `gorm:"size:50;default:pending;index:idx_sb_pid_status,priority:2;index:idx_sb_status_upd,priority:1" json:"status"`
 	ErrorMsg         string              `gorm:"type:text" json:"error_msg"`

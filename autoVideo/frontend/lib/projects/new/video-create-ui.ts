@@ -167,7 +167,7 @@ export function resolutionForAspect(aspect: string): string {
 }
 
 export function nearestConsistencyPreset(value: number): number {
-  return FRIENDLY_CONSISTENCY_OPTIONS.reduce((best, item) =>
+  return FRIENDLY_CONSISTENCY_OPTIONS.reduce<number>((best, item) =>
     Math.abs(item.value - value) < Math.abs(best - value) ? item.value : best,
   FRIENDLY_CONSISTENCY_OPTIONS[1].value)
 }

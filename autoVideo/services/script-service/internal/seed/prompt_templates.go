@@ -43,7 +43,7 @@ var defaultPromptTemplates = []model.PromptTemplate{
 		Version:      "1.0",
 		IsActive:     true,
 		SortOrder:    12,
-		Content: `二维动漫风格, {name}, 包含角色完整的正面头肩肖像（头部及颈部完整可见，占画面左侧约三分之一），全身正面、侧面、背面三视图, 并排排列, {role}, {age_height}, 九头身黄金比例, 极度修长的双腿, 头身比1:9, {body_type}, {hairstyle}, {hair_color}, (高质量:1.5), 8k分辨率, {face_shape}, {eyes}, {skin_tone}, {outfit_top}, {outfit_bottom}, {accessories}, 纯白背景, (画面极其纯净:1.5), (无文字:2.0), 无水印, 无图表, 无标注, 面部柔光照明, 蝴蝶光, 极致细节`,
+		Content: `二维动漫风格, {name}, 包含角色完整的正面头肩肖像（头部及颈部完整可见，占画面左侧约三分之一），全身正面、侧面、背面三视图, 并排排列, {role}, {age_height}, 九头身黄金比例, 极度修长的双腿, 头身比1:9, {body_type}, {hairstyle}, {hair_color}, (高质量:1.5), 8k分辨率, {face_shape}, {eyes}, {skin_tone}, {outfit_top}, {outfit_bottom}, {accessories}, 纯白背景, (画面极其纯净:1.5), (无文字:2.0), 无水印, 无图表, 无标注, 面部柔光照明, 面中对称柔光棚拍布光, 极致细节, (无蝴蝶:2.0), 无昆虫`,
 	},
 	// ── 人物（三维动漫三视图）────────────────────────────────────────────────
 	{

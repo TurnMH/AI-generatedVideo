@@ -22,6 +22,7 @@ export function buildVideoModelStatusMap(items: VideoModelStatusItem[] = []): Ma
 }
 
 export function parseVideoModelStatusItems(payload: unknown): VideoModelStatusItem[] {
+  if (!payload || typeof payload !== 'object') return []
   const root = payload as {
     data?: { models?: VideoModelStatusItem[] } | VideoModelStatusItem[]
     models?: VideoModelStatusItem[]

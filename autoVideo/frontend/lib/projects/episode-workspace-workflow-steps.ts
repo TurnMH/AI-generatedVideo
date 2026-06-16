@@ -41,7 +41,9 @@ export function computeEpisodeWorkflowSteps(params: {
 
   const dubbingEnabled = project.enable_dubbing || project.enable_subtitle
 
-  const assetStepStatus: WorkflowStepStatus = assetStats.failed > 0 && assetStats.completed === 0 && !assetStats.extracting && assetStats.active === 0
+  const assetStepStatus: WorkflowStepStatus = assetStats.extractionFailed && assetStats.total === 0
+    ? 'failed'
+    : assetStats.failed > 0 && assetStats.completed === 0 && !assetStats.extracting && assetStats.active === 0
     ? 'failed'
     : assetStats.extracting || assetStats.active > 0 || isExtracting
       ? 'current'
@@ -66,6 +68,8 @@ export function computeEpisodeWorkflowSteps(params: {
       status: assetStepStatus,
       statusLabel: assetStats.extracting || isExtracting
         ? '提取中'
+        : assetStats.extractionFailed && assetStats.total === 0
+          ? '提取失败'
         : assetStats.active > 0
           ? '生成中'
           : assetStepStatus === 'done'
@@ -75,6 +79,8 @@ export function computeEpisodeWorkflowSteps(params: {
               : '待开始',
       hint: assetStats.extracting || isExtracting
         ? '提取中...'
+        : assetStats.extractionFailed && assetStats.total === 0
+          ? assetStats.extractionError || '提取失败，请切换模型后重试'
         : assetStats.active > 0
           ? `生成中 ${assetStats.completed}/${assetStats.total || '?'}`
           : assetStats.failed > 0

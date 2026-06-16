@@ -509,6 +509,39 @@ func (s *EpisodeService) extractAssetsForEpisode(ctx context.Context, projectID,
 	return nil
 }
 
+// resolveProjectImageModelName resolves the image model the user selected at
+// project creation time so that auto-triggered asset generation honors it
+// instead of falling back to the character-service default model.
+func (s *EpisodeService) resolveProjectImageModelName(ctx context.Context, projectID uint64) string {
+	if s.projectRepo == nil {
+		return ""
+	}
+	project, err := s.projectRepo.FindByIDNoAuth(projectID)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("resolve project image model failed", zap.Uint64("project_id", projectID), zap.Error(err))
+		}
+		return ""
+	}
+	if selected := selectedStoryboardImageModel(project); selected != "" {
+		return selected
+	}
+	if project.ImageModelID != nil && *project.ImageModelID != 0 && s.modelServiceBaseURL != "" {
+		modelMeta, err := s.fetchRemoteModel(ctx, *project.ImageModelID)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("resolve project image model key failed", zap.Uint64("project_id", projectID), zap.Uint64("image_model_id", *project.ImageModelID), zap.Error(err))
+			}
+			return ""
+		}
+		if key := strings.TrimSpace(modelMeta.ModelKey); key != "" {
+			return key
+		}
+		return strings.TrimSpace(modelMeta.Name)
+	}
+	return ""
+}
+
 func (s *EpisodeService) triggerEpisodeAssetGeneration(ctx context.Context, projectID, episodeID uint64) error {
 	if !s.autoAssetPipelineReady() {
 		return nil
@@ -517,8 +550,15 @@ func (s *EpisodeService) triggerEpisodeAssetGeneration(ctx context.Context, proj
 	if err != nil {
 		return err
 	}
+	reqBody := []byte("{}")
+	modelName := s.resolveProjectImageModelName(ctx, projectID)
+	if modelName != "" {
+		if payload, marshalErr := json.Marshal(map[string]string{"model_name": modelName}); marshalErr == nil {
+			reqBody = payload
+		}
+	}
 	url := fmt.Sprintf("%s/api/v1/projects/%d/assets/generate-all?episode_id=%d", s.characterBaseURL, projectID, episodeID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
@@ -538,14 +578,29 @@ func (s *EpisodeService) triggerEpisodeAssetGeneration(ctx context.Context, proj
 		s.logger.Info("triggered episode asset generation",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("episode_id", episodeID),
+			zap.String("model_name", modelName),
 		)
 	}
 	return nil
 }
 
 type episodeAssetSnapshot struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Description string `json:"description"`
+}
+
+func episodeAssetExtractionFailed(assets []episodeAssetSnapshot) (bool, string) {
+	for _, asset := range assets {
+		if asset.Name == "__extracting__" && asset.Status == "failed" {
+			msg := strings.TrimSpace(asset.Description)
+			if msg == "" {
+				msg = "资源提取失败"
+			}
+			return true, msg
+		}
+	}
+	return false, ""
 }
 
 func (s *EpisodeService) listEpisodeAssetSnapshots(ctx context.Context, projectID, episodeID uint64) ([]episodeAssetSnapshot, error) {
@@ -650,6 +705,74 @@ func (s *EpisodeService) listProjectAssetSnapshots(ctx context.Context, projectI
 	return nil, nil
 }
 
+type extractionStatus struct {
+	InProgress   bool   `json:"in_progress"`
+	Failed       bool   `json:"failed"`
+	ErrorMessage string `json:"error_message"`
+}
+
+func (s *EpisodeService) getEpisodeExtractionStatus(ctx context.Context, projectID, episodeID uint64) (*extractionStatus, error) {
+	if !s.autoAssetPipelineReady() {
+		return nil, nil
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets/extraction-status?episode_id=%d", s.characterBaseURL, projectID, episodeID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("get episode extraction status failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var status extractionStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+func (s *EpisodeService) getProjectExtractionStatus(ctx context.Context, projectID uint64) (*extractionStatus, error) {
+	if !s.autoAssetPipelineReady() {
+		return nil, nil
+	}
+	token, err := s.buildServiceToken(projectID)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets/extraction-status", s.characterBaseURL, projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("get project extraction status failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var status extractionStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
 // waitForProjectAssetExtraction blocks until all async episode/project extractions finish.
 func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, projectID uint64, expectDispatch bool) error {
 	if !s.autoAssetPipelineReady() {
@@ -660,12 +783,24 @@ func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, proj
 	defer ticker.Stop()
 	started := time.Now()
 
+	dispatched := false
+
 	for {
-		assets, err := s.listProjectAssetSnapshots(ctx, projectID)
+		status, err := s.getProjectExtractionStatus(ctx, projectID)
 		if err != nil {
 			return err
 		}
-		if episodeAssetExtractionInFlight(assets) {
+
+		if status.Failed {
+			msg := status.ErrorMessage
+			if msg == "" {
+				msg = "资源提取失败"
+			}
+			return fmt.Errorf("asset extraction failed: %s", msg)
+		}
+
+		if status.InProgress {
+			dispatched = true
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -673,16 +808,33 @@ func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, proj
 			}
 			continue
 		}
-		if !expectDispatch || countSettledEpisodeAssets(assets) > 0 {
+
+		// If it's not in progress and not failed, it might be completed or not yet dispatched.
+		if dispatched {
 			if s.logger != nil {
-				s.logger.Info("project asset extraction settled before storyboard split",
+				s.logger.Info("project asset extraction finished successfully",
 					zap.Uint64("project_id", projectID),
-					zap.Int("asset_count", countSettledEpisodeAssets(assets)),
-					zap.Bool("expect_dispatch", expectDispatch),
 				)
 			}
 			return nil
 		}
+
+		// Not yet dispatched. Let's check if any assets are already created (in case it finished extremely fast).
+		assets, err := s.listProjectAssetSnapshots(ctx, projectID)
+		if err == nil && countSettledEpisodeAssets(assets) > 0 {
+			if s.logger != nil {
+				s.logger.Info("project asset extraction settled before storyboard split (fast path)",
+					zap.Uint64("project_id", projectID),
+					zap.Int("asset_count", countSettledEpisodeAssets(assets)),
+				)
+			}
+			return nil
+		}
+
+		if !expectDispatch {
+			return nil
+		}
+
 		if time.Since(started) < dispatchGrace {
 			select {
 			case <-ctx.Done():
@@ -691,6 +843,7 @@ func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, proj
 			}
 			continue
 		}
+
 		if s.logger != nil {
 			s.logger.Warn("project asset extraction sentinel did not appear within grace window; continuing storyboard split",
 				zap.Uint64("project_id", projectID),
@@ -702,8 +855,6 @@ func (s *EpisodeService) waitForProjectAssetExtraction(ctx context.Context, proj
 }
 
 // waitForEpisodeAssetExtraction blocks until async episode extraction finishes or the context expires.
-// When expectDispatch is true, tolerate a short window where character-service has accepted the
-// extract request (202) but not yet created the __extracting__ sentinel.
 func (s *EpisodeService) waitForEpisodeAssetExtraction(ctx context.Context, projectID, episodeID uint64, expectDispatch bool) error {
 	if !s.autoAssetPipelineReady() {
 		return nil
@@ -713,12 +864,24 @@ func (s *EpisodeService) waitForEpisodeAssetExtraction(ctx context.Context, proj
 	defer ticker.Stop()
 	started := time.Now()
 
+	dispatched := false
+
 	for {
-		assets, err := s.listEpisodeAssetSnapshots(ctx, projectID, episodeID)
+		status, err := s.getEpisodeExtractionStatus(ctx, projectID, episodeID)
 		if err != nil {
 			return err
 		}
-		if episodeAssetExtractionInFlight(assets) {
+
+		if status.Failed {
+			msg := status.ErrorMessage
+			if msg == "" {
+				msg = "资源提取失败"
+			}
+			return fmt.Errorf("asset extraction failed: %s", msg)
+		}
+
+		if status.InProgress {
+			dispatched = true
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -726,17 +889,35 @@ func (s *EpisodeService) waitForEpisodeAssetExtraction(ctx context.Context, proj
 			}
 			continue
 		}
-		if !expectDispatch || countSettledEpisodeAssets(assets) > 0 {
+
+		// If it's not in progress and not failed, it might be completed or not yet dispatched.
+		if dispatched {
 			if s.logger != nil {
-				s.logger.Info("episode asset extraction settled before storyboard split",
+				s.logger.Info("episode asset extraction finished successfully",
 					zap.Uint64("project_id", projectID),
 					zap.Uint64("episode_id", episodeID),
-					zap.Int("asset_count", len(assets)),
-					zap.Bool("expect_dispatch", expectDispatch),
 				)
 			}
 			return nil
 		}
+
+		// Not yet dispatched. Let's check if any assets are already created (in case it finished extremely fast).
+		assets, err := s.listEpisodeAssetSnapshots(ctx, projectID, episodeID)
+		if err == nil && countSettledEpisodeAssets(assets) > 0 {
+			if s.logger != nil {
+				s.logger.Info("episode asset extraction settled before storyboard split (fast path)",
+					zap.Uint64("project_id", projectID),
+					zap.Uint64("episode_id", episodeID),
+					zap.Int("asset_count", len(assets)),
+				)
+			}
+			return nil
+		}
+
+		if !expectDispatch {
+			return nil
+		}
+
 		if time.Since(started) < dispatchGrace {
 			select {
 			case <-ctx.Done():
@@ -745,6 +926,7 @@ func (s *EpisodeService) waitForEpisodeAssetExtraction(ctx context.Context, proj
 			}
 			continue
 		}
+
 		if s.logger != nil {
 			s.logger.Warn("episode asset extraction sentinel did not appear within grace window; continuing storyboard split",
 				zap.Uint64("project_id", projectID),
@@ -2704,7 +2886,21 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 			)
 		}
 	}
-	// Episodes will be atomically replaced later via ReplaceAllForProject
+	// 重新分集：立即删除旧分集，让项目状态当场回退到"刚创建"的空集数列表，
+	// 而不是等到流水线末尾 ReplaceAllForProject 才替换——否则前端在整个
+	// 关键词/视觉档案/分集拆分期间（数十秒~数分钟）仍会读到旧分集列表。
+	// 分镜已在上方先删除，此处删除分集不会产生悬空外键引用。
+	if isResplit {
+		if err := s.episodeRepo.DeleteByProjectID(projectID); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("delete old episodes before re-split failed; continuing",
+					zap.Uint64("project_id", projectID),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+	// New episodes will be atomically (re)inserted later via ReplaceAllForProject
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Phase 1: Keyword extraction
@@ -3038,11 +3234,13 @@ type CharacterProfile struct {
 	SkillHints   []string `json:"skill_hints,omitempty"`   // detected capability tags: combat|exploration|social|special
 }
 
-// LocationProfile holds the canonical visual description for a scene location.
+// LocationProfile holds the canonical visual description for a scene location hub.
 type LocationProfile struct {
-	Name          string `json:"name"`
-	Description   string `json:"description"`              // visual environment description in Chinese
-	DescriptionEN string `json:"description_en,omitempty"` // English environment description for AI image generation prompts
+	Name          string                `json:"name"`
+	Description   string                `json:"description"`              // visual environment description in Chinese
+	DescriptionEN string                `json:"description_en,omitempty"` // English environment description for AI image generation prompts
+	SharedVisual  string                `json:"shared_visual,omitempty"`  // cross-zone consistency anchor
+	Zones         []LocationZoneProfile `json:"zones,omitempty"`
 }
 
 // PropProfile holds the canonical visual description for an important prop or item.
@@ -3116,6 +3314,7 @@ type llmScene struct {
 	CharacterStates []llmCharacterState `json:"character_states,omitempty"` // T3B: per-character action/emotion
 	Items           []string            `json:"items,omitempty"`            // visible props/objects in the scene
 	Location        string              `json:"location"`
+	LocationZone    string              `json:"location_zone,omitempty"`
 	Duration        int                 `json:"duration"`
 	Dialogue        string              `json:"dialogue"`
 	Mood            string              `json:"mood,omitempty"` // T3B: emotional tone of the scene
@@ -3236,7 +3435,11 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 		case strings.TrimSpace(ep.ScriptExcerpt) != "":
 			contentSource = "script_excerpt"
 		}
-		go func(idx int, epID uint64, epNum int, epContent, optimizeStatus, reviewStatus, contentSource string) {
+		dialogueSource := strings.TrimSpace(ep.ScriptExcerpt)
+		if dialogueSource == "" {
+			dialogueSource = content
+		}
+		go func(idx int, epID uint64, epNum int, epContent, dialogueSource, optimizeStatus, reviewStatus, contentSource string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -3271,7 +3474,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			}
 
 			customStoryboardSplitPrompt := s.currentStoryboardSplitPrompt(projectRef)
-			scenes := s.breakEpisodeIntoScenes(ctx, optimized, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, productionProfile, customStoryboardSplitPrompt, projectStylePreset, projectMotionMode)
+			scenes := s.breakEpisodeIntoScenes(ctx, optimized, dialogueSource, epNum, storyboardHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, productionProfile, customStoryboardSplitPrompt, projectStylePreset, projectMotionMode)
 			if s.logger != nil {
 				s.logger.Info("episode scene split completed",
 					zap.Uint64("project_id", projectID),
@@ -3310,7 +3513,7 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				Message:   fmt.Sprintf("正在拆分分镜 %d/%d（第%d集）", completed, len(dbEpisodes), epNum),
 				AutoSplit: progressSnapshot.AutoSplit,
 			})
-		}(i, uint64(ep.ID), ep.EpisodeNumber, content, optimizeStatus, reviewStatus, contentSource)
+		}(i, uint64(ep.ID), ep.EpisodeNumber, content, dialogueSource, optimizeStatus, reviewStatus, contentSource)
 	}
 	wg.Wait()
 
@@ -3444,19 +3647,29 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 
 			storyboardDuration := clampDuration(scene.Duration, 2, 12)
 			storyboardDialogue := scene.Dialogue
-			if quotes := speechtext.ExtractCharacterQuotesFromScene(desc, chars); len(quotes) > 0 {
-				var extras []string
-				for _, q := range quotes {
-					extras = append(extras, q.Speaker+"："+q.Quote)
+			if !productionProfile.SkipPostProcessing {
+				if quotes := speechtext.ExtractCharacterQuotesFromScene(desc, chars); len(quotes) > 0 {
+					var extras []string
+					for _, q := range quotes {
+						extras = append(extras, q.Speaker+"："+q.Quote)
+					}
+					storyboardDialogue = strings.TrimSpace(storyboardDialogue + "\n" + strings.Join(extras, "\n"))
 				}
-				storyboardDialogue = strings.TrimSpace(storyboardDialogue + "\n" + strings.Join(extras, "\n"))
+				storyboardDialogue = speechtext.FitStoryboardDialogue(
+					storyboardDialogue,
+					storyboardDuration,
+					speechPace,
+					productionProfile.IsCommentaryComic(),
+				)
 			}
-			storyboardDialogue = speechtext.FitStoryboardDialogue(
-				storyboardDialogue,
-				storyboardDuration,
-				speechPace,
-				productionProfile.IsCommentaryComic(),
-			)
+
+			spatialAnchor := extractSpatialAnchorHint(scene.Description)
+			subjectPositions := extractSubjectPositionHint(scene.Description)
+			transitionNote := extractTransitionHint(scene.Description)
+			locationZone := strings.TrimSpace(scene.LocationZone)
+			if locationZone == "" {
+				locationZone = InferLocationViewType(desc, scene.Location, scene.ShotType, "")
+			}
 
 			_, err := s.storyboardSvc.Create(projectID, CreateStoryboardReq{
 				EpisodeID:        &epID,
@@ -3464,6 +3677,10 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 				SceneDescription: desc,
 				Characters:       chars,
 				Location:         scene.Location,
+				LocationZone:     locationZone,
+				SpatialAnchor:    spatialAnchor,
+				SubjectPositions: subjectPositions,
+				TransitionNote:   transitionNote,
 				Duration:         storyboardDuration,
 				Dialogue:         storyboardDialogue,
 				CameraMovement:   shotTypeToCameraMovement(scene.ShotType),
@@ -3499,14 +3716,17 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 // breakEpisodeIntoScenes —— 将单集内容拆分为视觉场景，带重试和降级策略
 // breakEpisodeIntoScenes calls LLM to split an episode into visual scenes for storyboarding.
 // It retries up to 2 times on failure, and falls back to paragraph-based splitting if LLM fails entirely.
-func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
+func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeContent, dialogueSource string, episodeNum int, skillHints string, kwLib *KeywordLibrary, clipDuration int, videoModel string, aspectRatio string, resolution string, speechPace string, profile productionmode.Profile, customStoryboardSplitPrompt string, stylePreset string, motionMode string) []llmScene {
 	if strings.TrimSpace(episodeContent) == "" {
 		return nil
+	}
+	if strings.TrimSpace(dialogueSource) == "" {
+		dialogueSource = episodeContent
 	}
 
 	fallback := func() []llmScene {
 		return s.postProcessAndAlignCommentaryScenes(
-			episodeContent,
+			dialogueSource,
 			s.fallbackSceneSplit(episodeContent, episodeNum, clipDuration, profile),
 			clipDuration,
 			speechPace,
@@ -3531,7 +3751,7 @@ func (s *EpisodeService) breakEpisodeIntoScenes(ctx context.Context, episodeCont
 
 		scenes := s.callLLMSceneSplit(ctx, episodeContent, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 		if len(scenes) > 0 {
-			return s.postProcessAndAlignCommentaryScenes(episodeContent, scenes, clipDuration, speechPace, profile)
+			return s.postProcessAndAlignCommentaryScenes(dialogueSource, scenes, clipDuration, speechPace, profile)
 		}
 	}
 
@@ -4055,6 +4275,7 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 		Description         string `json:"description"`
 		Mood                string `json:"mood"`
 		Location            string `json:"location"`
+		LocationZone        string `json:"location_zone,omitempty"`
 		LocationDescription string `json:"location_description,omitempty"` // visual profile of the scene location from kwLib
 		ShotType            string `json:"shot_type"`
 		Characters          string `json:"characters"`
@@ -4128,6 +4349,7 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 			Description:         sc.Description,
 			Mood:                sc.Mood,
 			Location:            sc.Location,
+			LocationZone:        strings.TrimSpace(sc.LocationZone),
 			LocationDescription: locDesc,
 			ShotType:            sc.ShotType,
 			Characters:          chars,
@@ -4188,41 +4410,35 @@ Rules:
 15. ONE DECISIVE PANEL BEAT: each prompt must focus on one dominant visual action or emotion, not two competing panel ideas.
 16. Return ONLY a JSON object: {"prompts": ["prompt for panel 1", "prompt for panel 2", ...]}`
 	} else {
-		systemPrompt = `You are a professional image generation prompt engineer specializing in AI-driven video storyboards.
-Your task: produce polished, optimized image generation prompts for a sequence of storyboard scenes that will be used BOTH as reference images AND as video generation seeds.
+		systemPrompt = `You are a professional image generation prompt engineer for AI storyboard still frames.
+Your task: produce polished English prompts for a sequence of storyboard scenes used ONLY as static reference images.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 PROMPT STRUCTURE — every scene prompt should follow this order (comma-separated):
 ━━━━━━━━━━━━━━━━━━━━━━━━
 ① Subject anchor: character(s) + posture/stance + wardrobe silhouette
 ② Face & expression: specific muscle-level descriptor (e.g., "jaw slightly dropped, eyebrows raised" — NOT "surprised face")
-③ Action beat: one clear physical action with visible result
-④ Framing: shot type + simple lens/framing cue from shot_type (do NOT invent left/right screen direction unless provided in input)
+③ Action beat: one clear physical action frozen in a still frame
+④ Framing: shot type from shot_type (static composition only; no camera motion)
 ⑤ Environment: setting, atmosphere, key props, readable background
 ⑥ Light & style: key light direction + color temperature + grade keywords
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 Rules:
 ━━━━━━━━━━━━━━━━━━━━━━━━
-1. Each prompt must be 60-160 words, entirely in English, for AI image generators (Stable Diffusion / Flux / DALL-E).
-2. Prioritize one decisive visual beat per frame. Favor readable action and emotion over blocking jargon.
+1. Each prompt must be 40-120 words, entirely in English, for AI image generators (Stable Diffusion / Flux / DALL-E).
+2. Prioritize one decisive visual beat per still frame. Favor readable pose and emotion over blocking jargon.
 3. When a scene has "character_appearance" data, embed those EXACT visual descriptors — NEVER invent different appearances.
 4. When a scene has "character_emotions" data, translate to micro-expression descriptors, not emotion adjectives alone.
 5. When a scene has "location_description" data, use that EXACT environment description as the scene background.
 6. When a scene has "items" or "prop_visual" data, make those props clearly visible.
-7. Use "spatial_anchor", "subject_positions", or "transition_note" ONLY when the input already contains them. Do NOT invent screen-left/right placement, axis language, or furniture geography.
-8. If the source description is under-specified, infer a usable pose and hand behavior, but avoid camera-operator jargon.
-9. VISUAL CONTINUITY (lightweight):
-   - Adjacent scenes in the same location should keep wardrobe, hairstyle, lighting color, and major set dressing stable.
-   - If VISUAL BRIDGE is provided, the first scene should extend its color grading and general staging, not copy blocking coordinates verbatim.
-   - Preserve eyeline and held props only when the input already established them.
-10. Do NOT reference dialogue, narration, or story plot — only describe what is VISIBLE.
-11. The "shot_type" field dictates framing: close-up → face dominant; medium → waist-up; wide → figure + environment; establishing → location dominant.
-12. Preserve explicit era / period / costume cues.
-13. VIDEO-FRIENDLY COMPOSITION: clean subject-background separation, uncluttered frame, one hero action.
-14. ACTION CONTINUITY: adjacent scenes in one action chain should progress pose naturally, without teleporting between unrelated poses.
-15. ONE DECISIVE VISUAL IDEA PER FRAME.
-16. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
+7. Use "spatial_anchor", "subject_positions", or "transition_note" ONLY when the input already contains them. Do NOT invent screen-left/right placement or camera-axis jargon.
+8. Do NOT reference dialogue, narration, story plot, camera motion, panning, tracking, or video timing — only describe what is VISIBLE in one still image.
+9. The "shot_type" field dictates framing: close-up → face dominant; medium → waist-up; wide → figure + environment; establishing → location dominant.
+10. Preserve explicit era / period / costume cues.
+11. Adjacent scenes in the same location may keep wardrobe and lighting stable, but each prompt must still describe one frozen frame.
+12. ONE DECISIVE VISUAL IDEA PER FRAME.
+13. Return ONLY a JSON object: {"prompts": ["prompt for scene 1", "prompt for scene 2", ...]}`
 	}
 
 	if styleBlock := productionmode.RefinePromptStyleBlock(stylePreset); styleBlock != "" {
@@ -5004,8 +5220,14 @@ func (s *EpisodeService) enrichKeywordLibraryWithProfiles(ctx context.Context, l
   - skill_hints：根据剧本中该角色的行为特征，从以下选项中选择适用的能力标签（可多选，不适用时填空数组）：
     "combat"（战斗/打斗/武功）、"exploration"（探索/侦探/冒险）、"social"（外交/情感/领导）、"special"（魔法/超能力/特殊技能）
 - location_profiles（场景环境）：
-  - description（中文）：建筑风格、光线色温、主色调、时代背景、标志性元素，30-80字
-  - description_en（英文）：同等内容的英文描述，30-80 words，用于 AI 图像生成，包含 architectural style, lighting, color palette, era, distinctive visual elements。
+  - description（中文）：地点枢纽的整体风格概述，30-80字
+  - description_en（英文）：同等内容的英文描述
+  - shared_visual（中文）：跨内外景/分区都要保持一致的视觉锚点（招牌、材质、色调、时代感等），20-60字
+  - zones（空间分区，至少为主要地点提供 exterior/interior/entrance 等分区）：
+    - id：exterior / interior / entrance 等
+    - label：中文标签，如「外景」「内景」「门口」
+    - description / description_en：该分区的独立视觉描述
+    - view_type：exterior / interior / entrance
 - prop_profiles（重要道具）：形状、颜色、材质、独特特征，20-60字，语言：中文
 
 人物列表：%s
@@ -5015,7 +5237,7 @@ func (s *EpisodeService) enrichKeywordLibraryWithProfiles(ctx context.Context, l
 请严格按以下 JSON 格式返回（只输出 JSON，不输出任何其他内容）：
 {
   "character_profiles": [{"name":"人物名","appearance":"中文外貌描述","appearance_en":"English appearance description","voice_hint":"male/female/child/narrator","skill_hints":["combat","social"]}],
-  "location_profiles": [{"name":"地点名","description":"中文环境描述","description_en":"English environment description"}],
+  "location_profiles": [{"name":"地点名","description":"中文环境描述","description_en":"English environment description","shared_visual":"跨分区一致元素","zones":[{"id":"exterior","label":"外景","description":"中文","description_en":"English","view_type":"exterior"},{"id":"interior","label":"内景","description":"中文","description_en":"English","view_type":"interior"}]}],
   "prop_profiles": [{"name":"道具名","description":"外观描述"}]
 }
 

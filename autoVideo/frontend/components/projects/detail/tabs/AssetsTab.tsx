@@ -18,7 +18,6 @@ import {
   Play,
   Pause,
   Download,
-  Send,
   X,
   ChevronLeft,
   ChevronRight,
@@ -44,7 +43,9 @@ import {
   Package,
   Images,
 } from 'lucide-react'
-import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask } from '@/lib/api'
+import { projectAPI, assetAPI, storyboardAPI, storageAPI, videoAPI, dubbingAPI, modelAPI, utilsAPI, type DubbingTask, type VoiceCatalogItem } from '@/lib/api'
+import { parseAssetExtractionState, parseExtractionStatusResponse, resolveExtractionModelName, type AssetExtractionState, type AssetExtractionStatusResponse } from '@/lib/projects/asset-extraction'
+import { AssetExtractionFailureBanner, AssetExtractionProgressBanner, AssetGenerationFailureBanner } from '@/components/projects/detail/AssetExtractionFailureBanner'
 import { ProductionSkillsPanel } from '@/components/skills/ProductionSkillsPanel'
 import type {
   Project,
@@ -57,7 +58,6 @@ import type {
   Video as VideoType,
   StorageDetails,
   StorageFile,
-  ChatMessage,
   Model,
 } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -115,11 +115,11 @@ import { buildImageModelOption, buildVideoModelOption, buildVideoModelCapability
 import { formatBytes, formatDuration, parseTimestampMs, formatRuntimeDuration, getElapsedTimeLabel, getEstimatedRemainingLabel, getTimingSummary, getEarliestTimestamp, getProgressStallMeta, getPendingQueueMeta, formatChatTimestamp, SCRIPT_PROGRESS_STALL_MS, TASK_PROGRESS_STALL_MS } from '@/lib/projects/utils'
 import { FALLBACK_VOICE_OPTIONS, GENERATION_STAGE_HINTS } from '@/lib/projects/constants'
 import { STATUS_MAP } from '@/lib/projects/status'
-import type { LegacyChatMessage } from '@/lib/projects/chat'
-import { getChatRole, getChatContent, getChatImageUrl, getChatImageModel } from '@/lib/projects/chat'
 import { COMIC_STYLE_PRESETS, splitEpisodeIntoComicPanels, recommendEpisodeCount } from '@/lib/projects/comic'
 import type { ComicStylePresetKey, EpisodeCountRecommendation } from '@/lib/projects/comic'
 import { getAssetGeneratedImages, getSelectedGeneratedImageUrl, getAssetGenerationProgress, getGenerationStageHint, getGenerationEtaLabel, getGenerationElapsedLabel } from '@/lib/projects/assets'
+import { fetchPromptChineseDisplay, buildAssetPromptSummaryZh, isPrimarilyChinese } from '@/lib/projects/prompt-display-zh'
+import { LOCATION_VIEW_OPTIONS, locationViewLabel, readSceneSpatialMetadata } from '@/lib/projects/location-zone'
 import type { AssetImageVersion, AssetGenerationProgress } from '@/lib/projects/assets'
 import { getSplitModelRemark, buildSplitModelSearchText, getSplitModelAvailabilityRank, mapVideoModelToRuntimeKey, findPreferredVideoModelId } from '@/lib/projects/models'
 import { useProjectEpisodeFilter, ProjectEpisodeFilterContext } from '@/lib/projects/episode-filter'
@@ -168,21 +168,26 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   }, [episodeFilter])
   const [keyword, setKeyword] = useState('')
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
-  const [chatInput, setChatInput] = useState('')
-  const [chatLoading, setChatLoading] = useState(false)
+  const [assetPromptDraft, setAssetPromptDraft] = useState('')
+  const [assetFinalPromptDraft, setAssetFinalPromptDraft] = useState('')
+  const [assetPromptMode, setAssetPromptMode] = useState<'auto' | 'manual'>('auto')
+  const [assetGenModels, setAssetGenModels] = useState<string[]>([])
+  const [assetGenerating, setAssetGenerating] = useState(false)
+  const [assetPromptZhDisplay, setAssetPromptZhDisplay] = useState('')
+  const [assetPromptZhLoading, setAssetPromptZhLoading] = useState(false)
+  const [assetPromptZhFromTranslation, setAssetPromptZhFromTranslation] = useState(false)
+  const [sceneViewType, setSceneViewType] = useState('')
+  const [sceneLocationHub, setSceneLocationHub] = useState('')
+  const [sceneSpatialSaving, setSceneSpatialSaving] = useState(false)
   const [selectingImageUrl, setSelectingImageUrl] = useState<string | null>(null)
   const [progressTick, setProgressTick] = useState(0)
   const uploadRef = useRef<HTMLInputElement>(null)
-  const chatListRef = useRef<HTMLDivElement>(null)
-  const chatBottomRef = useRef<HTMLDivElement>(null)
-  const shouldStickChatToBottomRef = useRef(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [createForm, setCreateForm] = useState({ type: 'character' as AssetType, name: '', description: '', stylePreset: 'anime' })
   const [createLoading, setCreateLoading] = useState(false)
   const [batchGeneratingTarget, setBatchGeneratingTarget] = useState<'all' | number | null>(null)
   const [pausingGeneration, setPausingGeneration] = useState(false)
   const [resumingGeneration, setResumingGeneration] = useState(false)
-  const [selectedChatModelId, setSelectedChatModelId] = useState(project.text_model_id ? String(project.text_model_id) : '')
   const [page, setPage] = useState(1)
   const pageSize = 50
   const [imageModelAvailability, setImageModelAvailability] = useState<Record<string, boolean>>({})
@@ -220,6 +225,8 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
   }
 
+  const extractionScopeEpisodeId = episodeId ?? (episodeFilter !== 'all' ? episodeFilter : undefined)
+
   const { data: assetsData, isLoading, mutate: mutateAssets } = useSWR(
     ['assets', projectId, page, filter, statusFilter, episodeFilter, keyword],
     () => assetAPI.listPaginated(projectId, queryParams) as unknown as Promise<{ data: { items: Asset[]; total: number; page: number; page_size: number } }>,
@@ -241,13 +248,52 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     () => assetAPI.list(projectId) as unknown as Promise<{ data: Asset[] }>,
     { refreshInterval: (data) => {
         const items = (data as { data?: Asset[] } | undefined)?.data ?? []
+        const state = parseAssetExtractionState(items, extractionScopeEpisodeId)
         const active = items.some((a) => a.status === 'generating' || a.status === 'pending' || a.status === 'extracting')
-        return active ? 10000 : 60000
+        return state.inProgress || state.failed || active ? 10000 : 60000
       } }
+  )
+  const { data: extractionStatusData, mutate: mutateExtractionStatus } = useSWR(
+    ['assets-extraction-status', projectId, extractionScopeEpisodeId],
+    () => assetAPI.getExtractionStatus(
+      projectId,
+      extractionScopeEpisodeId != null ? { episode_id: extractionScopeEpisodeId } : undefined,
+    ) as unknown as Promise<{ data: AssetExtractionStatusResponse }>,
+    {
+      refreshInterval: (data) => {
+        const payload = (data as { data?: AssetExtractionStatusResponse } | undefined)?.data
+        const state = parseExtractionStatusResponse(payload)
+        return state.inProgress || state.failed ? 3000 : 15000
+      },
+    },
   )
   const statsAssetsRaw = (allAssetsForStats as { data?: Asset[] })?.data ?? []
   const statsAssets = statsAssetsRaw.filter((asset) => asset.name !== '__extracting__' && asset.status !== 'extracting')
-  const extractionInProgress = statsAssetsRaw.some((asset) => asset.status === 'extracting')
+  const extractionStateFromList = React.useMemo(
+    () => parseAssetExtractionState(statsAssetsRaw, extractionScopeEpisodeId),
+    [statsAssetsRaw, extractionScopeEpisodeId],
+  )
+  const extractionStateFromApi = React.useMemo(
+    () => parseExtractionStatusResponse((extractionStatusData as { data?: AssetExtractionStatusResponse } | undefined)?.data),
+    [extractionStatusData],
+  )
+  const extractionState = React.useMemo<AssetExtractionState>(() => {
+    if (extractionStateFromApi.failed || extractionStateFromApi.inProgress) return extractionStateFromApi
+    if (extractionStateFromList.failed || extractionStateFromList.inProgress) return extractionStateFromList
+    return extractionStateFromApi
+  }, [extractionStateFromApi, extractionStateFromList])
+  const extractionInProgress = extractionState.inProgress
+  const [extractionModelKey, setExtractionModelKey] = React.useState('')
+  const [retryingExtraction, setRetryingExtraction] = React.useState(false)
+  const { data: extractionTextModelsData } = useSWR(
+    ['asset-extraction-text-models', projectId],
+    () => modelAPI.list({ type: 'llm', sort_by: 'priority' }) as unknown as Promise<{ data: Model[] }>,
+  )
+  const extractionTextModels = ((extractionTextModelsData as { data?: Model[] })?.data ?? []).filter(
+    (model) => model.is_active || model.id === project.text_model_id,
+  )
+  const preferredExtractionModel = pickPreferredModel(extractionTextModels)
+  const effectiveExtractionModelKey = extractionModelKey || preferredExtractionModel?.model_key || preferredExtractionModel?.name || ''
 
   const { data: episodesData } = useSWR(
     ['episodes-for-assets', projectId],
@@ -280,24 +326,10 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     ['asset-image-models', projectId],
     () => modelAPI.list({ type: 'image', sort_by: 'priority' }) as unknown as Promise<{ data: Model[] }>
   )
-  const { data: textModelsData } = useSWR(
-    ['asset-text-models', projectId],
-    () => modelAPI.list({ type: 'llm', sort_by: 'priority' }) as unknown as Promise<{ data: Model[] }>
-  )
   const imageModels = (imageModelsData as { data?: Model[] })?.data ?? []
-  const chatModels = ((textModelsData as { data?: Model[] })?.data ?? [])
-    .filter((model) => model.is_active || model.id === project.text_model_id)
-    .sort((left, right) => {
-      if (left.is_default !== right.is_default) return left.is_default ? -1 : 1
-      if (left.priority !== right.priority) return left.priority - right.priority
-      return left.name.localeCompare(right.name, 'zh-CN')
-    })
   const selectedProjectImageModel = imageModels.find((model) => model.id === project.image_model_id)
   const selectedProjectImageModelName = selectedProjectImageModel?.name
   const selectedProjectImageModelLabel = selectedProjectImageModel?.name ?? '系统默认图片模型'
-  const selectedChatModel = chatModels.find((model) => String(model.id) === selectedChatModelId) ?? null
-  const selectedChatModelName = selectedChatModel?.name
-  const selectedChatModelLabel = selectedChatModel?.name ?? '系统默认文本模型'
 
   // Dynamically fetch project voice catalog; fall back to static list if API unavailable
   const { data: voicesData } = useSWR(
@@ -326,7 +358,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const recommendedVoiceKeys = new Set(((voicesData as { recommended?: Array<{ key?: string; value?: string }> } | null | undefined)?.recommended ?? []).map((v) => v.key ?? v.value ?? '').filter(Boolean))
   const ASSET_VOICE_OPTIONS = [
     { value: '', label: '未绑定音色', category: 'manual' },
-    ...(voicesData ?? FALLBACK_VOICE_OPTIONS).map((v) => {
+    ...(voicesData ?? FALLBACK_VOICE_OPTIONS).map((v: VoiceCatalogItem | { value: string; label: string; category?: string }) => {
       const voice = v as { key?: string; value?: string; label?: string; voice_name?: string; gender?: string; style?: string; category?: string; locale?: string; provider?: string; auto_assignable?: boolean }
       const key = voice.key ?? voice.value ?? ''
       return {
@@ -344,16 +376,53 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     }),
   ]
 
+  // 打开/切换资源时，把可编辑提示词与已选模型同步为该资源的当前值（模型默认项目图片模型）。
   React.useEffect(() => {
-    const currentExists = chatModels.some((model) => String(model.id) === selectedChatModelId)
-    if (selectedChatModelId && currentExists) return
-    const fallbackId = project.text_model_id
-      ? String(project.text_model_id)
-      : chatModels.length > 0
-        ? String((chatModels.find((model) => model.is_default) ?? chatModels[0]).id)
-        : ''
-    if (fallbackId) setSelectedChatModelId(fallbackId)
-  }, [chatModels, project.text_model_id, selectedChatModelId])
+    setAssetPromptDraft(selectedAsset?.description ?? '')
+    setAssetFinalPromptDraft(selectedAsset?.prompt_used ?? '')
+    setAssetPromptMode((selectedAsset?.metadata as { prompt_locked?: boolean } | undefined)?.prompt_locked ? 'manual' : 'auto')
+    setAssetGenModels(selectedProjectImageModelName ? [selectedProjectImageModelName] : [])
+    const spatial = readSceneSpatialMetadata(selectedAsset?.metadata as Record<string, unknown> | undefined)
+    setSceneViewType(spatial.view_type || '')
+    setSceneLocationHub(spatial.location_hub || '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAsset?.id])
+
+  React.useEffect(() => {
+    const promptUsed = selectedAsset?.prompt_used?.trim() ?? ''
+    if (!selectedAsset || !promptUsed) {
+      setAssetPromptZhDisplay('')
+      setAssetPromptZhLoading(false)
+      setAssetPromptZhFromTranslation(false)
+      return
+    }
+    let cancelled = false
+    const summary = buildAssetPromptSummaryZh(selectedAsset)
+    setAssetPromptZhDisplay(summary)
+    setAssetPromptZhFromTranslation(false)
+    if (isPrimarilyChinese(promptUsed)) {
+      setAssetPromptZhDisplay(promptUsed)
+      setAssetPromptZhLoading(false)
+      return
+    }
+    setAssetPromptZhLoading(true)
+    void fetchPromptChineseDisplay(promptUsed, () => summary)
+      .then(({ text, fromTranslation }) => {
+        if (!cancelled) {
+          setAssetPromptZhDisplay(isPrimarilyChinese(text) ? text : summary)
+          setAssetPromptZhFromTranslation(fromTranslation && isPrimarilyChinese(text))
+          setAssetPromptZhLoading(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAssetPromptZhDisplay(summary)
+          setAssetPromptZhFromTranslation(false)
+          setAssetPromptZhLoading(false)
+        }
+      })
+    return () => { cancelled = true }
+  }, [selectedAsset?.id, selectedAsset?.prompt_used, selectedAsset?.description, selectedAsset?.name, selectedAsset?.type])
 
   // Only show episodes that have at least one associated asset
   const episodesWithAssets = React.useMemo(() => {
@@ -393,10 +462,6 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allAssets])
-
-  React.useEffect(() => {
-    shouldStickChatToBottomRef.current = true
-  }, [selectedAsset?.id])
 
   React.useEffect(() => {
     if (selectedAsset?.status !== 'generating') return
@@ -652,6 +717,27 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     }
   }
 
+  const handleSaveSceneSpatial = async () => {
+    if (!selectedAsset || selectedAsset.type !== 'scene') return
+    setSceneSpatialSaving(true)
+    try {
+      const nextMetadata = {
+        ...(selectedAsset.metadata ?? {}),
+        view_type: sceneViewType.trim(),
+        location_hub: sceneLocationHub.trim(),
+      }
+      const res = await assetAPI.update(projectId, selectedAsset.id, { metadata: nextMetadata }) as unknown as { data: Asset }
+      const updated = res.data as Asset
+      setSelectedAsset(updated)
+      toast({ title: '场景空间信息已保存', variant: 'success' })
+      mutateAssets()
+    } catch {
+      toast({ title: '保存失败', variant: 'destructive' })
+    } finally {
+      setSceneSpatialSaving(false)
+    }
+  }
+
   const handleUploadReplace = async (id: number, file: File) => {
     try {
       await assetAPI.upload(projectId, id, file)
@@ -662,48 +748,79 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     }
   }
 
-  const handleChat = async () => {
-    if (!selectedAsset || !chatInput.trim()) return
-    const outgoingMessage = chatInput.trim()
-    const optimisticMessage: ChatMessage = {
-      role: 'user',
-      content: outgoingMessage,
-      timestamp: new Date().toISOString(),
+  // handleAssetPromptGenerate —— 资源「确认生成」：先持久化编辑后的提示词，再按所选模型（可多选）生成。
+  // 自动模式编辑 description（走自动组装管线，清除手工锁定）；
+  // 高级模式编辑 prompt_used 并锁定（prompt_locked=true，生成时原样使用，跳过组装）。
+  const handleAssetPromptGenerate = async () => {
+    if (!selectedAsset) return
+    if (assetPromptMode === 'manual' && !assetFinalPromptDraft.trim()) {
+      toast({ title: '最终提示词不能为空', variant: 'destructive' })
+      return
     }
-
-    setSelectedAsset({
-      ...selectedAsset,
-      agent_history: [...(selectedAsset.agent_history ?? []), optimisticMessage],
-    })
-    setChatInput('')
-    setChatLoading(true)
+    setAssetGenerating(true)
     try {
-      const generationModel = selectedProjectImageModelName
-      const imageModelOption = MODEL_OPTIONS.find((m) => m.key === generationModel || m.label === generationModel)
-      const skillContext = imageModelOption?.defaultPrompt?.trim() || undefined
+      if (assetPromptMode === 'manual') {
+        const finalPrompt = assetFinalPromptDraft.trim()
+        await assetAPI.update(projectId, selectedAsset.id, {
+          prompt_used: finalPrompt,
+          prompt_locked: true,
+        } as unknown as Partial<Asset>)
+      } else {
+        const newDesc = assetPromptDraft.trim()
+        const descChanged = newDesc !== (selectedAsset.description ?? '').trim()
+        const wasLocked = !!(selectedAsset.metadata as { prompt_locked?: boolean } | undefined)?.prompt_locked
+        if (descChanged || wasLocked) {
+          await assetAPI.update(projectId, selectedAsset.id, {
+            ...(descChanged ? { description: newDesc } : {}),
+            // 切回自动模式时解除锁定，让管线重新从描述组装提示词。
+            prompt_locked: false,
+            ...(wasLocked ? { prompt_used: '' } : {}),
+          } as unknown as Partial<Asset>)
+        }
+      }
 
-      const res = await assetAPI.chat(projectId, selectedAsset.id, outgoingMessage, selectedChatModelName, skillContext) as unknown as { data: Asset }
-      const nextAsset = res.data ?? selectedAsset
+      const selectedModels = MODEL_OPTIONS.filter((m) => assetGenModels.includes(m.key))
+      const promptSuffixes = Object.fromEntries(
+        selectedModels.map((m) => [m.key, m.defaultPrompt?.trim() || '']),
+      )
+      const singleModelName = selectedModels.length === 1
+        ? selectedModels[0].key
+        : (selectedModels.length === 0 ? selectedProjectImageModelName : undefined)
+      const singlePromptSuffix = selectedModels.length === 1
+        ? (promptSuffixes[selectedModels[0].key] || undefined)
+        : (selectedModels.length === 0
+            ? (MODEL_OPTIONS.find((m) => m.key === selectedProjectImageModelName)?.defaultPrompt?.trim() || undefined)
+            : undefined)
 
-      const generateWithChatUpdate = assetAPI.generateBatch(projectId, [nextAsset.id], {
-        modelName: generationModel,
-        promptSuffix: skillContext,
-        force: nextAsset.status === 'failed' || nextAsset.status === 'qa_failed' || nextAsset.status === 'completed' || nextAsset.status === 'generating',
+      await assetAPI.generateBatch(projectId, [selectedAsset.id], {
+        modelName: singleModelName,
+        modelNames: selectedModels.length > 1 ? selectedModels.map((m) => m.key) : undefined,
+        promptSuffix: singlePromptSuffix,
+        promptSuffixes: selectedModels.length > 1 ? promptSuffixes : undefined,
+        force: true,
       })
-
-      await generateWithChatUpdate
 
       setSelectedAsset({
-        ...nextAsset,
+        ...selectedAsset,
+        description: assetPromptMode === 'auto' ? (assetPromptDraft.trim() || selectedAsset.description) : selectedAsset.description,
+        prompt_used: assetPromptMode === 'manual' ? assetFinalPromptDraft.trim() : selectedAsset.prompt_used,
+        metadata: {
+          ...(selectedAsset.metadata ?? {}),
+          prompt_locked: assetPromptMode === 'manual',
+        },
         status: 'generating',
       })
-      toast({ title: '已提交修改，正在生成新图', variant: 'success' })
+      toast({
+        title: assetPromptMode === 'manual' ? '已按锁定的最终提示词提交生成' : '已提交生成',
+        description: selectedModels.length > 1 ? `并行 ${selectedModels.length} 个模型，各出一版候选图` : undefined,
+        variant: 'success',
+      })
       mutateAssets()
     } catch {
-      toast({ title: '发送失败', variant: 'destructive' })
-      setSelectedAsset(selectedAsset)
+      toast({ title: '生成失败', variant: 'destructive' })
+    } finally {
+      setAssetGenerating(false)
     }
-    setChatLoading(false)
   }
 
   const handleSelectGeneratedImage = async (asset: Asset, imageUrl: string) => {
@@ -838,24 +955,6 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
   const selectedAssetElapsedLabel = getGenerationElapsedLabel(selectedAssetGenerationProgress, nowMs)
   const selectedAssetTimingLabel = [selectedAssetElapsedLabel, selectedAssetEtaLabel].filter(Boolean).join(' · ')
 
-  React.useEffect(() => {
-    if (!selectedAsset || !shouldStickChatToBottomRef.current) return
-    chatBottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [
-    selectedAsset?.id,
-    selectedAsset?.status,
-    selectedAsset?.agent_history?.length,
-    selectedAssetGenerationProgress?.percent,
-    selectedAssetGenerationProgress?.stage,
-  ])
-
-  const handleChatListScroll = () => {
-    const el = chatListRef.current
-    if (!el) return
-    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    shouldStickChatToBottomRef.current = distanceToBottom <= 96
-  }
-
   const STATUS_FILTERS: { key: AssetStatus | 'all'; label: string; color?: string }[] = [
     { key: 'all', label: '全部状态' },
     { key: 'completed', label: '已完成' },
@@ -884,7 +983,43 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
         cost_per_unit: 0, unit: 'image', priority: 1,
         created_at: '', updated_at: '',
       }))
-    return dedupeModels([...dbModels, ...synthetic, ...brokenModels]).map(buildImageModelOption)
+    
+    const unsorted = dedupeModels([...dbModels, ...synthetic, ...brokenModels]).map(buildImageModelOption)
+    
+    // Sort logic:
+    // 1. GPT-related models always first (with gpt-image-2 / gpt-img-2 taking top priority among GPT models)
+    // 2. Grouped by provider name
+    // 3. Within same provider, sorted by priority (if available) or label
+    return [...unsorted].sort((a, b) => {
+      const aKey = (a.key || '').toLowerCase()
+      const bKey = (b.key || '').toLowerCase()
+      const aLabel = (a.label || '').toLowerCase()
+      const bLabel = (b.label || '').toLowerCase()
+      
+      const isAGpt = aKey.includes('gpt') || aLabel.includes('gpt')
+      const isBGpt = bKey.includes('gpt') || bLabel.includes('gpt')
+      
+      if (isAGpt && !isBGpt) return -1
+      if (!isAGpt && isBGpt) return 1
+      
+      if (isAGpt && isBGpt) {
+        // Both are GPT models, prioritize gpt-image-2 / gpt-img-2
+        const isAGpt2 = aKey === 'gpt-image-2' || aKey === 'gpt-img-2'
+        const isBGpt2 = bKey === 'gpt-image-2' || bKey === 'gpt-img-2'
+        if (isAGpt2 && !isBGpt2) return -1
+        if (!isAGpt2 && isBGpt2) return 1
+        
+        // Otherwise sort GPT models alphabetically
+        return (a.label || '').localeCompare(b.label || '', 'zh-CN')
+      }
+      
+      const providerCompare = (a.provider || '').localeCompare(b.provider || '', 'zh-CN')
+      if (providerCompare !== 0) {
+        return providerCompare
+      }
+      
+      return (a.label || '').localeCompare(b.label || '', 'zh-CN')
+    })
   }, [imageModels, imageModelAvailability])
 
   const formatErrorMsg = (msg: string): string => {
@@ -897,6 +1032,19 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     if (msg.length > 60) return msg.slice(0, 57) + '…'
     return msg
   }
+  const failedGenerationSamples = React.useMemo(() => {
+    const samples: string[] = []
+    const seen = new Set<string>()
+    for (const asset of scopedStatsAssets) {
+      if (asset.status !== 'failed' && asset.status !== 'qa_failed') continue
+      const label = formatErrorMsg(asset.error_msg || '生成失败')
+      if (seen.has(label)) continue
+      seen.add(label)
+      samples.push(label)
+      if (samples.length >= 3) break
+    }
+    return samples
+  }, [scopedStatsAssets])
   const TYPE_COLORS: Record<AssetType, string> = {
     character: 'bg-purple-100 text-purple-800',
     scene: 'bg-primary-100 text-primary-800',
@@ -928,10 +1076,69 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
     image: <Images className="h-2.5 w-2.5" />,
   }
 
+  const handleRetryExtraction = async () => {
+    setRetryingExtraction(true)
+    try {
+      const modelName = resolveExtractionModelName(
+        effectiveExtractionModelKey,
+        project.text_model_id,
+        extractionTextModels,
+      )
+      if (episodeId != null) {
+        await assetAPI.extractEpisode(projectId, episodeId, modelName ? { modelName } : undefined)
+      } else {
+        await assetAPI.extract(projectId, false, modelName ? { modelName } : undefined)
+      }
+      await Promise.all([
+        mutateAssets(),
+        globalMutate(['assets-stats', projectId]),
+        mutateExtractionStatus(),
+        globalMutate(['assets-extraction-status', projectId, extractionScopeEpisodeId]),
+      ])
+      onExtractEpisodeAssets?.()
+      toast({
+        title: '已重新提交资源提取',
+        description: modelName ? `当前模型：${modelName}` : '正在重新识别角色、场景和道具…',
+        variant: 'success',
+      })
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } } }
+      toast({
+        title: '资源提取启动失败',
+        description: err?.response?.data?.error || '服务器发生错误',
+        variant: 'destructive',
+      })
+    } finally {
+      setRetryingExtraction(false)
+    }
+  }
+
   if (isLoading) return <TabSkeleton />
 
   return (
     <div className="relative">
+      {extractionState.failed ? (
+        <AssetExtractionFailureBanner
+          errorMessage={extractionState.errorMessage}
+          modelName={extractionState.modelName}
+          textModels={extractionTextModels}
+          selectedModelKey={effectiveExtractionModelKey}
+          onSelectedModelKeyChange={setExtractionModelKey}
+          onRetry={handleRetryExtraction}
+          retrying={retryingExtraction || isExtractingEpisodeAssets}
+        />
+      ) : extractionInProgress ? (
+        <AssetExtractionProgressBanner />
+      ) : null}
+      {failedCount > 0 ? (
+        <AssetGenerationFailureBanner
+          failedCount={failedCount}
+          sampleErrors={failedGenerationSamples}
+          onShowFailed={() => setStatusFilter('failed')}
+          onRetryFailed={handleRetryAllFailed}
+          retrying={batchGenRunning}
+        />
+      ) : null}
       {/* Action toolbar — hidden when parent (EpisodeWorkspace) renders the buttons in the sidebar */}
       {!hideActionBar ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1031,6 +1238,12 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
 
       {/* Asset grid */}
       {assets.length === 0 ? (
+        extractionState.failed ? (
+          <div className="py-8 text-center text-sm text-surface-500">
+            <p className="text-red-700">{extractionState.errorMessage}</p>
+            <p className="mt-2 text-xs text-surface-400">请使用上方失败提示切换模型后重试。</p>
+          </div>
+        ) : (
         <p className="py-12 text-center text-sm text-surface-400">
           {(filter !== 'all' || statusFilter !== 'all' || episodeFilter !== 'all' || keyword.trim()) ? (
             <>
@@ -1044,6 +1257,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
             </>
           )}
         </p>
+        )
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {assets.map((asset) => {
@@ -1152,7 +1366,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-surface-900">{asset.name}</p>
                       <p className="mt-1 line-clamp-2 text-xs leading-5 text-surface-500">
-                        {asset.description || '暂无描述，可通过右侧对话继续补充和修改。'}
+                        {asset.description || '暂无描述，可在详情面板直接编辑提示词并生成。'}
                       </p>
                     </div>
                   </div>
@@ -1201,6 +1415,11 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                         风格 {asset.metadata.style_preset === 'realistic' ? '真实环境' : asset.metadata.style_preset === 'anime' ? '动漫' : asset.metadata.style_preset}
                       </Badge>
                     )}
+                    {asset.type === 'scene' && readSceneSpatialMetadata(asset.metadata as Record<string, unknown> | undefined).view_type ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        {locationViewLabel(readSceneSpatialMetadata(asset.metadata as Record<string, unknown> | undefined).view_type)}
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1376,7 +1595,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
             <div className="flex items-center justify-between border-b bg-white/95 px-5 py-4 backdrop-blur-sm">
               <div className="min-w-0">
                 <h3 className="truncate text-lg font-semibold">{selectedAsset.name}</h3>
-                <p className="mt-1 text-xs text-surface-400">资源详情、修改记录与对话调优</p>
+                <p className="mt-1 text-xs text-surface-400">资源详情、提示词编辑与多模型生成</p>
               </div>
               <Button size="sm" variant="ghost" onClick={() => setSelectedAsset(null)}>
                 <X className="h-4 w-4" />
@@ -1434,7 +1653,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                       <Loader2 className="h-10 w-10 animate-spin text-primary-500" />
                       <p className="mt-4 text-sm font-medium text-surface-800">{selectedAssetGenerationProgress?.label ?? '图片资源生成中'}</p>
                       <p className="mt-2 max-w-sm text-xs leading-6 text-surface-500">
-                        {selectedAssetTimingLabel || selectedAssetProgressHint || selectedAssetGenerationProgress?.detail || '生成完成后会在左侧自动展示最新图片，右侧聊天记录仍可继续查看和追加修改要求。'}
+                        {selectedAssetTimingLabel || selectedAssetProgressHint || selectedAssetGenerationProgress?.detail || '生成完成后会在左侧自动展示最新图片，右侧可继续编辑提示词并重新生成。'}
                       </p>
                       <div className="mt-4 w-full max-w-sm space-y-2">
                         <Progress value={selectedAssetGenerationProgress?.percent ?? 12} className="h-2" />
@@ -1455,7 +1674,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                       <Image className="h-10 w-10 text-surface-300" />
                       <p className="mt-4 text-sm font-medium text-surface-700">暂无图片资源</p>
                       <p className="mt-2 max-w-sm text-xs leading-6 text-surface-400">
-                        你可以先在右侧通过聊天修改描述，再触发图片生成；生成结果会显示在这里。
+                        你可以在右侧编辑提示词并选择模型生成；生成结果会显示在这里。
                       </p>
                     </div>
                   )}
@@ -1546,6 +1765,49 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                       </div>
                       <p className="mt-3 text-xs font-medium text-surface-500">当前描述</p>
                       <p className="mt-1 text-sm leading-6 text-surface-700">{selectedAsset.description || '暂无描述'}</p>
+                      {selectedAsset.type === 'scene' ? (
+                        <div className="mt-4 space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+                          <div>
+                            <p className="text-xs font-medium text-indigo-900">场景空间（用于分镜参考图匹配）</p>
+                            <p className="mt-1 text-[11px] leading-5 text-indigo-700/80">
+                              可命名如「刘师傅包子铺·内景」，或在此指定视角与地点枢纽，避免内景分镜误用外景参考图。
+                            </p>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <label className="space-y-1">
+                              <span className="text-[11px] font-medium text-surface-600">空间视角</span>
+                              <select
+                                className="h-9 w-full rounded-md border border-surface-200 bg-white px-2 text-sm text-surface-700"
+                                value={sceneViewType}
+                                onChange={(e) => setSceneViewType(e.target.value)}
+                              >
+                                {LOCATION_VIEW_OPTIONS.map((opt) => (
+                                  <option key={opt.value || 'auto'} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-[11px] font-medium text-surface-600">地点枢纽（可选）</span>
+                              <input
+                                className="h-9 w-full rounded-md border border-surface-200 bg-white px-2 text-sm text-surface-700"
+                                value={sceneLocationHub}
+                                onChange={(e) => setSceneLocationHub(e.target.value)}
+                                placeholder="如：刘师傅包子铺"
+                              />
+                            </label>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 bg-white"
+                            disabled={sceneSpatialSaving}
+                            onClick={() => { void handleSaveSceneSpatial() }}
+                          >
+                            {sceneSpatialSaving ? '保存中…' : '保存空间信息'}
+                          </Button>
+                        </div>
+                      ) : null}
                       <p className="mt-3 text-xs font-medium text-surface-500">分镜引用</p>
                       {(episodeFilter === 'all' ? selectedAssetLinkedStoryboards : selectedAssetScopedLinkedStoryboards).length > 0 ? (
                         <>
@@ -1653,22 +1915,33 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                     {selectedAsset.prompt_used ? (
                       <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3">
                         <div className="mb-1 flex items-center justify-between gap-2">
-                          <p className="text-xs font-medium text-amber-700">当前生效提示词（prompt_used）</p>
+                          <p className="text-xs font-medium text-amber-700">当前生效提示词（中文对照）</p>
                           <Button
                             type="button"
                             size="sm"
                             variant="ghost"
                             className="h-7 px-2 text-[11px] text-amber-700 hover:text-amber-900"
                             onClick={() => {
-                              navigator.clipboard.writeText(selectedAsset.prompt_used || '')
+                              navigator.clipboard.writeText(assetPromptZhDisplay || selectedAsset.prompt_used || '')
                               toast({ title: '提示词已复制', variant: 'success' })
                             }}
                           >
                             复制
                           </Button>
                         </div>
-                        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white/80 p-2 text-[11px] leading-5 text-amber-950">{selectedAsset.prompt_used}</pre>
-                        <p className="mt-2 text-[10px] text-amber-700/80">这里显示的是资产真实落库并被本次图片生成使用的提示词，比只看成图更适合核对人物 / 物品 / 场景提示词是否真的更新。</p>
+                        {assetPromptZhLoading ? (
+                          <div className="flex items-center gap-2 text-[11px] text-amber-700">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            正在翻译为中文…
+                          </div>
+                        ) : (
+                          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white/80 p-2 text-sm leading-6 text-amber-950">{assetPromptZhDisplay}</pre>
+                        )}
+                        <p className="mt-2 text-[10px] text-amber-700/80">
+                          {assetPromptZhFromTranslation
+                            ? '这里显示的是资产真实落库并被本次图片生成使用的提示词的中文对照，便于核对人物 / 物品 / 场景提示词是否更新。'
+                            : '由资源名称与描述整理的可读说明；完整英文指令在生成时由系统自动组装并发送给模型。'}
+                        </p>
                       </div>
                     ) : null}
                     {selectedAsset.consistency_ref && Object.keys(selectedAsset.consistency_ref).length > 0 && (
@@ -1681,190 +1954,155 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                 </div>
 
                 <div className="flex min-h-0 flex-1 flex-col p-5">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-sm font-semibold text-surface-700">AI 对话记录</h4>
-                    <span className="text-[11px] text-surface-400">
-                      {selectedAsset.agent_history?.length ?? 0} 条消息
-                    </span>
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-surface-700">编辑提示词并生成</h4>
+                    <p className="mt-0.5 text-[11px] text-surface-400">直接修改资源的图像生成提示词，选择模型后确认生成（可多选模型并行出多版本对比）。</p>
                   </div>
-                  <div
-                    ref={chatListRef}
-                    onScroll={handleChatListScroll}
-                    className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-xl border border-surface-200 bg-surface-50/70 p-3 pr-2"
-                  >
-                    {selectedAsset.status === 'generating' && selectedAssetGenerationProgress && (
+                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                    {selectedAsset.status === 'generating' && (
                       <div className="rounded-2xl border border-primary-200 bg-primary-50/80 px-3 py-3 text-xs text-primary-900 shadow-sm">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2 font-medium">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            <span>{selectedAssetGenerationProgress.label}</span>
+                            <span>{selectedAssetGenerationProgress?.label ?? '正在生成新版本'}</span>
                           </div>
-                          <span>{selectedAssetGenerationProgress.percent}%</span>
+                          <span>{selectedAssetGenerationProgress?.percent ?? 12}%</span>
                         </div>
-                        <Progress value={selectedAssetGenerationProgress.percent} className="mt-2 h-1.5" />
-                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-primary-700/80">
-                          <span>{selectedAssetTimingLabel || selectedAssetGenerationProgress.detail || '新图生成完成后会自动展示在左侧。'}</span>
-                          {selectedAssetGenerationProgress.task_id ? <span>任务 #{selectedAssetGenerationProgress.task_id}</span> : null}
-                        </div>
-                        {selectedAssetProgressHint ? (
-                          <p className="mt-1 text-[11px] text-primary-700/70">{selectedAssetProgressHint}</p>
-                        ) : null}
+                        <Progress value={selectedAssetGenerationProgress?.percent ?? 12} className="mt-2 h-1.5" />
+                        <p className="mt-2 text-[11px] text-primary-700/80">{selectedAssetTimingLabel || selectedAssetProgressHint || '新图生成完成后会自动展示在左侧候选图片。'}</p>
                       </div>
                     )}
-                    {selectedAsset.status === 'generating' && (
-                      <div className="flex justify-start">
-                        <div className="max-w-[88%] rounded-2xl border border-surface-200 bg-white px-3 py-2.5 text-xs text-surface-700 shadow-sm">
-                          <div className="mb-1 flex items-center gap-2 text-[10px] text-surface-400">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            <span>AI 正在生成待返回图片</span>
-                          </div>
-                          <div className="overflow-hidden rounded-xl border border-dashed border-primary-200 bg-primary-50/60">
-                            {selectedAssetPreviewUrl ? (
-                              <div className="relative">
-                                <img src={selectedAssetPreviewUrl} alt="" className="h-36 w-full object-cover opacity-75" />
-                                <div className="absolute inset-0 flex items-center justify-center bg-surface-950/35">
-                                  <div className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-medium text-surface-700 shadow-sm">
-                                    新版本生成中
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex h-36 w-full flex-col items-center justify-center gap-2">
-                                <Image className="h-8 w-8 text-primary-300" />
-                                <span className="text-[11px] text-surface-500">待生成图片将在这里返回</span>
-                              </div>
-                            )}
-                          </div>
-                          <div className="mt-2 space-y-1.5 leading-5">
-                            <div className="flex items-center justify-between gap-2 text-[11px]">
-                              <span>{selectedAssetTimingLabel || selectedAssetProgressHint || '当前资源图片仍在生成中。'}</span>
-                              <span>{selectedAssetGenerationProgress?.percent ?? 12}%</span>
-                            </div>
-                            <Progress value={selectedAssetGenerationProgress?.percent ?? 12} className="h-1.5" />
-                            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-surface-400">
-                              <span>{selectedAssetGenerationProgress?.detail || '生成完成后会自动显示在左侧预览区域，并加入候选图片列表。'}</span>
-                              <span>{selectedAssetGenerationProgress?.model_name || selectedProjectImageModelLabel}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {(!selectedAsset.agent_history || selectedAsset.agent_history.length === 0) ? (
-                      <p className="py-4 text-center text-xs text-surface-400">暂无对话记录</p>
-                    ) : (
-                      selectedAsset.agent_history.map((rawMsg, i) => {
-                        const msg = rawMsg as LegacyChatMessage
-                        const role = getChatRole(msg)
-                        const content = getChatContent(msg)
-                        const imageUrl = getChatImageUrl(msg)
-                        const imageModel = getChatImageModel(msg)
 
+                    <div className="rounded-xl border border-surface-200 bg-surface-50/70 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <Label className="text-xs font-medium">提示词</Label>
+                        <div className="flex items-center rounded-md border border-surface-200 bg-white p-0.5 text-[10px] font-medium">
+                          <button
+                            type="button"
+                            className={`rounded px-2 py-0.5 transition-colors ${assetPromptMode === 'auto' ? 'bg-primary-500 text-white' : 'text-surface-500 hover:bg-surface-100'}`}
+                            onClick={() => setAssetPromptMode('auto')}
+                          >自动（编辑描述）</button>
+                          <button
+                            type="button"
+                            className={`rounded px-2 py-0.5 transition-colors ${assetPromptMode === 'manual' ? 'bg-primary-500 text-white' : 'text-surface-500 hover:bg-surface-100'}`}
+                            onClick={() => {
+                              if (!assetFinalPromptDraft.trim()) setAssetFinalPromptDraft(selectedAsset.prompt_used || assetPromptDraft || '')
+                              setAssetPromptMode('manual')
+                            }}
+                          >高级（最终提示词）</button>
+                        </div>
+                      </div>
+                      {assetPromptMode === 'auto' ? (
+                        <>
+                          <Textarea
+                            value={assetPromptDraft}
+                            onChange={(e) => setAssetPromptDraft(e.target.value)}
+                            placeholder="描述该资源的外观特征 / 风格 / 环境氛围，可直接作为图像生成提示词。"
+                            className="min-h-[140px] resize-y bg-white text-xs leading-5"
+                          />
+                          <p className="mt-1.5 text-[11px] text-surface-400">系统会在此描述基础上自动翻译/套用风格前缀、版面与负面约束生成最终提示词。</p>
+                        </>
+                      ) : (
+                        <>
+                          <Textarea
+                            value={assetFinalPromptDraft}
+                            onChange={(e) => setAssetFinalPromptDraft(e.target.value)}
+                            placeholder="直接编写发送给图片模型的最终提示词（含风格/质量/负面词），将原样使用。"
+                            className="min-h-[180px] resize-y bg-white font-mono text-[11px] leading-5"
+                          />
+                          <p className="mt-1.5 text-[11px] text-amber-600">高级模式：确认生成后将<b>原样使用</b>该最终提示词，跳过自动翻译、风格前缀与润色；可对照上方「当前生效提示词」修改。</p>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="space-y-3">
+                      <Label className="text-xs font-medium">生成模型（可多选）</Label>
+                      {(
+                        [
+                          { label: '🌐 多模态推荐', filter: (m: typeof MODEL_OPTIONS[0]) => m.tags.includes('多模态') },
+                          { label: '🎨 高质量文生图', filter: (m: typeof MODEL_OPTIONS[0]) => m.tags.includes('高质量') && !m.tags.includes('多模态') },
+                          { label: '⚡ 高速 / 低成本', filter: (m: typeof MODEL_OPTIONS[0]) => !m.tags.includes('多模态') && !m.tags.includes('高质量') && !m.tags.includes('本地') },
+                          { label: '🖥️ 本地部署', filter: (m: typeof MODEL_OPTIONS[0]) => m.tags.includes('本地') },
+                        ] as Array<{ label: string; filter: (m: typeof MODEL_OPTIONS[0]) => boolean }>
+                      ).map(({ label: sectionLabel, filter }) => {
+                        const models = MODEL_OPTIONS.filter(filter)
+                        if (models.length === 0) return null
                         return (
-                          <div key={i} className={`flex ${role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-xs shadow-sm ${
-                              role === 'user'
-                                ? 'bg-primary-500 text-white'
-                                : 'border border-surface-200 bg-white text-surface-700'
-                            }`}>
-                              <div className={`mb-1 flex items-center justify-between gap-3 text-[10px] ${
-                                role === 'user' ? 'text-primary-100' : 'text-surface-400'
-                              }`}>
-                                <span>{role === 'user' ? '你的修改要求' : 'AI 回应'}</span>
-                                <span>{formatChatTimestamp(msg.timestamp)}</span>
-                              </div>
-                              <div className="whitespace-pre-wrap leading-5">
-                                {content}
-                              </div>
-                              {imageUrl && (
-                                <div className="relative mt-2">
-                                  <img src={imageUrl} alt="" className="max-w-full rounded-lg border border-black/5" />
-                                  {imageModel && (
-                                    <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[9px] text-white" title={`由 ${imageModel} 生成`}>
-                                      🤖 {imageModel}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
+                          <div key={sectionLabel}>
+                            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-surface-400">{sectionLabel}</p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {models.map((m) => {
+                                const avail = imageModelAvailability[m.key]
+                                const selected = assetGenModels.includes(m.key)
+                                const broken = !!m.failureReason
+                                return (
+                                  <button
+                                    key={m.key}
+                                    type="button"
+                                    title={broken ? `已停用：${m.failureReason}` : undefined}
+                                    onClick={() => {
+                                      if (avail === false || broken) return
+                                      setAssetGenModels((current) => (
+                                        selected ? current.filter((item) => item !== m.key) : [...current, m.key]
+                                      ))
+                                    }}
+                                    className={`flex items-start gap-2 rounded-lg border p-2.5 text-left transition-colors ${
+                                      broken
+                                        ? 'cursor-not-allowed border-red-200 bg-red-50 opacity-60'
+                                        : selected
+                                        ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-400'
+                                        : avail === false
+                                        ? 'border-surface-200 bg-surface-50 opacity-50'
+                                        : 'border-surface-200 bg-white hover:border-surface-300'
+                                    }`}
+                                  >
+                                    <span className="mt-0.5 text-base">{m.icon}</span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        <span className="text-xs font-semibold" style={{color:'#000'}}>{m.label}</span>
+                                        {!broken && m.speed === 'fast' && <span className="rounded bg-green-100 px-1 text-[9px] text-green-700">⚡ 快</span>}
+                                        {!broken && m.quality === 'high' && <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700">★ 高质</span>}
+                                        {!broken && avail === true && <span className="rounded bg-emerald-100 px-1 text-[9px] text-emerald-700">● 可用</span>}
+                                        {!broken && avail === false && <span className="rounded bg-red-100 px-1 text-[9px] text-red-600">● 未配置</span>}
+                                        {broken && <span className="rounded bg-red-100 px-1 text-[9px] text-red-600">⚠ 已停用</span>}
+                                      </div>
+                                      <p className="text-[10px] text-surface-400">{getProviderLabel(m.provider)}</p>
+                                      {broken ? (
+                                        <p className="mt-0.5 text-[9px] leading-snug text-red-400">{m.failureReason}</p>
+                                      ) : (
+                                        <p className="mt-0.5 text-[9px] leading-snug text-surface-500">{m.desc}</p>
+                                      )}
+                                    </div>
+                                  </button>
+                                )
+                              })}
                             </div>
                           </div>
                         )
-                      })
-                    )}
-                    <div ref={chatBottomRef} />
+                      })}
+                      {assetGenModels.length === 0 ? (
+                        <p className="text-[11px] text-surface-400">未选择将使用项目默认图片模型：{selectedProjectImageModelLabel}</p>
+                      ) : (
+                        <p className="text-[11px] text-surface-400">已选 {assetGenModels.length} 个模型{assetGenModels.length > 1 ? '（每个模型各生成一版候选图）' : ''}。</p>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {/* Chat input */}
-                <div className="border-t bg-white/95 p-4 backdrop-blur-sm">
-                  <div className="rounded-xl border border-surface-200 bg-surface-50/70 p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-surface-800">对话修改</p>
-                        <p className="text-[11px] text-surface-400">告诉 AI 你想怎么改人物设定、场景描述或道具细节。</p>
-                      </div>
-                      <div className="min-w-[200px]">
-                        <Select value={selectedChatModelId} onValueChange={setSelectedChatModelId}>
-                          <SelectTrigger className="h-9 bg-white text-xs">
-                            <SelectValue placeholder="选择对话模型" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(() => {
-                              const isMultimodal = (m: Model) => (m.capability_tags ?? []).some((t) => ['vision', 'vision-understanding', 'multimodal', 'image-understanding'].includes(t))
-                              const mm = chatModels.filter(isMultimodal)
-                              const txt = chatModels.filter((m) => !isMultimodal(m))
-                              return (
-                                <>
-                                  {mm.length > 0 && (
-                                    <>
-                                      <div className="px-2 py-1 text-[10px] font-semibold uppercase text-surface-400">👁️ 多模态（支持图像输入）</div>
-                                      {mm.map((model) => (
-                                        <SelectItem key={model.id} value={String(model.id)}>
-                                          👁️ {model.name}
-                                        </SelectItem>
-                                      ))}
-                                    </>
-                                  )}
-                                  {txt.length > 0 && (
-                                    <>
-                                      <div className="px-2 py-1 text-[10px] font-semibold uppercase text-surface-400">💬 纯文本</div>
-                                      {txt.map((model) => (
-                                        <SelectItem key={model.id} value={String(model.id)}>
-                                          💬 {model.name}
-                                        </SelectItem>
-                                      ))}
-                                    </>
-                                  )}
-                                </>
-                              )
-                            })()}
-                          </SelectContent>
-                        </Select>
-                        <p className="mt-1 text-right text-[10px] text-surface-400">{selectedChatModelLabel}</p>
-                      </div>
-                    </div>
-                    <Textarea
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="例如：保留人物服饰不变，补充正面表情更坚定；场景增加傍晚逆光和云层层次。"
-                      className="min-h-[110px] resize-none bg-white"
-                      onKeyDown={(e) => {
-                        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                          e.preventDefault()
-                          handleChat()
-                        }
-                      }}
-                    />
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <span className="text-[11px] text-surface-400">按 `Ctrl/Cmd + Enter` 快速发送</span>
-                      <Button onClick={handleChat} disabled={chatLoading || !chatInput.trim()}>
-                        {chatLoading ? (
-                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Send className="mr-1.5 h-4 w-4" />
-                        )}
-                        发送修改要求
-                      </Button>
-                    </div>
+                  <div className="mt-3 border-t border-surface-100 pt-3">
+                    <Button
+                      className="w-full"
+                      onClick={() => void handleAssetPromptGenerate()}
+                      disabled={assetGenerating || selectedAsset.status === 'generating'}
+                    >
+                      {assetGenerating ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1.5 h-4 w-4" />
+                      )}
+                      {(selectedAsset.status === 'failed' || selectedAsset.status === 'qa_failed')
+                        ? '重新生成'
+                        : `确认生成${assetGenModels.length > 1 ? `（${assetGenModels.length}）` : ''}`}
+                    </Button>
                   </div>
                 </div>
               </div>

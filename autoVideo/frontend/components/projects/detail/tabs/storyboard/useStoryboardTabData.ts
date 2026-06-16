@@ -111,13 +111,43 @@ export function useStoryboardTabData(projectId: number, project: Project, episod
   const sbTotal = (sbData as SbListResp)?.page_info?.total ?? storyboards.length
   const sbTotalPages = Math.max(1, Math.ceil(sbTotal / sbPageSize))
 
-  const SB_MODEL_OPTIONS = useMemo(
-    () => dedupeModels([
+  const SB_MODEL_OPTIONS = useMemo(() => {
+    const unsorted = dedupeModels([
       ...sbImageModels.filter((m) => m.is_active && m.model_key),
       ...sbImageModels.filter((m) => !m.is_active && m.failure_reason && m.model_key),
-    ]).map(buildImageModelOption),
-    [sbImageModels]
-  )
+    ]).map(buildImageModelOption)
+
+    return [...unsorted].sort((a, b) => {
+      const aKey = (a.key || '').toLowerCase()
+      const bKey = (b.key || '').toLowerCase()
+      const aLabel = (a.label || '').toLowerCase()
+      const bLabel = (b.label || '').toLowerCase()
+
+      const isAGpt = aKey.includes('gpt') || aLabel.includes('gpt')
+      const isBGpt = bKey.includes('gpt') || bLabel.includes('gpt')
+
+      if (isAGpt && !isBGpt) return -1
+      if (!isAGpt && isBGpt) return 1
+
+      if (isAGpt && isBGpt) {
+        // Both are GPT models, prioritize gpt-image-2 / gpt-img-2
+        const isAGpt2 = aKey === 'gpt-image-2' || aKey === 'gpt-img-2'
+        const isBGpt2 = bKey === 'gpt-image-2' || bKey === 'gpt-img-2'
+        if (isAGpt2 && !isBGpt2) return -1
+        if (!isAGpt2 && isBGpt2) return 1
+
+        // Otherwise sort GPT models alphabetically
+        return (a.label || '').localeCompare(b.label || '', 'zh-CN')
+      }
+
+      const providerCompare = (a.provider || '').localeCompare(b.provider || '', 'zh-CN')
+      if (providerCompare !== 0) {
+        return providerCompare
+      }
+
+      return (a.label || '').localeCompare(b.label || '', 'zh-CN')
+    })
+  }, [sbImageModels])
   const storyboardDefaultImageModelLabel = SB_MODEL_OPTIONS.find((model) => model.key === sbProjectImageModelKey)?.label || '项目默认模型'
 
   const { data: sbTasksData, mutate: mutateStoryboardTasks } = useSWR(

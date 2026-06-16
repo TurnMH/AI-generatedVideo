@@ -16,9 +16,12 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARC
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM alpine:3.19
 
-# ca-certificates: TLS; tzdata: timezone support; ffmpeg: video processing
+# ca-certificates: TLS; tzdata: timezone support; ffmpeg: video processing;
+# python3 + edge-tts: dubbing/subtitle generation via Microsoft Edge TTS CLI
 RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.tuna.tsinghua.edu.cn/alpine|g' /etc/apk/repositories \
-	&& apk add --no-cache ca-certificates tzdata ffmpeg
+	&& apk add --no-cache ca-certificates tzdata ffmpeg python3 py3-pip \
+	&& pip3 install --no-cache-dir --break-system-packages 'edge-tts>=6.1.9' \
+	&& edge-tts --version
 
 WORKDIR /app
 

@@ -58,6 +58,7 @@ func comicsSceneSplitPrompt(p SceneSplitParams) string {
 - character_states 每个角色的姿态和情绪（name/action/emotion）
 - mood：tense / romantic / comedic / sad / epic / mysterious / action / calm / dramatic
 - location：场景地点（2-20字）
+- location_zone：空间视角，取值 exterior（外景）/ interior（内景）/ entrance（门口过渡）/ aerial（俯视）；根据 description 与 location 判断，店内/室内→interior，门外/街道→exterior，门口→entrance；不确定可省略
 - duration 固定为 0（漫画格无时长）
 - dialogue：该格中的对白或心理独白（保持原文；如无则留空）。原文中引号内容、冒号引用句、[字幕:]标注均必须提取到此字段，禁止遗漏
 
@@ -71,7 +72,7 @@ func comicsSceneSplitPrompt(p SceneSplitParams) string {
 
 请严格按以下 JSON 格式返回：
 {"scenes": [
-  {"description": "中文画面描述", "shot_type": "bust", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "grips sword", "emotion": "determined"}], "mood": "tense", "location": "地点", "duration": 0, "dialogue": "对白"}
+  {"description": "中文画面描述", "shot_type": "bust", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "grips sword", "emotion": "determined"}], "mood": "tense", "location": "地点", "location_zone": "interior", "duration": 0, "dialogue": "对白"}
 ]}
 
 第 %d 集内容：
@@ -101,7 +102,8 @@ func adSceneSplitPrompt(p SceneSplitParams) string {
 - 广告口播项目中，分镜默认必须承载明确的 dialogue / 字幕 / 卖点信息
 - description 用中文写可见画面（40-120字）：人物在做什么、表情、环境、关键道具；不要写机位/方位/分层术语
 - shot_type 推荐景别：close-up / medium / full / wide / overhead / low-angle / tracking / handheld
-- characters / character_states / items / mood / location 按画面需要填写
+- characters / character_states / items / mood / location / location_zone 按画面需要填写
+- location_zone：exterior / interior / entrance / aerial；根据画面空间判断（店内→interior，店外/街道→exterior，门口→entrance）
 - duration 该分镜的视频时长（秒数，整数），必须严格等于当前目标单分镜时长：
 %s
 - 构图/画面约束（必须同步遵守）：
@@ -116,7 +118,7 @@ func adSceneSplitPrompt(p SceneSplitParams) string {
 
 请严格按以下 JSON 格式返回：
 {"scenes": [
-  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "presenting product", "emotion": "confident"}], "items": ["产品"], "mood": "dramatic", "location": "展示区", "duration": %d, "dialogue": "对白"}
+  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "presenting product", "emotion": "confident"}], "items": ["产品"], "mood": "dramatic", "location": "展示区", "location_zone": "interior", "duration": %d, "dialogue": "对白"}
 ]}
 
 第 %d 集内容：
@@ -131,36 +133,39 @@ func commentarySceneSplitPrompt(p SceneSplitParams) string {
 	}
 	return fmt.Sprintf(`你是一位专业的解说漫分镜师。请将以下第 %d 集的内容拆分为适合旁白驱动漫画风视频的分镜。
 %s
-**核心原则：旁白段落优先，画面配合叙事，宁多勿少。**
-- 以旁白/解说句群为拆分主轴：每当旁白进入新信息点、新人物、新剧情段、新场景或新情绪节点，优先拆成新分镜
-- 不要把多段无关旁白硬合并到一个镜头；也不要为了凑时长把完整旁白段拆得过碎
-- 允许无人物出镜的说明性画面，但 dialogue 必须承载会被念出的旁白原文
-- 漫画风讲解视频强调角色表演、条漫式构图、信息图示化，但不要写成广告卖点口播稿
+**最高原则：旁白逐字照搬原文，保证内容完整、零遗漏、零改写。**
+- dialogue 必须【逐字照搬】原文中会被念出的解说/旁白句，禁止改写、概括、缩写、同义替换、增删或调换语序
+- 原文中所有会被念出的句子（[字幕:…]、引号台词、解说旁白段）都必须【完整覆盖】到某个分镜的 dialogue，按原文先后顺序铺满，不得跳过任何一句
+- 拆分只是把同一段原文切到不同分镜，原文文字总量必须基本守恒：把所有分镜 dialogue 顺序拼接后，应当≈原文可念内容，不能变短、不能丢段
+- 宁可多拆几个分镜，也不要为了精简而删句或合并改写；内容完整性优先级高于镜头数量与节奏美观
+- 不允许“无中生有”：不要新增原文没有的解说词，也不要把第三人称画面动作改写成旁白
 
 **拆分规则：**
-- 旁白转折、场景切换、人物登场/退场、剧情节点、设定块切换 → 新分镜
-- 同一旁白段若信息量超过当前单镜时长，再按句群二次拆分
+- 以原文句序为主轴；旁白转折、场景切换、人物登场/退场、剧情节点、设定块切换 → 新分镜
+- 同一旁白段若信息量超过当前单镜时长，按句号/分句二次切分，但每个切出的子句仍须是原文逐字片段，不得改写
 - description 用中文写这一镜的可见画面（40-120字）：角色动作、表情、场景、道具、情绪；不要写左/右/机位/分层
 - shot_type：close-up / medium / full / wide / establishing / insert / reaction
-- characters / character_states / items / mood / location 按需填写
-- duration 整数秒，必须随旁白节奏变化：短句/反应镜 3-5 秒，标准叙述 5-8 秒，信息密集段 8-12 秒；不要全部填同一个数
+- characters / character_states / items / mood / location / location_zone 按需填写
+- location_zone：exterior / interior / entrance / aerial；根据画面空间判断
+- duration 整数秒，随旁白长短起伏：短句/反应镜 3-5 秒，标准叙述 5-8 秒，信息密集段 8-12 秒；不要全部填同一个数。若某句较长，宁可调大 duration 也不要删减 dialogue 文字
 %s
 - 构图/画面约束：
 %s
 - 语速/旁白承载约束：
 %s
-- dialogue：该镜会被 TTS 念出的旁白/对白原文（保持原文，不可省略）
+- dialogue：该镜会被 TTS 念出的旁白/对白原文（逐字照搬，不可省略、不可改写）
 - dialogue 禁止直接抄写 description 的画面描写；description 写给眼睛看，dialogue 写给配音念
-- 原文若已有 [字幕:…]，dialogue 必须优先原样保留 [字幕:] 内文本，不要改写成“某某正在做什么”的旁观镜头句
+- 原文若已有 [字幕:…]，dialogue 必须原样保留 [字幕:] 内文本，不要改写成“某某正在做什么”的旁观镜头句
 
-**对白提取规则：**
-[字幕:…]、引号内容、冒号引用句、解说性旁白段落必须进入 dialogue。
+**对白提取规则（内容完整性强制）：**
+[字幕:…]、引号内容、冒号引用句、解说性旁白段落必须逐字进入 dialogue，一句都不能漏。
 禁止把第三人称画面动作句（如“刘师傅正低头揉面”）当作旁白，除非它本来就出现在原文 [字幕:] 或讲解句中。
-无旁白纯转场镜尽量少用；若确需保留，duration 应较短。
+无旁白纯转场镜尽量少用；若确需保留，duration 应较短，且不得用它替代任何一句原文旁白。
+自检：返回前请确认原文里每一句可念内容都已出现在某个分镜的 dialogue 中，且为逐字原文。
 
 请严格按以下 JSON 格式返回：
 {"scenes": [
-  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "narrating", "emotion": "calm"}], "items": [], "mood": "calm", "location": "地点", "duration": %d, "dialogue": "旁白原文"}
+  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "narrating", "emotion": "calm"}], "items": [], "mood": "calm", "location": "地点", "location_zone": "interior", "duration": %d, "dialogue": "旁白原文"}
 ]}
 
 第 %d 集内容：
@@ -185,7 +190,8 @@ func scriptDramaSceneSplitPrompt(p SceneSplitParams) string {
 - 新场景 / 新时空 → 新分镜；同场景内按动作链和对白回合递进拆分
 - description 用中文写可见画面（40-120字）：人物动作、表情、环境、光线氛围；景别只填 shot_type，不要写机位/方位
 - shot_type：close-up / medium / full / wide / overhead / low-angle / tracking / establishing
-- characters / character_states / items / mood / location 按需填写
+- characters / character_states / items / mood / location / location_zone 按需填写
+- location_zone：exterior / interior / entrance / aerial；根据画面空间判断
 - duration 整数秒，按对白长短与动作复杂度估算：无对白反应镜 2-4 秒，短对白 4-6 秒，标准对白 5-8 秒，长对白/情绪高潮 8-12 秒：
 %s
 - 构图/画面约束：
@@ -197,7 +203,7 @@ func scriptDramaSceneSplitPrompt(p SceneSplitParams) string {
 
 请严格按以下 JSON 格式返回：
 {"scenes": [
-  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "stands by window", "emotion": "tense"}], "items": [], "mood": "tense", "location": "室内", "duration": %d, "dialogue": "对白"}
+  {"description": "中文画面描述", "shot_type": "medium", "characters": ["角色1"], "character_states": [{"name": "角色1", "action": "stands by window", "emotion": "tense"}], "items": [], "mood": "tense", "location": "室内", "location_zone": "interior", "duration": %d, "dialogue": "对白"}
 ]}
 
 第 %d 集内容：
@@ -214,12 +220,14 @@ func adSceneSplitSystemPrompt() string {
 
 func commentarySceneSplitSystemPrompt() string {
 	return `你是解说漫分镜拆分助手，只输出JSON，不要输出其他内容。
-当前为旁白驱动漫画风讲解模式：
-- 按旁白信息点和剧情节点拆分，宁多勿少，不要把多段旁白硬合并
-- dialogue 必须承载会被 TTS 念出的旁白原文；优先逐字保留原文中的 [字幕:…] 内文本
+当前为旁白驱动漫画风讲解模式，最高目标是【内容完整、逐字照搬】：
+- dialogue 必须逐字照搬原文中会被念出的旁白/解说句，禁止改写、概括、缩写、同义替换或增删
+- 原文里每一句可念内容都必须完整覆盖到某个分镜的 dialogue，按原文顺序铺满，一句都不能漏
+- 拆分只是切分原文位置，不是重写；所有分镜 dialogue 顺序拼接后应≈原文可念内容，文字总量基本守恒
+- 内容完整性优先于镜头数量与节奏：宁可多拆、宁可调大 duration，也不要删句或合并改写
 - description 只写画面，禁止写机位/方位套话，禁止把 description 复制进 dialogue
-- 没有可念旁白的镜头应尽量少生成；不要为了凑镜数创造第三人称画面解说
-- duration 要随旁白长短起伏，形成节奏变化`
+- 不要为了凑镜数创造原文没有的第三人称画面解说
+- 返回前自检：原文每句可念内容都已逐字出现在分镜 dialogue 中`
 }
 
 func scriptDramaSceneSplitSystemPrompt() string {

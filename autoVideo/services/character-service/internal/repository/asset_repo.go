@@ -74,6 +74,17 @@ func (r *AssetRepo) FindRecoverablePending(limit int) ([]model.Asset, error) {
 	return assets, err
 }
 
+// FindExtractionSentinels returns extraction progress/failure sentinel records for a project.
+func (r *AssetRepo) FindExtractionSentinels(projectID uint64, episodeID *uint64) ([]model.Asset, error) {
+	var assets []model.Asset
+	query := r.db.Where("project_id = ? AND name = ?", projectID, "__extracting__")
+	if episodeID != nil {
+		query = query.Where("episode_ids @> ARRAY[?]::integer[]", int64(*episodeID))
+	}
+	err := query.Order("id desc").Find(&assets).Error
+	return assets, err
+}
+
 // FindActiveExtractionSentinels returns in-flight extraction sentinels that can be resumed.
 func (r *AssetRepo) FindActiveExtractionSentinels(limit int) ([]model.Asset, error) {
 	var assets []model.Asset
@@ -109,6 +120,8 @@ func (r *AssetRepo) FindByProjectIDPaginated(projectID uint64, assetType, status
 		query = applyAssetKeywordFilter(query, keyword)
 	}
 	query = applyEpisodeAssetFilter(query, episodeID)
+	// Hide in-progress/failed extraction sentinels from normal asset listings.
+	query = query.Where("NOT (name = ?)", "__extracting__")
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

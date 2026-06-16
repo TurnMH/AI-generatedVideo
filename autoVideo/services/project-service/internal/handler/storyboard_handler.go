@@ -241,6 +241,26 @@ func (h *StoryboardHandler) UpdateStoryboard(c *gin.Context) {
 	response.OK(c, sb)
 }
 
+// ImageGenerationPreview GET /api/v1/projects/:id/storyboards/:sid/image-generation-preview
+func (h *StoryboardHandler) ImageGenerationPreview(c *gin.Context) {
+	sid, err := parseUint64Param(c, "sid")
+	if err != nil {
+		response.BadRequest(c, "invalid storyboard id")
+		return
+	}
+	modelName := strings.TrimSpace(c.Query("model_name"))
+	params, err := h.svc.PreviewImageGeneration(c.Request.Context(), sid, modelName)
+	if err != nil {
+		if isStoryboardNotFound(err) {
+			response.NotFound(c, "storyboard not found")
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.OK(c, params)
+}
+
 // GenerateStoryboard —— 处理触发单个分镜图片生成的请求
 // GenerateStoryboard POST /api/v1/projects/:id/storyboards/:sid/generate
 func (h *StoryboardHandler) GenerateStoryboard(c *gin.Context) {
@@ -260,11 +280,12 @@ func (h *StoryboardHandler) GenerateStoryboard(c *gin.Context) {
 	}
 
 	var req struct {
-		ModelName string `json:"model_name"`
+		ModelName  string   `json:"model_name"`
+		ModelNames []string `json:"model_names"`
 	}
 	_ = c.ShouldBindJSON(&req)
 
-	sb, err := h.svc.Generate(sid, req.ModelName)
+	sb, err := h.svc.GenerateWithModels(sid, req.ModelName, req.ModelNames)
 	if err != nil {
 		if isStoryboardNotFound(err) {
 			response.NotFound(c, "storyboard not found")

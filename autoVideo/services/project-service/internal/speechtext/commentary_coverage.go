@@ -28,35 +28,26 @@ func extractOrderedSpeechUnits(source string) []string {
 		if paragraph == "" || isCommentaryStructuralHeading(paragraph) {
 			continue
 		}
-		for _, m := range subtitleExtractPattern.FindAllStringSubmatch(paragraph, -1) {
-			if len(m) > 1 {
-				if v := strings.TrimSpace(m[1]); v != "" {
-					units = append(units, v)
-				}
-			}
-		}
+		// 显式 [字幕:…] 标注优先，按出现顺序逐条取出。
 		if CountSubtitleTags(paragraph) > 0 {
-			continue
-		}
-		for _, m := range quotedSpeechPattern.FindAllStringSubmatch(paragraph, -1) {
-			if len(m) > 1 {
-				if v := strings.TrimSpace(m[1]); v != "" {
-					units = append(units, v)
+			for _, m := range subtitleExtractPattern.FindAllStringSubmatch(paragraph, -1) {
+				if len(m) > 1 {
+					if v := strings.TrimSpace(m[1]); v != "" {
+						units = append(units, v)
+					}
 				}
 			}
-		}
-		plain := subtitleExtractPattern.ReplaceAllString(paragraph, " ")
-		plain = quotedSpeechPattern.ReplaceAllString(plain, " ")
-		plain = strings.TrimSpace(plain)
-		if plain == "" {
 			continue
 		}
-		for _, unit := range splitSpeechUnits(plain) {
+		// 解说漫：整段都是要被念出的旁白。按句子在原文中的先后顺序逐字保留，
+		// 不再单独抽取引号内容（避免把引号提到前导句之前导致前后逻辑错乱），
+		// 也不再为了"精简"丢句——只过滤明显的 AI 分镜描述行，不用 screenplay 动作行规则误杀旁白。
+		for _, unit := range splitSpeechUnitsPreservingPunctuation(paragraph) {
 			unit = strings.TrimSpace(unit)
-			if unit == "" || LooksLikeSceneDescription(unit) || LooksLikeStoryboardVisualDescription(unit) {
+			if unit == "" || isCommentaryStructuralHeading(unit) || looksLikeCommentaryNonSpeechLine(unit) {
 				continue
 			}
-			if utf8.RuneCountInString(unit) >= 10 || quotedSpeechPattern.MatchString(unit) {
+			if utf8.RuneCountInString(unit) >= 4 || quotedSpeechPattern.MatchString(unit) {
 				units = append(units, unit)
 			}
 		}
@@ -75,12 +66,28 @@ func isCommentaryStructuralHeading(text string) bool {
 	if len(text) <= 24 && strings.Contains(text, "导语") {
 		return true
 	}
+	// 章节序号行（如 01 / 02 / 第3章）不是可念旁白。
+	runes := []rune(text)
+	if len(runes) <= 8 {
+		allNumericOrChapter := true
+		for _, r := range runes {
+			switch {
+			case r >= '0' && r <= '9':
+			case r == '第' || r == '章' || r == '节' || r == '集' || r == '幕' || r == '场':
+			default:
+				allNumericOrChapter = false
+			}
+		}
+		if allNumericOrChapter && len(runes) > 0 {
+			return true
+		}
+	}
 	return false
 }
 
 // SplitSpeechUnitsForPacking exposes sentence-level splitting for clip packing.
 func SplitSpeechUnitsForPacking(text string) []string {
-	return splitSpeechUnits(text)
+	return splitSpeechUnitsPreservingPunctuation(text)
 }
 
 // MergeAdjacentSpeechUnits combines consecutive short units before clip packing.
@@ -168,7 +175,7 @@ func PackSpeechUnitsToMaxRunes(units []string, maxRunes int) []string {
 		unitRunes := utf8.RuneCountInString(unit)
 		if unitRunes > maxRunes {
 			flush(true)
-			subUnits := splitSpeechUnits(unit)
+			subUnits := splitSpeechUnitsPreservingPunctuation(unit)
 			if len(subUnits) <= 1 {
 				packed = append(packed, splitTextByRunes(unit, maxRunes)...)
 			} else {
@@ -204,13 +211,10 @@ func filterSpeakableUnits(units []string) []string {
 	seen := make(map[string]struct{}, len(units))
 	for _, unit := range units {
 		unit = strings.TrimSpace(unit)
-		if unit == "" {
+		if unit == "" || looksLikeCommentaryNonSpeechLine(unit) {
 			continue
 		}
-		if LooksLikeSceneDescription(unit) || LooksLikeStoryboardVisualDescription(unit) {
-			continue
-		}
-		if utf8.RuneCountInString(unit) < 6 && !quotedSpeechPattern.MatchString(unit) {
+		if utf8.RuneCountInString(unit) < 4 && !quotedSpeechPattern.MatchString(unit) {
 			continue
 		}
 		key := normalizeSpeechKey(unit)
@@ -226,6 +230,22 @@ func filterSpeakableUnits(units []string) []string {
 	return out
 }
 
+// looksLikeCommentaryNonSpeechLine filters sluglines and AI storyboard staging text,
+// but keeps third-person narration sentences that screenplay heuristics would drop.
+func looksLikeCommentaryNonSpeechLine(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	if isCommentaryStructuralHeading(text) {
+		return true
+	}
+	if sceneSluglinePattern.MatchString(text) {
+		return true
+	}
+	return LooksLikeStoryboardVisualDescription(text)
+}
+
 func joinSpeechUnits(units []string) string {
 	if len(units) == 0 {
 		return ""
@@ -234,26 +254,35 @@ func joinSpeechUnits(units []string) string {
 		return strings.TrimSpace(units[0])
 	}
 	var b strings.Builder
-	for i, unit := range units {
+	for _, unit := range units {
 		unit = strings.TrimSpace(unit)
 		if unit == "" {
 			continue
 		}
 		if b.Len() > 0 {
-			if strings.HasSuffix(strings.TrimSpace(b.String()), "。") ||
-				strings.HasSuffix(strings.TrimSpace(b.String()), "！") ||
-				strings.HasSuffix(strings.TrimSpace(b.String()), "？") {
-				b.WriteString("")
+			lastStr := strings.TrimSpace(b.String())
+			// If the previous part already ends with any punctuation, do not add a comma.
+			if strings.HasSuffix(lastStr, "。") ||
+				strings.HasSuffix(lastStr, "！") ||
+				strings.HasSuffix(lastStr, "？") ||
+				strings.HasSuffix(lastStr, "，") ||
+				strings.HasSuffix(lastStr, "；") ||
+				strings.HasSuffix(lastStr, "、") ||
+				strings.HasSuffix(lastStr, "”") ||
+				strings.HasSuffix(lastStr, "」") ||
+				strings.HasSuffix(lastStr, "』") ||
+				strings.HasSuffix(lastStr, "…") ||
+				strings.HasSuffix(lastStr, "—") ||
+				strings.HasSuffix(lastStr, "\"") ||
+				strings.HasSuffix(lastStr, "'") ||
+				strings.HasSuffix(lastStr, ")") ||
+				strings.HasSuffix(lastStr, "）") {
+				// No separator needed
 			} else if !strings.HasSuffix(unit, "。") && !strings.HasSuffix(unit, "！") && !strings.HasSuffix(unit, "？") {
 				b.WriteString("，")
 			}
 		}
 		b.WriteString(unit)
-		if i == len(units)-1 && !strings.HasSuffix(unit, "。") && !strings.HasSuffix(unit, "！") && !strings.HasSuffix(unit, "？") {
-			if utf8.RuneCountInString(unit) >= 8 {
-				b.WriteString("。")
-			}
-		}
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -276,17 +305,25 @@ func splitTextByRunes(text string, maxRunes int) []string {
 		window := runes[start:end]
 		if end < len(runes) {
 			if idx := lastBreakIndex(window); idx > maxRunes/3 {
-				window = window[:idx]
-				end = start + idx
+				splitIdx := idx
+				switch window[idx] {
+				case '，', ',', '；', ';', '、', '。', '！', '？', '!', '?', '”', '」', '』', '：', ':', '"', '\'', ')', '）':
+					splitIdx = idx + 1
+				case '—', '…':
+					splitIdx = idx + 1
+					if idx+1 < len(window) && window[idx+1] == window[idx] {
+						splitIdx = idx + 2
+					}
+				}
+				if splitIdx <= len(window) {
+					window = window[:splitIdx]
+					end = start + splitIdx
+				}
 			}
 		}
 		chunk := strings.TrimSpace(string(window))
 		if chunk != "" {
-			if end >= len(runes) && !strings.ContainsAny(chunk, "。！？!?") {
-				out = append(out, chunk)
-			} else {
-				out = append(out, truncateAtSentenceBoundary(chunk))
-			}
+			out = append(out, chunk)
 		}
 		if end >= len(runes) {
 			break
@@ -299,7 +336,7 @@ func splitTextByRunes(text string, maxRunes int) []string {
 func lastBreakIndex(runes []rune) int {
 	for i := len(runes) - 1; i >= 0; i-- {
 		switch runes[i] {
-		case '，', ',', '；', ';', '、', ' ':
+		case '，', ',', '；', ';', '、', ' ', '。', '！', '？', '!', '?', '—', '…', '”', '」', '』', '：', ':', ')', '）':
 			return i
 		}
 	}

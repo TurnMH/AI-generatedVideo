@@ -1,6 +1,6 @@
 'use client'
 
-import { Bot, Loader2, Mic, Pause, Play, RotateCcw, Sparkles } from 'lucide-react'
+import { Bot, Loader2, Mic, Pause, Play, RotateCcw, Sparkles, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { EpisodeAssetStats, EpisodeStoryboardStats } from '@/lib/projects/episode-workspace-stats'
 import type { WorkflowStep, WorkflowStepKey } from '@/lib/projects/episode-workspace-workflow-steps'
@@ -29,6 +29,8 @@ export function EpisodeStageActionPanel({
   onPauseStoryboards,
   onResumeStoryboards,
   onRegenerateStoryboards,
+  onExtractStoryboards,
+  isExtractingStoryboards,
 }: {
   activeTab: WorkflowStepKey
   workflowSteps: WorkflowStep[]
@@ -52,6 +54,8 @@ export function EpisodeStageActionPanel({
   onPauseStoryboards: () => void
   onResumeStoryboards: () => void
   onRegenerateStoryboards: () => void
+  onExtractStoryboards?: () => void
+  isExtractingStoryboards?: boolean
 }) {
   const stageHint = activeTab === 'assets'
     ? '继续补齐本集角色、场景和道具资源。'
@@ -126,6 +130,26 @@ export function EpisodeStageActionPanel({
             <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
             重新生成本集
           </Button>
+          {onExtractStoryboards && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (window.confirm('重新拆分镜会删除当前集已有的所有分镜和生成图，并重新拆分结构。确认重新拆分吗？')) {
+                  onExtractStoryboards()
+                }
+              }}
+              disabled={isExtractingStoryboards}
+              className={`w-full ${sidebarTheme.secondaryButton}`}
+            >
+              {isExtractingStoryboards ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              重新拆分镜
+            </Button>
+          )}
         </div>
       )}
 

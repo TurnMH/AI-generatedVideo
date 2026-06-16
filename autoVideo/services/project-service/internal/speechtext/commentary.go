@@ -39,16 +39,16 @@ func FinalizeCommentaryDialogueWithLimit(dialogue string, maxRunes int) string {
 	if dialogue == "" {
 		return ""
 	}
-	extracted := ExtractNarrationForSpeech(dialogue)
+	extracted := ExtractNarrationForSpeechEx(dialogue, true)
 	if extracted == "" {
-		extracted = strings.TrimSpace(SanitizeForSpeech(dialogue))
+		extracted = strings.TrimSpace(SanitizeForSpeechEx(dialogue, true))
 	}
 	if extracted == "" ||
 		LooksLikeSceneDescription(extracted) ||
 		LooksLikeStoryboardVisualDescription(extracted) {
 		return ""
 	}
-	return CompactClipDialogue(extracted, maxRunes)
+	return CompactCommentaryDialogue(extracted, maxRunes)
 }
 
 func dialogueNeedsSourceRepair(dialogue string) bool {

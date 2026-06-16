@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import useSWR from 'swr'
 import { Download, Eye, FileText, Loader2, Mic, RefreshCw, Sparkles } from 'lucide-react'
 import { dubbingAPI, storyboardAPI, type DubbingTask } from '@/lib/api'
+import { StoryboardAvPreview } from '@/components/projects/detail/StoryboardAvPreview'
 import type { Project, Storyboard } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -339,6 +340,9 @@ export function StoryboardDubbingPanel({
                   label="配音"
                   color="blue"
                   task={dubTask}
+                  projectId={projectId}
+                  episodeId={episodeId}
+                  storyboardUpdatedAt={sb.updated_at}
                   expanded={expandedStoryboardId === sb.id}
                   onToggleExpand={() => setExpandedStoryboardId((prev) => (prev === sb.id ? null : sb.id))}
                   onRetry={dubTask ? () => handleRetry(dubTask, sb, '配音') : undefined}
@@ -387,6 +391,9 @@ function StoryboardTaskStatus({
   label,
   color,
   task,
+  projectId,
+  episodeId,
+  storyboardUpdatedAt,
   expanded,
   onToggleExpand,
   onRetry,
@@ -397,6 +404,9 @@ function StoryboardTaskStatus({
   label: string
   color: 'blue' | 'green'
   task?: DubbingTask
+  projectId?: number
+  episodeId?: number
+  storyboardUpdatedAt?: string
   expanded: boolean
   onToggleExpand: () => void
   onRetry?: () => void
@@ -464,11 +474,21 @@ function StoryboardTaskStatus({
       )}
 
       {expanded && task?.audio_url && (
-        <div className="mt-2">
+        <div className="mt-2 space-y-2">
           <audio controls className="h-8 w-full" src={task.audio_url} />
-          <a href={task.audio_url} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline">
+          <a href={task.audio_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline">
             <Download className="h-3 w-3" /> 下载
           </a>
+          {task.storyboard_id ? (
+            <StoryboardAvPreview
+              projectId={projectId ?? task.project_id}
+              storyboardId={task.storyboard_id}
+              episodeId={episodeId ?? task.episode_id}
+              dubbingTask={task}
+              storyboardUpdatedAt={storyboardUpdatedAt}
+              compact
+            />
+          ) : null}
         </div>
       )}
 

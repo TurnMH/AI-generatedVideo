@@ -161,9 +161,10 @@ func ResolveImageSizePolicy(modelName string) ImageSizePolicy {
 
 func PreferredRatioIntent(taskType string) RatioIntent {
 	switch NormalizeImageTaskType(taskType, "") {
-	case "portrait", "character-view", "character-sheet", "poster":
+	case "portrait", "character-view", "poster":
 		return RatioPortrait
-	case "storyboard", "scene-concept":
+	// character-sheet 为单图三视图（正面/侧面/背面横向并排），需要横向画幅。
+	case "storyboard", "scene-concept", "character-sheet":
 		return RatioLandscape
 	default:
 		return RatioSquare
@@ -174,7 +175,7 @@ func TaskTypeRatioDefaults() map[string]RatioIntent {
 	return map[string]RatioIntent{
 		"portrait":        RatioPortrait,
 		"character-view":  RatioPortrait,
-		"character-sheet": RatioPortrait,
+		"character-sheet": RatioLandscape,
 		"poster":          RatioPortrait,
 		"storyboard":      RatioLandscape,
 		"scene-concept":   RatioLandscape,

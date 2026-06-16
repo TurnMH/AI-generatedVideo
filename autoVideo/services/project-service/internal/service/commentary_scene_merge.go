@@ -215,27 +215,65 @@ func commentaryInsertOrder(source string, base []llmScene, sourcePos int) float6
 }
 
 func excerptCommentaryVisualHint(source, unit string) string {
-	idx := strings.Index(source, unit)
+	runes := []rune(source)
+	unitRunes := []rune(unit)
+	if len(unitRunes) == 0 {
+		return ""
+	}
+
+	// Find the rune index of unit in source
+	idx := -1
+	for i := 0; i <= len(runes)-len(unitRunes); i++ {
+		match := true
+		for j := 0; j < len(unitRunes); j++ {
+			if runes[i+j] != unitRunes[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			idx = i
+			break
+		}
+	}
+
 	if idx < 0 {
-		runes := []rune(unit)
-		for n := minInt(len(runes), 12); n >= 4; n-- {
-			if idx = strings.Index(source, string(runes[:n])); idx >= 0 {
+		// Fallback: search for a prefix of unit
+		for n := minInt(len(unitRunes), 12); n >= 4; n-- {
+			prefix := unitRunes[:n]
+			for i := 0; i <= len(runes)-len(prefix); i++ {
+				match := true
+				for j := 0; j < len(prefix); j++ {
+					if runes[i+j] != prefix[j] {
+						match = false
+						break
+					}
+				}
+				if match {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 {
 				break
 			}
 		}
 	}
+
 	if idx < 0 {
 		return ""
 	}
+
 	start := idx - 100
 	if start < 0 {
 		start = 0
 	}
-	end := idx + len(unit) + 100
-	if end > len(source) {
-		end = len(source)
+	end := idx + len(unitRunes) + 100
+	if end > len(runes) {
+		end = len(runes)
 	}
-	snippet := strings.TrimSpace(source[start:end])
+
+	snippet := strings.TrimSpace(string(runes[start:end]))
 	if snippet == "" {
 		return ""
 	}

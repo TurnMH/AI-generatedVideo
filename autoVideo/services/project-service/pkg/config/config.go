@@ -261,7 +261,7 @@ func Load(logger *zap.Logger) (*Config, error) {
 	viper.SetDefault("gateway.self_addr", "")
 	viper.SetDefault("llm.base_url", "https://api.easyart.cc/v1")
 	viper.SetDefault("llm.api_key", "")
-	viper.SetDefault("llm.model", "gpt-5.4-mini")
+	viper.SetDefault("llm.model", "gpt-5.4")
 	viper.SetDefault("llm.timeout", 120)
 	// Fallback LLM provider — e.g. BigModel (GLM-5) or Baidu Qianfan
 	viper.SetDefault("llm.fallback_base_url", "")

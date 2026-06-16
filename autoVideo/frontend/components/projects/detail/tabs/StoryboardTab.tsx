@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { storyboardAPI } from '@/lib/api'
 import type { Project, Storyboard } from '@/types'
 import { useToast } from '@/components/ui/toast'
@@ -123,39 +123,22 @@ export function StoryboardTab({
   })
 
   const [selectedSb, setSelectedSb] = useState<Storyboard | null>(null)
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false)
   const [versionIdx, setVersionIdx] = useState(0)
-  const [chatInput, setChatInput] = useState('')
-  const [chatLoading, setChatLoading] = useState(false)
   const [sbDescLang, setSbDescLang] = useState<'zh' | 'en'>('zh')
-  const chatListRef = useRef<HTMLDivElement>(null)
-  const chatBottomRef = useRef<HTMLDivElement>(null)
-  const shouldStickChatToBottomRef = useRef(true)
 
   const selectedStoryboardVersion = selectedSb?.versions?.[versionIdx]
   const selectedStoryboardPreviewUrl = selectedStoryboardVersion?.image_url || selectedSb?.image_url || ''
-  const selectedStoryboardMessageCount = selectedSb?.agent_history?.length ?? 0
 
   React.useEffect(() => {
     if (!selectedSb) return
+    // 用户正在编辑提示词时，不要用轮询拉取的新对象替换 selectedSb，
+    // 否则受控输入框（尤其中文输入法）会被周期性重渲染打断，表现为"编辑不了"。
+    if (isEditingPrompt) return
     const updated = storyboards.find((sb) => sb.id === selectedSb.id)
     if (updated) setSelectedSb(updated)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storyboards])
-
-  React.useEffect(() => {
-    shouldStickChatToBottomRef.current = true
-  }, [selectedSb?.id])
-
-  React.useEffect(() => {
-    if (!selectedSb || !shouldStickChatToBottomRef.current) return
-    chatBottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [
-    selectedSb?.id,
-    selectedSb?.status,
-    selectedSb?.agent_history?.length,
-    selectedStoryboardPreviewUrl,
-    chatLoading,
-  ])
+  }, [storyboards, isEditingPrompt])
 
   React.useEffect(() => {
     if (!selectedSb) return
@@ -169,50 +152,29 @@ export function StoryboardTab({
     }
   }, [selectedSb, versionIdx])
 
-  const handleChatListScroll = () => {
-    const el = chatListRef.current
-    if (!el) return
-    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    shouldStickChatToBottomRef.current = distanceToBottom <= 96
-  }
-
-  const handleChat = async () => {
-    if (!selectedSb || !chatInput.trim()) return
-    const message = chatInput.trim()
-    const previousStoryboard = selectedSb
-    const optimisticMessage = {
-      role: 'user' as const,
-      content: message,
-      timestamp: new Date().toISOString(),
-    }
-    setSelectedSb({
-      ...selectedSb,
-      agent_history: [...(selectedSb.agent_history ?? []), optimisticMessage],
-    })
-    setChatInput('')
-    setChatLoading(true)
-    try {
-      const res = await storyboardAPI.chat(projectId, selectedSb.id, message) as unknown as { data: Storyboard }
-      if (res.data) setSelectedSb(res.data)
-      mutateSb()
-    } catch {
-      setSelectedSb(previousStoryboard)
-      setChatInput(message)
-      toast({ title: '发送失败', variant: 'destructive' })
-    } finally {
-      setChatLoading(false)
-    }
-  }
-
-  const handleCameraMovementChange = async (val: string) => {
+  const handleSavePrompt = async (
+    updates: Partial<Pick<Storyboard, 'scene_description' | 'prompt_used' | 'prompt_locked' | 'location_zone' | 'spatial_anchor' | 'subject_positions' | 'transition_note'>>,
+    options?: { silent?: boolean },
+  ) => {
     if (!selectedSb) return
     const prev = selectedSb
-    setSelectedSb({ ...selectedSb, camera_movement: val })
+    setSelectedSb({ ...selectedSb, ...updates })
     try {
-      await storyboardAPI.update(projectId, selectedSb.id, { camera_movement: val } as Partial<Storyboard>)
+      await storyboardAPI.update(projectId, selectedSb.id, updates as Partial<Storyboard>)
       mutateSb()
+      if (!options?.silent) {
+        toast({
+          title: updates.prompt_locked ? '最终提示词已保存' : '提示词已保存',
+          description: '在下方选择模型即可按新提示词重新生成。',
+          variant: 'success',
+        })
+      }
     } catch {
       setSelectedSb(prev)
+      if (!options?.silent) {
+        toast({ title: '保存失败', variant: 'destructive' })
+      }
+      throw new Error('save prompt failed')
     }
   }
 
@@ -360,37 +322,17 @@ export function StoryboardTab({
           storyboardGenerateLabel={labels.storyboardGenerateLabel}
           selectedStoryboardVersion={selectedStoryboardVersion}
           selectedStoryboardPreviewUrl={selectedStoryboardPreviewUrl}
-          selectedStoryboardMessageCount={selectedStoryboardMessageCount}
           versionIdx={versionIdx}
           onVersionIdxChange={setVersionIdx}
           sbDescLang={sbDescLang}
           onSbDescLangChange={setSbDescLang}
           storyboardAssets={storyboardAssets}
-          onCameraMovementChange={handleCameraMovementChange}
-          sbVoiceScope={actions.sbVoiceScope}
-          onSbVoiceScopeChange={actions.setSbVoiceScope}
-          sbVoiceModel={actions.sbVoiceModel}
-          onSbVoiceModelChange={actions.setSbVoiceModel}
-          sbVoiceRate={actions.sbVoiceRate}
-          onSbVoiceRateChange={actions.setSbVoiceRate}
-          sbVoicePitch={actions.sbVoicePitch}
-          onSbVoicePitchChange={actions.setSbVoicePitch}
-          sbVoiceVolume={actions.sbVoiceVolume}
-          onSbVoiceVolumeChange={actions.setSbVoiceVolume}
-          sbVoiceOptions={actions.SB_VOICE_OPTIONS}
-          generatingSbVoice={actions.generatingSbVoice}
-          onGenerateVoice={() => actions.handleSbGenerateVoice(selectedSb)}
-          storyboardTaskMap={storyboardTaskMap}
+          onSavePrompt={handleSavePrompt}
+          onEditingPromptChange={setIsEditingPrompt}
           modelOptions={SB_MODEL_OPTIONS}
           imageModelAvailability={actions.imageModelAvailability}
-          onGenerateOne={actions.handleGenerateOne}
-          chatListRef={chatListRef}
-          onChatListScroll={handleChatListScroll}
-          chatBottomRef={chatBottomRef}
-          chatInput={chatInput}
-          onChatInputChange={setChatInput}
-          chatLoading={chatLoading}
-          onChat={handleChat}
+          defaultImageModelLabel={storyboardDefaultImageModelLabel}
+          onGenerate={actions.handleGenerateModels}
         />
       )}
     </div>

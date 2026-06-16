@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/autovideo/character-service/internal/stylepreset"
 )
@@ -80,6 +81,61 @@ func panelFramingCN(panel CharacterPanel) string {
 	return ""
 }
 
+// multiViewLayoutPhrases —— 描述「三视图/多视图排版」的短语。
+// 短描述若残留这些词，部分模型会把「多个视图」误解成「多个人物」。
+var multiViewLayoutPhrases = []string{
+	"三视图", "四视图", "多视图", "设定图", "角色设定图", "turnaround sheet", "reference sheet",
+	"character sheet", "character design sheet", "multi-view", "multiple views",
+	"side by side", "arranged side by side", "left third", "right two thirds", "right two-thirds",
+	"左侧三分之一", "右侧三分之二", "并排", "并排排列", "1x4", "2x2", "grid layout",
+	"four panels", "four views", "three views", "head and shoulder portrait on the left",
+}
+
+// sanitizeCharacterDescriptionForPanel removes multi-view layout language from a character
+// description so each panel prompt describes ONE person in ONE pose only.
+func sanitizeCharacterDescriptionForPanel(description string) string {
+	text := strings.TrimSpace(description)
+	if text == "" {
+		return text
+	}
+	lower := strings.ToLower(text)
+	for _, phrase := range multiViewLayoutPhrases {
+		if strings.Contains(lower, strings.ToLower(phrase)) {
+			text = removePhraseCaseInsensitive(text, phrase)
+			lower = strings.ToLower(text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+}
+
+func removePhraseCaseInsensitive(text, phrase string) string {
+	lowerText := strings.ToLower(text)
+	lowerPhrase := strings.ToLower(strings.TrimSpace(phrase))
+	for {
+		idx := strings.Index(lowerText, lowerPhrase)
+		if idx < 0 {
+			break
+		}
+		text = strings.TrimSpace(text[:idx] + text[idx+len(phrase):])
+		lowerText = strings.ToLower(text)
+	}
+	return text
+}
+
+func isShortCharacterDescription(description string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(description)) < 28
+}
+
+func panelBodyProportionTags(panel CharacterPanel, isLiveAction bool) []string {
+	if isLiveAction || panel == CharacterPanelCloseup {
+		return nil
+	}
+	return []string{
+		"9-head body proportion", "slender elegant figure", "elongated legs", "head-to-body ratio 1:9",
+		"九头身比例", "修长身材", "超模般头身比",
+	}
+}
+
 // composeCharacterPanelPrompt 为单个分栏组装完整提示词。
 // 与原 composeCharacterPrompt 的主要区别：
 //   - 不再出现 "four panels / 1x4 grid" 类布局术语（由后端拼接完成）。
@@ -87,8 +143,9 @@ func panelFramingCN(panel CharacterPanel) string {
 //   - 分 live-action / anime 两套；live-action 强调真人质感，anime 强调线条干净。
 func composeCharacterPanelPrompt(name, description, promptUsed string, isLiveAction bool, panel CharacterPanel) string {
 	trimmedName := strings.TrimSpace(name)
-	trimmedDescription := strings.TrimSpace(description)
-	trimmedPrompt := strings.TrimSpace(promptUsed)
+	trimmedDescription := sanitizeCharacterDescriptionForPanel(description)
+	trimmedPrompt := sanitizeCharacterDescriptionForPanel(promptUsed)
+	shortDesc := isShortCharacterDescription(trimmedDescription)
 
 	framingEN := panelFramingEN(panel)
 	framingCN := panelFramingCN(panel)
@@ -98,14 +155,22 @@ func composeCharacterPanelPrompt(name, description, promptUsed string, isLiveAct
 		identity = append(identity, trimmedName)
 	}
 	identity = append(identity,
+		"exactly one person in this image",
 		"the same single character across all reference panels",
 		"(identical subject, identical face shape, identical hairstyle, identical skin tone, identical costume, identical proportions:1.4)",
 		"same garment layers, same accessories, same footwear, same silhouette in every panel",
 		"production-ready character turnaround reference",
 	)
+	if shortDesc && trimmedName != "" {
+		identity = append(identity,
+			fmt.Sprintf("this image depicts only %s, no other people", trimmedName),
+			"画面中只有这一个人物，不得出现第二个人",
+		)
+	}
 
 	tags := []string{}
 	tags = append(tags, identity...)
+	tags = append(tags, panelBodyProportionTags(panel, isLiveAction)...)
 
 	if isLiveAction {
 		tags = append(tags,
@@ -166,13 +231,17 @@ func composeCharacterPanelPrompt(name, description, promptUsed string, isLiveAct
 	// Tag-list format is ignored by instruction-tuned models (GPT-Image, Gemini);
 	// placing a clear sentence BEFORE the tags ensures the background requirement
 	// is respected regardless of the model family.
-	preamble := "STRICT BACKGROUND REQUIREMENT: The background MUST be a plain solid white (#FFFFFF) seamless studio backdrop. " +
+	preamble := "SINGLE SUBJECT ONLY: This image must contain exactly ONE person — the same character. " +
+		"Do NOT draw multiple people, duplicate figures, group shots, turnaround sheets, side-by-side views, or multi-panel layouts in one frame. " +
+		"NO butterflies, NO insects, NO animals — lighting must stay as studio light only, never as a butterfly motif. " +
+		"单一主体要求：画面中只能有同一个人物，禁止多人物、禁止拼贴多视图、禁止把正面/侧面/背面画在同一张图里；禁止出现蝴蝶、昆虫或任何动物。 " +
+		"\nSTRICT BACKGROUND REQUIREMENT: The background MUST be a plain solid white (#FFFFFF) seamless studio backdrop. " +
 		"No color tints, no gradients, no shadows on the background surface, no textures, no props, no environmental scene, and no ground plane are allowed. " +
 		"The character must appear to be standing or posed directly in front of a clean white infinity background. " +
 		"背景严格要求：背景必须是纯白色（#FFFFFF）白色无缝棚拍背景。" +
 		"不允许出现任何颜色、渐变、背景阴影、纹理、道具、环境场景或地面。" +
 		"角色必须呈现为站在或摆姿势于纯白无限延伸背景前。"
-	return preamble + "\n" + strings.Join(tags, ", ")
+	return sanitizeImagePromptMisreadTerms(preamble + "\n" + strings.Join(tags, ", "))
 }
 
 // composeCharacterPanelPromptWithStyle 在 composeCharacterPanelPrompt 基础上
@@ -188,11 +257,12 @@ func composeCharacterPanelPromptWithStyle(name, description, promptUsed, stylePr
 // - 非 closeup 应避免特写裁切。
 func appendPanelSpecificNegatives(base string, panel CharacterPanel) string {
 	// All panels: white background is required — reject any non-white background.
-	extras := []string{
+	extras := append([]string{}, characterInsectNegativeTerms()...)
+	extras = append(extras,
 		"colorful background", "dark background", "black background", "grey background",
 		"gradient background", "textured background", "scene background",
 		"outdoor scene", "indoor scene", "room background", "background elements", "busy background",
-	}
+	)
 	switch panel {
 	case CharacterPanelCloseup:
 		// Close-up intentionally crops at the chest — don't penalise that.
@@ -205,7 +275,9 @@ func appendPanelSpecificNegatives(base string, panel CharacterPanel) string {
 		extras = append(extras,
 			"cropped body", "cropped legs", "feet out of frame", "missing feet",
 			"partial body", "bust crop", "head-only",
-			"multiple characters", "group shot", "two people",
+			"multiple characters", "group shot", "two people", "three people", "crowd",
+			"duplicate person", "clone", "twins", "side-by-side figures", "turnaround sheet in one frame",
+			"multi-view collage", "character sheet layout", "split screen", "panel layout",
 		)
 	}
 	if len(extras) == 0 {

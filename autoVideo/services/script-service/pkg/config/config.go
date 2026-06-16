@@ -92,7 +92,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("kafka.producer_topic", "script.analyze.result")
 	viper.SetDefault("kafka.consumer_topic", "script.analyze.request")
 	viper.SetDefault("image_service.base_url", "http://localhost:8005")
-	viper.SetDefault("image_service.default_model", "gpt-image-1.5")
+	viper.SetDefault("image_service.default_model", "gpt-image-2")
 	viper.SetDefault("character_service.url", "http://localhost:8004")
 	viper.SetDefault("auth_service.base_url", "http://localhost:8001")
 	viper.SetDefault("gateway.addr", "http://localhost:8000")

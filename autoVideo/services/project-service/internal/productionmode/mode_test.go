@@ -72,3 +72,31 @@ func TestBuildAutoSplitMeta_AdUsesHigherChars(t *testing.T) {
 		t.Fatalf("ad target chars should be larger: ad=%d drama=%d", adMeta.TargetCharsPerEpisode, dramaMeta.TargetCharsPerEpisode)
 	}
 }
+
+func TestResolveProfile_SkipFlags(t *testing.T) {
+	// Test style tags
+	projectWithTags := &model.Project{
+		StyleTags: pq.StringArray{"direct-split"},
+	}
+	profile := ResolveProfile(projectWithTags)
+	if !profile.SkipScriptOptimization || !profile.SkipPostProcessing {
+		t.Fatal("expected direct-split style tag to set SkipScriptOptimization and SkipPostProcessing")
+	}
+
+	// Test storyboard_config JSON
+	projectWithConfig := &model.Project{
+		StoryboardConfig: []byte(`{"direct_split": true}`),
+	}
+	profile2 := ResolveProfile(projectWithConfig)
+	if !profile2.SkipScriptOptimization || !profile2.SkipPostProcessing {
+		t.Fatal("expected direct_split config to set SkipScriptOptimization and SkipPostProcessing")
+	}
+
+	projectWithIndividualConfig := &model.Project{
+		StoryboardConfig: []byte(`{"skip_script_optimization": true, "skip_post_processing": false}`),
+	}
+	profile3 := ResolveProfile(projectWithIndividualConfig)
+	if !profile3.SkipScriptOptimization || profile3.SkipPostProcessing {
+		t.Fatal("expected individual config to set SkipScriptOptimization and not SkipPostProcessing")
+	}
+}

@@ -39,7 +39,7 @@ var speakerCueOnlyPattern = regexp.MustCompile(`^(?:旁白|主持人|主播|解�
 
 var speakerWithEmotionLine = regexp.MustCompile(`^(.+?)[（(][^)）]{0,24}[）)]\s*[:：]\s*(.+)$`)
 
-var nameOnlyLinePattern = regexp.MustCompile(`^[\p{Han}A-Za-z·]{1,8}[。！?？]?$`)
+var nameOnlyLinePattern = regexp.MustCompile(`^[\p{Han}A-Za-z·]{2,4}[。]?$`)
 
 var sceneSettingLinePattern = regexp.MustCompile(`^(?:[\p{Han}A-Za-z0-9·]{2,30}[，,]\s*)?(?:清晨|早晨|早上|上午|中午|午后|傍晚|黄昏|夜里|夜晚|夜间|深夜|凌晨|日间|日出|日落)[，,]`)
 
@@ -51,6 +51,11 @@ var timeTransitionLinePattern = regexp.MustCompile(`^(?:\d+年[前后]?|\d+个?�
 
 // SanitizeForSpeech strips production annotations and stage directions so only speakable dialogue remains.
 func SanitizeForSpeech(text string) string {
+	return SanitizeForSpeechEx(text, false)
+}
+
+// SanitizeForSpeechEx is the extended version of SanitizeForSpeech that supports skipping action/scene filters in commentary mode.
+func SanitizeForSpeechEx(text string, isCommentary bool) string {
 	text = reInlineAnnotation.ReplaceAllStringFunc(text, func(match string) string {
 		parts := reInlineAnnotation.FindStringSubmatch(match)
 		if len(parts) != 3 {
@@ -80,32 +85,54 @@ func SanitizeForSpeech(text string) string {
 			(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
 			continue
 		}
-		if sceneSluglinePattern.MatchString(line) || strings.HasPrefix(line, "△") {
-			continue
+		if !isCommentary {
+			if sceneSluglinePattern.MatchString(line) || strings.HasPrefix(line, "△") {
+				continue
+			}
+			if speakerCueOnlyPattern.MatchString(line) {
+				continue
+			}
+			if screenplayActionLine.MatchString(line) && !speakerLinePattern.MatchString(line) {
+				continue
+			}
+			if nameOnlyLinePattern.MatchString(line) ||
+				sceneSettingLinePattern.MatchString(line) ||
+				locationLeadLinePattern.MatchString(line) ||
+				actionOnlyLinePattern.MatchString(line) ||
+				timeTransitionLinePattern.MatchString(line) {
+				continue
+			}
 		}
-		if speakerCueOnlyPattern.MatchString(line) {
-			continue
-		}
-		if screenplayActionLine.MatchString(line) && !speakerLinePattern.MatchString(line) {
-			continue
-		}
-		if nameOnlyLinePattern.MatchString(line) ||
-			sceneSettingLinePattern.MatchString(line) ||
-			locationLeadLinePattern.MatchString(line) ||
-			actionOnlyLinePattern.MatchString(line) ||
-			timeTransitionLinePattern.MatchString(line) {
-			continue
-		}
-		if m := speakerWithEmotionLine.FindStringSubmatch(line); len(m) == 3 {
+		if m := speakerWithEmotionLine.FindStringSubmatch(line); len(m) == 3 && isRealSpeakerName(m[1]) {
 			line = strings.TrimSpace(m[1]) + "：" + strings.TrimSpace(m[2])
 		}
 		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "===") || strings.HasPrefix(line, "***") {
 			continue
 		}
-		if chapterTitlePattern.MatchString(line) || linePrefixStripPattern.MatchString(line) {
-			continue
+		if !isCommentary {
+			if chapterTitlePattern.MatchString(line) || linePrefixStripPattern.MatchString(line) {
+				continue
+			}
 		}
 		out = append(out, line)
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func isRealSpeakerName(name string) bool {
+	name = strings.TrimSpace(name)
+	name = strings.TrimFunc(name, func(r rune) bool {
+		return r == '【' || r == '】' || r == '[' || r == ']' || r == '(' || r == ')' || r == '（' || r == '）'
+	})
+	name = strings.TrimSpace(name)
+	runes := []rune(name)
+	if len(runes) == 0 || len(runes) > 5 {
+		return false
+	}
+	for _, r := range name {
+		if r == '他' || r == '她' || r == '我' || r == '你' || r == '在' || r == '跪' || r == '走' || r == '说' || r == '看' || r == '揉' || r == '笑' || r == '哭' || r == '着' {
+			return false
+		}
+	}
+	return true
 }

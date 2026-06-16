@@ -31,10 +31,18 @@ type ExtractService struct {
 	llmBaseURL        string
 	llmAPIKey         string
 	llmModel          string
+	fallbackBaseURL   string
+	fallbackAPIKey    string
+	fallbackModel     string
 	llmTimeout        time.Duration
 	projectServiceURL string
 	jwtSecret         string
 	logger            *zap.Logger
+}
+
+// ExtractionOptions controls optional LLM routing for asset extraction.
+type ExtractionOptions struct {
+	ModelName string
 }
 
 // NewExtractService —— 创建资源提取服务实例，返回 *ExtractService
@@ -42,6 +50,7 @@ func NewExtractService(
 	assetSvc *AssetService,
 	skillRepo repository.SkillRepository,
 	llmBaseURL, llmAPIKey, llmModel string,
+	fallbackBaseURL, fallbackAPIKey, fallbackModel string,
 	llmTimeout time.Duration,
 	projectServiceURL, jwtSecret string,
 	logger *zap.Logger,
@@ -52,6 +61,9 @@ func NewExtractService(
 		llmBaseURL:        strings.TrimRight(llmBaseURL, "/"),
 		llmAPIKey:         llmAPIKey,
 		llmModel:          llmModel,
+		fallbackBaseURL:   strings.TrimRight(strings.TrimSpace(fallbackBaseURL), "/"),
+		fallbackAPIKey:    strings.TrimSpace(fallbackAPIKey),
+		fallbackModel:     strings.TrimSpace(fallbackModel),
 		llmTimeout:        llmTimeout,
 		projectServiceURL: strings.TrimRight(projectServiceURL, "/"),
 		jwtSecret:         jwtSecret,
@@ -126,7 +138,7 @@ func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) 
 						zap.Uint64("episode_id", episodeID),
 					)
 				}
-				if _, resumeErr := s.ExtractFromEpisode(resumeCtx, projectID, episodeID, token); resumeErr != nil && s.logger != nil {
+				if _, resumeErr := s.ExtractFromEpisode(resumeCtx, projectID, episodeID, token, ExtractionOptions{}); resumeErr != nil && s.logger != nil {
 					s.logger.Warn("resume interrupted episode extraction failed",
 						zap.Uint64("project_id", projectID),
 						zap.Uint64("episode_id", episodeID),
@@ -151,7 +163,7 @@ func (s *ExtractService) ResumeStaleExtractions(ctx context.Context, limit int) 
 				}
 				return
 			}
-			if _, resumeErr := s.ExtractFromProject(resumeCtx, projectID, token); resumeErr != nil && s.logger != nil {
+			if _, resumeErr := s.ExtractFromProject(resumeCtx, projectID, token, ExtractionOptions{}); resumeErr != nil && s.logger != nil {
 				s.logger.Warn("resume interrupted project extraction failed",
 					zap.Uint64("project_id", projectID),
 					zap.Error(resumeErr),
@@ -292,7 +304,7 @@ func (s *ExtractService) upsertExtractedAsset(projectID uint64, assetType, name,
 // ExtractFromProject fetches the script text and episode data from project-service and extracts assets via LLM.
 // For long scripts, it splits into chunks, extracts from each chunk separately, then deduplicates.
 // A sentinel asset with status "extracting" is created at the start so the frontend can track progress.
-func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint64, jwtToken string) ([]model.Asset, error) {
+func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint64, jwtToken string, opts ExtractionOptions) ([]model.Asset, error) {
 	// 0. Clear any stale sentinel from a previous interrupted extraction, then create a fresh one.
 	s.assetSvc.DeleteSentinel(projectID)
 	sentinel := &model.Asset{
@@ -313,15 +325,17 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 			_ = s.assetSvc.Delete(sentinelID)
 		}
 	}
+	failExtraction := func(err error) ([]model.Asset, error) {
+		s.markExtractionFailed(sentinel, err, opts.ModelName, 0)
+		return nil, err
+	}
 
 	// 1. Fetch project profile to get script text and project-level visual guidance
 	projectProfile, err := fetchProjectVisualProfile(ctx, s.projectServiceURL, projectID, jwtToken)
 	if err != nil {
-		removeSentinel()
-		return nil, fmt.Errorf("fetch project profile: %w", err)
+		return failExtraction(fmt.Errorf("fetch project profile: %w", err))
 	}
 	if pipelineState, stateErr := fetchProjectPipelineState(ctx, s.projectServiceURL, projectID, jwtToken); stateErr == nil && pipelineState.blocksProjectWideExtraction() {
-		removeSentinel()
 		if s.logger != nil {
 			s.logger.Info("skip project-wide asset extraction while episode pipeline is active",
 				zap.Uint64("project_id", projectID),
@@ -329,7 +343,7 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 				zap.String("stage", pipelineState.Stage),
 			)
 		}
-		return nil, fmt.Errorf("project %d is in active episode pipeline (%s/%s)", projectID, pipelineState.Status, pipelineState.Stage)
+		return failExtraction(fmt.Errorf("project %d is in active episode pipeline (%s/%s)", projectID, pipelineState.Status, pipelineState.Stage))
 	}
 	scriptText := projectProfile.ScriptText
 	projectVisualHint := buildProjectVisualHint(projectProfile)
@@ -338,8 +352,7 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 	episodeSummaries := s.fetchEpisodeSummaries(ctx, projectID, jwtToken)
 
 	if strings.TrimSpace(scriptText) == "" && len(episodeSummaries) == 0 {
-		removeSentinel()
-		return nil, fmt.Errorf("project %d has no script text", projectID)
+		return failExtraction(fmt.Errorf("project %d has no script text", projectID))
 	}
 
 	// 3. Build text chunks for extraction (each chunk tracks the exact episode it belongs to)
@@ -383,7 +396,7 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 		go func(idx int, chunkText string, epIDs []int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			extracted, err := s.callLLMExtract(ctx, chunkText, projectVisualHint, skillHints)
+			extracted, err := s.callLLMExtract(ctx, chunkText, projectVisualHint, skillHints, opts.ModelName)
 			if err != nil {
 				results <- chunkResult{idx: idx, err: err}
 				return
@@ -422,6 +435,10 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 		zap.Int("raw_count", len(allExtracted)),
 		zap.Int("deduped_count", len(deduped)),
 	)
+
+	if len(deduped) == 0 {
+		return failExtraction(errors.New("no assets extracted from script"))
+	}
 
 	// 6. Create Asset records
 	var created []model.Asset
@@ -468,10 +485,11 @@ func (s *ExtractService) ExtractFromProject(ctx context.Context, projectID uint6
 
 // ExtractFromEpisode —— 从单集剧本内容中通过 LLM 提取资源
 // ExtractFromEpisode extracts assets from a single episode's content via LLM.
-func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, episodeID uint64, jwtToken string) ([]model.Asset, error) {
+func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, episodeID uint64, jwtToken string, opts ExtractionOptions) ([]model.Asset, error) {
 	if err := s.assetSvc.repo.ClearEpisodeAssets(projectID, episodeID); err != nil {
 		return nil, fmt.Errorf("clear previous episode assets: %w", err)
 	}
+	s.assetSvc.DeleteSentinel(projectID)
 
 	// Create sentinel asset
 	sentinel := &model.Asset{
@@ -491,6 +509,10 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 			_ = s.assetSvc.Delete(sentinelID)
 		}
 	}
+	failExtraction := func(err error, episodeNumber int) ([]model.Asset, error) {
+		s.markExtractionFailed(sentinel, err, opts.ModelName, episodeNumber)
+		return nil, err
+	}
 
 	episodes := s.fetchEpisodeSummaries(ctx, projectID, jwtToken)
 
@@ -502,14 +524,12 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 		}
 	}
 	if target == nil {
-		removeSentinel()
-		return nil, fmt.Errorf("episode %d not found in project %d", episodeID, projectID)
+		return failExtraction(fmt.Errorf("episode %d not found in project %d", episodeID, projectID), 0)
 	}
 
 	content := episodeExtractionContent(*target)
 	if content == "" {
-		removeSentinel()
-		return nil, fmt.Errorf("episode %d has no content for extraction", episodeID)
+		return failExtraction(fmt.Errorf("episode %d has no content for extraction", episodeID), target.Number)
 	}
 
 	s.logger.Info("starting single episode extraction",
@@ -521,8 +541,7 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 
 	projectProfile, err := fetchProjectVisualProfile(ctx, s.projectServiceURL, projectID, jwtToken)
 	if err != nil {
-		removeSentinel()
-		return nil, fmt.Errorf("fetch project profile: %w", err)
+		return failExtraction(fmt.Errorf("fetch project profile: %w", err), target.Number)
 	}
 	projectVisualHint := buildProjectVisualHint(projectProfile)
 	skillHints := s.buildExtractionSkillHints(projectID)
@@ -531,10 +550,9 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 	annotationHints := buildProductionAnnotationHints(content)
 	combinedHints := skillHints + annotationHints
 
-	extracted, err := s.callLLMExtract(ctx, fmt.Sprintf("【第%d集: %s】\n%s", target.Number, target.Title, content), projectVisualHint, combinedHints)
+	extracted, err := s.callLLMExtract(ctx, fmt.Sprintf("【第%d集: %s】\n%s", target.Number, target.Title, content), projectVisualHint, combinedHints, opts.ModelName)
 	if err != nil {
-		removeSentinel()
-		return nil, fmt.Errorf("LLM extraction failed: %w", err)
+		return failExtraction(fmt.Errorf("LLM extraction failed: %w", err), target.Number)
 	}
 
 	deduped := deduplicateAssets(extracted.Assets)
@@ -555,6 +573,10 @@ func (s *ExtractService) ExtractFromEpisode(ctx context.Context, projectID, epis
 			continue
 		}
 		created = append(created, *asset)
+	}
+
+	if len(created) == 0 {
+		return failExtraction(errors.New("no assets extracted from episode"), target.Number)
 	}
 
 	removeSentinel()
@@ -838,7 +860,132 @@ func buildProductionAnnotationHints(content string) string {
 	return sb.String()
 }
 
-func (s *ExtractService) callLLMExtract(ctx context.Context, scriptText, projectVisualHint, skillHints string) (*llmExtractResult, error) {
+func (s *ExtractService) callLLMExtract(ctx context.Context, scriptText, projectVisualHint, skillHints, modelName string) (*llmExtractResult, error) {
+	routes := s.buildExtractionRoutes(ctx, modelName)
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("no LLM routes configured for asset extraction")
+	}
+	var lastErr error
+	for _, route := range routes {
+		result, err := s.callLLMExtractOnce(ctx, scriptText, projectVisualHint, skillHints, route)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if s.logger != nil {
+			s.logger.Warn("asset extraction llm route failed, trying next",
+				zap.String("route", route.label),
+				zap.String("model", route.model),
+				zap.Error(err),
+			)
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("unknown extraction error")
+	}
+	return nil, fmt.Errorf("all extraction LLM routes failed: %w", lastErr)
+}
+
+type extractionLLMRoute struct {
+	baseURL string
+	apiKey  string
+	model   string
+	label   string
+}
+
+func (s *ExtractService) buildExtractionRoutes(ctx context.Context, modelName string) []extractionLLMRoute {
+	resolvedModel := strings.TrimSpace(modelName)
+	if resolvedModel == "" {
+		resolvedModel = s.llmModel
+	}
+	routes := make([]extractionLLMRoute, 0, 3)
+	seen := map[string]struct{}{}
+	addRoute := func(baseURL, apiKey, model, label string) {
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+		apiKey = strings.TrimSpace(apiKey)
+		model = strings.TrimSpace(model)
+		if baseURL == "" || apiKey == "" || model == "" {
+			return
+		}
+		key := baseURL + "|" + model
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		routes = append(routes, extractionLLMRoute{
+			baseURL: baseURL,
+			apiKey:  apiKey,
+			model:   model,
+			label:   label,
+		})
+	}
+	if s.assetSvc != nil {
+		baseURL, apiKey := s.assetSvc.ResolveChatRoute(ctx, resolvedModel)
+		addRoute(baseURL, apiKey, resolvedModel, "primary")
+	} else {
+		addRoute(s.llmBaseURL, s.llmAPIKey, resolvedModel, "primary")
+	}
+	if fbModel := strings.TrimSpace(s.fallbackModel); fbModel != "" {
+		addRoute(s.fallbackBaseURL, s.fallbackAPIKey, fbModel, "fallback")
+	}
+	return routes
+}
+
+func (s *ExtractService) markExtractionFailed(sentinel *model.Asset, err error, modelName string, episodeNumber int) {
+	if sentinel == nil || sentinel.ID == 0 || s.assetSvc == nil {
+		return
+	}
+	msg := userFacingExtractionError(err)
+	metadata := map[string]interface{}{
+		"extraction_error": msg,
+		"error_detail":     err.Error(),
+		"model_name":       firstNonEmpty(strings.TrimSpace(modelName), s.llmModel),
+		"failed_at":        time.Now().Format(time.RFC3339),
+	}
+	if episodeNumber > 0 {
+		metadata["episode_number"] = episodeNumber
+	}
+	if len(sentinel.EpisodeIDs) > 0 {
+		metadata["episode_id"] = sentinel.EpisodeIDs[0]
+	}
+	metaJSON, marshalErr := json.Marshal(metadata)
+	if marshalErr != nil {
+		metaJSON = []byte("{}")
+	}
+	sentinel.Status = "failed"
+	sentinel.Name = "__extracting__"
+	sentinel.Description = msg
+	sentinel.Metadata = metaJSON
+	if updateErr := s.assetSvc.repo.Update(sentinel); updateErr != nil && s.logger != nil {
+		s.logger.Warn("failed to persist extraction failure sentinel", zap.Error(updateErr))
+	}
+}
+
+func userFacingExtractionError(err error) string {
+	if err == nil {
+		return "资源提取失败，请切换模型后重试"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "deadline exceeded"), strings.Contains(msg, "timed out"):
+		return "资源提取超时，请切换模型后重试"
+	case strings.Contains(msg, "no assets extracted"), strings.Contains(msg, "no assets"):
+		return "未能从剧本中识别出资源，请检查剧集内容或切换模型后重试"
+	default:
+		return "资源提取失败，请切换模型后重试"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func (s *ExtractService) callLLMExtractOnce(ctx context.Context, scriptText, projectVisualHint, skillHints string, route extractionLLMRoute) (*llmExtractResult, error) {
 	// Safety: truncate if a single chunk is still oversized
 	if runes := []rune(scriptText); len(runes) > chunkMaxChars+5000 {
 		scriptText = string(runes[:chunkMaxChars+5000])
@@ -881,7 +1028,7 @@ type 只能是 character、scene、prop 三种。`
 	}
 
 	reqBody := map[string]interface{}{
-		"model": s.llmModel,
+		"model": route.model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": "请从以下文本中提取资源：\n\n" + scriptText},
@@ -895,13 +1042,13 @@ type 只能是 character、scene、prop 三种。`
 	llmCtx, cancel := context.WithTimeout(ctx, s.llmTimeout)
 	defer cancel()
 
-	url := s.llmBaseURL + "/chat/completions"
+	url := route.baseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(llmCtx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+	req.Header.Set("Authorization", "Bearer "+route.apiKey)
 
 	client := &http.Client{Timeout: s.llmTimeout}
 	resp, err := client.Do(req)

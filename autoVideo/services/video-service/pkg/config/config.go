@@ -178,7 +178,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("models.minmax_file_retrieve_endpoint", "/v1/files/retrieve")
 	viper.SetDefault("models.minmax_fast_pretreatment", "")
 	viper.SetDefault("models.minmax_prompt_optimizer", "")
-	viper.SetDefault("models.llm_model", "gpt-4.1-mini") // opt-motion-llm
+	viper.SetDefault("models.llm_model", "gpt-5.4") // opt-motion-llm
 	viper.SetDefault("models.music_base", "https://api.siliconflow.cn")
 	viper.SetDefault("models.music_model", "fishaudio/fish-speech-1.5")
 	viper.SetDefault("concurrency.max_clips", 10)

@@ -22,6 +22,33 @@ func TestCompactClipDialogue_PrefersFirstSubtitleTag(t *testing.T) {
 	}
 }
 
+func TestSplitSpeechUnitsPreservingPunctuation(t *testing.T) {
+	text := `"王总，你说个数吧。"`
+	got := splitSpeechUnitsPreservingPunctuation(text)
+	if len(got) != 1 || got[0] != `"王总，你说个数吧。"` {
+		t.Fatalf("expected [\"王总，你说个数吧。\"], got %v", got)
+	}
+
+	text2 := `就差了点时间……"
+我低头点上了烟，没理他。
+"王总，你说个数吧。"`
+	got2 := splitSpeechUnitsPreservingPunctuation(text2)
+	if len(got2) != 3 {
+		t.Fatalf("expected 3 units, got %d: %v", len(got2), got2)
+	}
+	if got2[0] != `就差了点时间……"` || got2[1] != `我低头点上了烟，没理他。` || got2[2] != `"王总，你说个数吧。"` {
+		t.Fatalf("unexpected units: %v", got2)
+	}
+}
+
+func TestCompactCommentaryDialogue_VerbatimAndPunctuation(t *testing.T) {
+	text := `就差了点时间……" 我低头点上了烟，没理他。 "王总，你说个数吧。"`
+	got := CompactCommentaryDialogue(text, 100)
+	if got != text {
+		t.Fatalf("expected verbatim text preserved, got %q", got)
+	}
+}
+
 func stringsCount(text, needle string) int {
 	count := 0
 	for {

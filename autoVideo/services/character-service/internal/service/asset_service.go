@@ -46,7 +46,11 @@ type AssetService struct {
 	llmAPIKey      string
 	llmModel       string
 	llmVisionModel string
-	llmTimeout     time.Duration
+	// 视觉质检（四视图 AI 质检）可独立配置渠道：文本润色可切到 gpt-5.4 等纯文本渠道，
+	// 而视觉质检仍走支持图片输入的渠道（如 poloai/gpt-4.1）。留空时回退到 llmBaseURL/llmAPIKey。
+	llmVisionBaseURL string
+	llmVisionAPIKey  string
+	llmTimeout       time.Duration
 	volcAsset      *VolcAssetClient
 	// extra providers for multi-vendor routing in ChatFree
 	llmClaude           llmProvider // Anthropic Claude proxy (claude* models)
@@ -95,6 +99,8 @@ func NewAssetService(
 		llmAPIKey:           llmAPIKey,
 		llmModel:            llmModel,
 		llmVisionModel:      visionModel,
+		llmVisionBaseURL:    strings.TrimRight(llmBaseURL, "/"),
+		llmVisionAPIKey:     llmAPIKey,
 		llmTimeout:          llmTimeout,
 		llmClaude:           llmProvider{baseURL: strings.TrimRight(claudeBaseURL, "/"), apiKey: claudeAPIKey},
 		llmQwen:             llmProvider{baseURL: strings.TrimRight(qwenBaseURL, "/"), apiKey: qwenAPIKey},
@@ -108,6 +114,17 @@ func NewAssetService(
 // composite images for character four-panel sheets.
 func (s *AssetService) Storage() *StorageClient {
 	return s.storage
+}
+
+// SetVisionChannel —— 为视觉质检单独指定渠道（base/key）。任一为空则保留默认（与文本 LLM 同渠道）。
+// 用于：文本润色切到纯文本渠道（如 gpt-5.4 / ppapi），视觉质检仍走支持图片输入的渠道（如 gpt-4.1 / poloai）。
+func (s *AssetService) SetVisionChannel(baseURL, apiKey string) {
+	if b := strings.TrimRight(strings.TrimSpace(baseURL), "/"); b != "" {
+		s.llmVisionBaseURL = b
+	}
+	if k := strings.TrimSpace(apiKey); k != "" {
+		s.llmVisionAPIKey = k
+	}
 }
 
 // PanelRegenFunc —— 单栏重绘的注入钩子；由 KafkaConsumer 提供具体实现（编排/拼接复用后端逻辑）。
@@ -228,6 +245,22 @@ func restoreAssetGenerationSpec(metadata map[string]interface{}) (string, string
 	return "", ""
 }
 
+// isAssetPromptLocked 判断资源是否处于「最终提示词手工锁定」模式（metadata.prompt_locked == true）。
+// 锁定后图片生成会直接使用 prompt_used，不再从 description 重新组装。
+func isAssetPromptLocked(raw datatypes.JSON) bool {
+	metadata, err := parseAssetMetadata(raw)
+	if err != nil {
+		return false
+	}
+	switch v := metadata["prompt_locked"].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	return false
+}
+
 func (s *AssetService) dispatchAssetGeneration(asset *model.Asset, modelName string, promptSuffix string, stylePreset string) error {
 	if s.kafkaProducer == nil {
 		return fmt.Errorf("kafka producer is not configured")
@@ -276,6 +309,13 @@ func (s *AssetService) dispatchAssetGeneration(asset *model.Asset, modelName str
 			PromptSuffix: promptSuffix,
 			StylePreset:  stylePreset,
 			ModelName:    modelName,
+		}
+		// 高级模式：用户手工锁定了最终提示词时，直接原样使用 prompt_used，跳过精炼/套版/润色。
+		if isAssetPromptLocked(a.Metadata) {
+			if locked := strings.TrimSpace(a.PromptUsed); locked != "" {
+				req.Prompt = locked
+				req.RawPrompt = true
+			}
 		}
 		if err := s.kafkaProducer.PublishGenerate(context.Background(), req); err != nil {
 			s.log.Error("publish asset generate, reverting to failed", zap.Uint64("id", a.ID), zap.Error(err))
@@ -353,6 +393,97 @@ func (s *AssetService) ListPaginated(projectID uint64, assetType, status, keywor
 	return s.repo.FindByProjectIDPaginated(projectID, assetType, status, keyword, episodeID, page, pageSize)
 }
 
+// ExtractionStatus summarizes the current extraction sentinel for a project/episode scope.
+type ExtractionStatus struct {
+	InProgress   bool    `json:"in_progress"`
+	Failed       bool    `json:"failed"`
+	ErrorMessage string  `json:"error_message,omitempty"`
+	ModelName    string  `json:"model_name,omitempty"`
+	EpisodeID    *uint64 `json:"episode_id,omitempty"`
+}
+
+func pickExtractionSentinel(assets []model.Asset, episodeID *uint64) *model.Asset {
+	if len(assets) == 0 {
+		return nil
+	}
+	pool := assets
+	if episodeID != nil {
+		scoped := make([]model.Asset, 0, len(assets))
+		for i := range assets {
+			for _, id := range assets[i].EpisodeIDs {
+				if uint64(id) == *episodeID {
+					scoped = append(scoped, assets[i])
+					break
+				}
+			}
+		}
+		if len(scoped) > 0 {
+			pool = scoped
+		}
+	}
+	for i := range pool {
+		if pool[i].Status == "failed" {
+			return &pool[i]
+		}
+	}
+	for i := range pool {
+		if pool[i].Status == "extracting" {
+			return &pool[i]
+		}
+	}
+	return &pool[0]
+}
+
+// GetExtractionStatus returns the best matching extraction sentinel for UI feedback.
+func (s *AssetService) GetExtractionStatus(projectID uint64, episodeID *uint64) (*ExtractionStatus, error) {
+	sentinels, err := s.repo.FindExtractionSentinels(projectID, nil)
+	if err != nil {
+		return nil, err
+	}
+	sentinel := pickExtractionSentinel(sentinels, episodeID)
+	if sentinel == nil {
+		return &ExtractionStatus{}, nil
+	}
+	switch sentinel.Status {
+	case "extracting":
+		var scopedEpisodeID *uint64
+		if len(sentinel.EpisodeIDs) > 0 {
+			id := uint64(sentinel.EpisodeIDs[0])
+			scopedEpisodeID = &id
+		}
+		return &ExtractionStatus{InProgress: true, EpisodeID: scopedEpisodeID}, nil
+	case "failed":
+		metadata := map[string]interface{}{}
+		if len(sentinel.Metadata) > 0 {
+			_ = json.Unmarshal(sentinel.Metadata, &metadata)
+		}
+		errorMessage := strings.TrimSpace(sentinel.Description)
+		if raw, ok := metadata["extraction_error"].(string); ok && strings.TrimSpace(raw) != "" {
+			errorMessage = strings.TrimSpace(raw)
+		}
+		if errorMessage == "" {
+			errorMessage = "资源提取失败，请切换模型后重试"
+		}
+		modelName, _ := metadata["model_name"].(string)
+		var scopedEpisodeID *uint64
+		if raw, ok := metadata["episode_id"].(float64); ok && raw > 0 {
+			id := uint64(raw)
+			scopedEpisodeID = &id
+		} else if len(sentinel.EpisodeIDs) > 0 {
+			id := uint64(sentinel.EpisodeIDs[0])
+			scopedEpisodeID = &id
+		}
+		return &ExtractionStatus{
+			Failed:       true,
+			ErrorMessage: errorMessage,
+			ModelName:    strings.TrimSpace(modelName),
+			EpisodeID:    scopedEpisodeID,
+		}, nil
+	default:
+		return &ExtractionStatus{}, nil
+	}
+}
+
 // GetByID —— 根据 ID 获取资产，不存在则返回 ErrNotFound
 func (s *AssetService) GetByID(id uint64) (*model.Asset, error) {
 	asset, err := s.repo.FindByID(id)
@@ -375,6 +506,9 @@ func (s *AssetService) Create(asset *model.Asset) error {
 	}
 	if asset.AgentHistory == nil {
 		asset.AgentHistory = datatypes.JSON([]byte("[]"))
+	}
+	if merged, err := mergeSceneSpatialMetadataJSON(asset.Metadata, asset.Type, asset.Name, asset.Description); err == nil {
+		asset.Metadata = merged
 	}
 	return s.repo.Create(asset)
 }
@@ -436,6 +570,17 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 			asset.PromptUsed = p
 		}
 	}
+	// prompt_locked: 高级模式开关——锁定后图片生成直接使用 prompt_used，跳过自动组装。
+	// 合并进 metadata（不覆盖其它键）。
+	if v, ok := updates["prompt_locked"]; ok {
+		if locked, ok := v.(bool); ok {
+			if locked {
+				metadata["prompt_locked"] = true
+			} else {
+				delete(metadata, "prompt_locked")
+			}
+		}
+	}
 	if v, ok := updates["image_url"]; ok {
 		if imageURL, ok := v.(string); ok {
 			asset.ImageURL = imageURL
@@ -465,6 +610,7 @@ func (s *AssetService) Update(id uint64, updates map[string]interface{}) (*model
 			asset.CharacterID = nil
 		}
 	}
+	metadata = enrichSceneSpatialMetadata(asset.Type, asset.Name, asset.Description, metadata)
 	metadata, err = s.syncCharacterAssetMetadataForImageURL(context.Background(), asset, metadata, providerSyncCandidate)
 	if err != nil {
 		return nil, err
@@ -1331,6 +1477,14 @@ func isGeminiRuntimeModel(runtimeModel *chatRuntimeModel) bool {
 	return strings.Contains(joined, "gemini") || strings.Contains(joined, "google")
 }
 
+// ResolveChatRoute resolves the OpenAI-compatible base URL and API key for a chat model.
+func (s *AssetService) ResolveChatRoute(ctx context.Context, modelName string) (baseURL, apiKey string) {
+	if strings.TrimSpace(modelName) == "" {
+		modelName = s.llmModel
+	}
+	return s.resolveChatFreeRoute(ctx, modelName)
+}
+
 // chatFreeProvider resolves which base_url + api_key to use based on model name prefix.
 func (s *AssetService) chatFreeProvider(modelName string) (baseURL, apiKey string) {
 	if provider := s.chatProviderByHints(modelName); provider.baseURL != "" || provider.apiKey != "" {
@@ -1633,7 +1787,8 @@ Core rules:
 5. Preserve EVERY specific physical characteristic from the source description exactly — do not summarise or omit.
 6. Drop personality traits, story events, narrative context, and anything not directly visible in a still image.
 7. Do NOT invent visual elements not implied by the source.
-8. Word count: 60–200 words (use the full range for complex subjects).`
+8. Word count: 60–200 words (use the full range for complex subjects).
+9. NEVER use 「蝴蝶光」 or "butterfly lighting" — some models literalize it as a butterfly insect. Use 「面中对称柔光棚拍布光」 or "paramount studio lighting" instead. Never introduce butterflies, insects, or animals unless explicitly required by the source.`
 	} else {
 		systemPrompt = `You are a professional anime / illustration image generation prompt engineer.
 Your task: Translate and optimize the given asset description into a structured prompt for anime image generators (NovelAI, Stable Diffusion anime models).
@@ -1645,7 +1800,8 @@ Core rules:
 4. Preserve ALL specific visual characteristics from the source.
 5. Drop personality traits, story events, and non-visual narrative content.
 6. Do NOT invent visual elements not implied by the source.
-7. Word count: 40–120 words.`
+7. Word count: 40–120 words.
+8. NEVER use 「蝴蝶光」 or "butterfly lighting" — some models draw an actual butterfly. Use 「面中对称柔光棚拍布光」 or "paramount studio lighting" instead. Never add butterflies, insects, or animals unless the source explicitly requires them.`
 	}
 
 	// Inject type-specific focus and constraints.
@@ -1686,7 +1842,7 @@ Voice binding hint: if the description implies a stable speaking identity, quiet
 必须补出**音色绑定提示线索**：自然保留年龄感、气质、旁白/对白身份等可支持后续音色绑定的线索，但不要写成对白台词。
 服装必须严格符合角色性别，不得混用异性服装。
 **时代与文化约束（权威信息，必须整合而非丢弃）**：输入中凡以"时代："、"人物："、"地域造型："、"项目视觉基调："、"视觉基调："等标签出现的内容，均为该角色服饰、发型、妆容、配饰必须遵循的历史年代与文化规则。请将这些信息自然融入从头到脚的描述中，仅去除标签文字本身（"时代："等），不丢弃内容。若角色个人外貌与时代规则冲突（如唐代角色穿西装），静默调整至符合时代。仅忽略"场景："标签所含建筑环境信息。
-**输出格式：三视图角色设定参考图**：画面左侧三分之一为头肩肖像（头部颈部完整可见，蝴蝶光/柔光面部照明）；右侧三分之二为全身正面、侧面、背面三视图并排。九头身比例，修长身材。纯白背景。三视图中角色设计保持完全一致。`
+**输出格式：单人角色外貌描述（只描述同一个人，不要描述多视图排版）**：按面部→发型→肤色→身形（九头身修长比例）→服装→配饰→鞋履顺序输出。禁止出现「三视图」「四视图」「左侧肖像」「并排」「多视图」「设定图排版」等 layout 用语；这些由系统分栏生成，不要写进描述。若原始描述过短，请基于角色名与已有线索补全可视化细节，但仍只描述这一个人。`
 		}
 	case "scene", "场景", "地点":
 		if isLiveAction {
@@ -1810,7 +1966,7 @@ Era or cultural style cues embedded in the design.
 			zap.String("name", name),
 		)
 	}
-	return refined
+	return sanitizeImagePromptMisreadTerms(refined)
 }
 
 // polishAssetImagePrompt runs a final LLM pass on the fully composed draft prompt.
@@ -1818,6 +1974,12 @@ Era or cultural style cues embedded in the design.
 // appended visual hints) into a single coherent, semantic image generation prompt.
 // Returns draftPrompt unchanged on LLM failure or when LLM is not configured.
 func (s *AssetService) polishAssetImagePrompt(ctx context.Context, draftPrompt, assetType, stylePreset string) string {
+	return s.polishAssetImagePromptForPanel(ctx, draftPrompt, assetType, stylePreset, "")
+}
+
+// polishAssetImagePromptForPanel polishes a single character panel prompt.
+// When panel is non-empty, the system prompt enforces ONE view / ONE person only.
+func (s *AssetService) polishAssetImagePromptForPanel(ctx context.Context, draftPrompt, assetType, stylePreset string, panel CharacterPanel) string {
 	if strings.TrimSpace(s.llmBaseURL) == "" || strings.TrimSpace(draftPrompt) == "" {
 		return draftPrompt
 	}
@@ -1826,6 +1988,9 @@ func (s *AssetService) polishAssetImagePrompt(ctx context.Context, draftPrompt, 
 	isLiveAction := canonical == stylepreset.LiveActionFilm || canonical == stylepreset.LiveActionShort
 
 	systemPrompt := buildPolishSystemPrompt(assetType, isLiveAction)
+	if panel != "" && isCharacterAssetType(assetType) {
+		systemPrompt = buildPolishSystemPromptForCharacterPanel(panel, isLiveAction)
+	}
 
 	userContent := "Draft prompt to polish:\n\n" + draftPrompt + "\n\nPolished image generation prompt:"
 
@@ -1889,7 +2054,7 @@ func (s *AssetService) polishAssetImagePrompt(ctx context.Context, draftPrompt, 
 			zap.String("style_preset", stylePreset),
 		)
 	}
-	return polished
+	return sanitizeImagePromptMisreadTerms(polished)
 }
 
 // buildPolishSystemPrompt returns a system prompt for the final prompt polish LLM call,
@@ -1905,24 +2070,25 @@ func buildPolishSystemPrompt(assetType string, isLiveAction bool) string {
 		constraint = `This is a FREE-FORM IMAGE request. Preserve ALL visual information from the draft, including any people, characters, actions, poses, and environments. Do NOT add no-people constraints or strip any subjects.`
 	case "character", "角色", "人物":
 		if isLiveAction {
-			role = "photorealistic live-action character portrait specialist"
-			constraint = `The subject is a CHARACTER.
-- Output a single full-body portrait on a pure white studio background.
-- Do NOT add a multi-view layout or any reference sheet structure.
-- Describe physical attributes in order: face, hair, skin tone, build, costume (head to foot), accessories.
+			role = "photorealistic live-action character turnaround sheet specialist"
+			constraint = `The subject is a CHARACTER. The draft is a photorealistic character turnaround reference sheet with a leftmost closeup headshot.
+- KEEP the composition: ONE single real person shown in FOUR views in one image, arranged side by side left-to-right as (1) a CLOSEUP HEADSHOT (head and shoulders, face facing camera) on the FAR LEFT, then (2) FRONT full-body view, (3) SIDE profile full-body view, and (4) BACK full-body view, on a pure white studio background.
+- CRITICAL: all four views are the EXACT SAME person — identical face, hairstyle, wardrobe, colors, accessories, body proportions and height. The three full-body figures stand on the same ground line. This is ONE person photographed four times (one face closeup + three full-body angles). It is NOT multiple different people and NOT a crowd.
+- Explicitly state how the sheet is composed (leftmost closeup headshot, then front / side / back full-body, same person, side by side) so the model cannot misread it as different people.
+- Describe physical attributes in order: face, hair, skin tone, build, costume (head to foot), accessories — these apply identically to every view including the headshot.
 - Clothing must strictly match the character's gender. Silently correct any cross-gender attire.
-- Quality tokens first: RAW photo, 8K UHD, professional studio lighting.
+- Quality tokens first: RAW photo, 8K UHD, professional studio lighting, photorealistic, natural skin texture.
 - Drop personality traits, story events, and all non-visual content.`
 		} else {
-			role = "anime/illustration character reference sheet specialist"
-			constraint = `The subject is a CHARACTER.
-- Output a CHARACTER REFERENCE SHEET on a pure white background.
-- Layout: head-and-shoulder portrait on the left third (head and neck fully visible, butterfly/soft lighting); full-body front view, side view, and back view arranged side-by-side on the right two-thirds.
-- Body proportions: 9-head body ratio, slender elegant figure, elongated legs.
-- Describe appearance tags in order: face features, hair color/style, skin tone, body type, clothing (head to foot), accessories.
+			role = "anime/illustration character turnaround sheet specialist"
+			constraint = `The subject is a CHARACTER. The draft is a character turnaround reference sheet with a leftmost closeup headshot.
+- KEEP the composition: ONE single character shown in FOUR views in one image, arranged side by side left-to-right as (1) a CLOSEUP HEADSHOT (head and shoulders, face facing camera) on the FAR LEFT, then (2) FRONT full-body view, (3) SIDE profile full-body view, and (4) BACK full-body view, on a pure white background.
+- CRITICAL: all four views are the EXACT SAME person — identical face, hairstyle, costume, colors, accessories, body proportions and height. The three full-body figures stand on the same ground line. This is ONE character drawn four times (one face closeup + three full-body angles). It is NOT multiple different people and NOT a crowd.
+- Explicitly state how the sheet is composed (leftmost closeup headshot, then front / side / back full-body, same person, side by side) so the model cannot misread it as different characters.
+- Body proportions: 9-head body ratio, slender elegant figure, elongated legs — identical across the full-body views, and the closeup face must match them.
+- Describe appearance tags in order: face features, hair color/style, skin tone, body type, clothing (head to foot), accessories — these apply identically to every view including the headshot.
 - Clothing must strictly match the character's gender.
-- Lead quality tokens: (masterpiece:1.5), best quality, ultra-detailed, 8K.
-- Ensure character design is visually consistent across all three body views.
+- Lead quality tokens: (masterpiece:1.5), best quality, ultra-detailed, 8K, character turnaround sheet with leftmost closeup headshot, same single character repeated.
 - Drop personality, story events, and non-visual content.`
 		}
 	case "scene", "场景", "location", "地点", "环境":
@@ -2008,6 +2174,96 @@ Asset-type constraint:
 %s`, role, constraint, outputFormat)
 }
 
+func buildPolishSystemPromptForCharacterPanel(panel CharacterPanel, isLiveAction bool) string {
+	viewLabel := string(panel)
+	var role, constraint string
+	if isLiveAction {
+		role = "photorealistic live-action character portrait specialist"
+	} else {
+		role = "anime/illustration character portrait specialist"
+	}
+
+	switch panel {
+	case CharacterPanelCloseup:
+		constraint = fmt.Sprintf(`This is ONE SINGLE PANEL (%s) of a character reference set.
+- Output ONLY a head-and-shoulders close-up portrait of ONE person on a pure white studio background.
+- Do NOT add full-body views, side views, back views, or any multi-view / turnaround sheet layout.
+- Do NOT describe or imply multiple people, duplicate figures, or side-by-side portraits.
+- Describe face, hair, skin tone, neckline costume details only.
+- Clothing must strictly match the character's gender.`,
+			viewLabel)
+	case CharacterPanelFront:
+		constraint = fmt.Sprintf(`This is ONE SINGLE PANEL (%s) of a character reference set.
+- Output ONLY a full-body FRONT view of ONE person on a pure white studio background.
+- Do NOT add close-up inset, side view, back view, or any multi-view layout in the same image.
+- Do NOT describe or imply multiple people, group shots, or side-by-side figures.
+- Describe appearance head to toe in one neutral front-facing pose.`,
+			viewLabel)
+		if !isLiveAction {
+			constraint += "\n- Body proportion: 9-head ratio, slender elegant figure, elongated legs."
+		}
+	case CharacterPanelSide:
+		constraint = fmt.Sprintf(`This is ONE SINGLE PANEL (%s) of a character reference set.
+- Output ONLY a full-body strict SIDE PROFILE of ONE person on a pure white studio background.
+- Do NOT add front view, back view, close-up inset, or any multi-view layout.
+- Do NOT describe or imply multiple people or side-by-side figures.
+- The character faces left in strict 90-degree profile; no eye contact with camera.`,
+			viewLabel)
+		if !isLiveAction {
+			constraint += "\n- Body proportion: 9-head ratio, slender elegant figure, elongated legs."
+		}
+	case CharacterPanelBack:
+		constraint = fmt.Sprintf(`This is ONE SINGLE PANEL (%s) of a character reference set.
+- Output ONLY a full-body BACK view of ONE person on a pure white studio background.
+- Do NOT add front view, side view, close-up inset, or any multi-view layout.
+- Do NOT describe or imply multiple people. No face visible.`,
+			viewLabel)
+		if !isLiveAction {
+			constraint += "\n- Body proportion: 9-head ratio, slender elegant figure, elongated legs."
+		}
+	default:
+		constraint = `Output ONE single character view on a pure white background. No multi-view layout. Exactly one person only.`
+	}
+
+	constraint += "\n- NEVER use layout phrases like: turnaround sheet, reference sheet, three views, side by side, left third, 三视图, 并排, 多视图."
+	constraint += "\n- NEVER use 蝴蝶光 or butterfly lighting; use paramount studio lighting / 面中对称柔光棚拍布光. NO butterflies or insects in the image."
+
+	var outputFormat string
+	if isLiveAction {
+		outputFormat = `**Output format (live-action / photorealistic):**
+Line 1: Essential quality tokens — RAW photo, photorealistic, 8K UHD, single character portrait, separated by commas.
+Line 2-3: Vivid English prose for this ONE view only (60–180 words).
+Final tokens: no anime, no watermark, no text, no multiple people, no multi-view layout.
+
+NEVER use Chinese structural labels or multi-view layout language.`
+	} else {
+		outputFormat = `**Output format (anime / illustration):**
+Line 1: Quality tokens — (masterpiece:1.5), best quality, ultra-detailed, single character, one person only.
+Line 2-4: Chinese description for this ONE view only, with key English tags inline.
+Final line: 无文字, 无水印, 无多人物, 无多视图排版.
+
+NEVER include turnaround sheet / 三视图 / 并排 / 多视图 layout language.`
+	}
+
+	return fmt.Sprintf(`You are a %s and expert image generation prompt engineer.
+
+You will receive a DRAFT prompt for ONE panel of a character reference set.
+
+Your task: Rewrite it into a single polished prompt for exactly ONE person in ONE view.
+
+Rules:
+1. Output ONLY the final prompt — no preamble.
+2. Preserve all visual appearance details from the draft.
+3. Remove multi-view layout language and template labels.
+4. If the draft is sparse, expand visible appearance details for this one character, but do NOT add extra people or extra views.
+5. Enforce exactly one subject in frame.
+
+Panel constraint:
+%s
+
+%s`, role, constraint, outputFormat)
+}
+
 // empty string falls back to anime-2d behaviour.
 func composeAssetImagePrompt(assetType, name, description, promptUsed, stylePreset string) string {
 	trimmedType := strings.TrimSpace(assetType)
@@ -2067,25 +2323,45 @@ func composeAssetImagePrompt(assetType, name, description, promptUsed, stylePres
 	}
 }
 
-// composeCharacterPrompt 生成角色参考图的提示词。
-// 真人写实风格：纯白背景单人全身正面图。
-// 动漫/插画风格：三视图角色设定参考图（左侧头肩肖像+右侧全身正面/侧面/背面并排）。
+// composeCharacterPrompt 生成角色参考图的提示词（单图直出）。
+// 真人写实风格与动漫/插画风格统一为同一种版面：单张四视图角色设定参考图——
+// 同一个角色从左到右依次为【大头照特写 / 正面 / 侧面 / 背面全身】横向并排，
+// 提示词中用自然语言明确说明"版面如何构成"，强调四个视角是同一个人而非多个不同人物，
+// 避免短描述被模型误解为多人物。
 func composeCharacterPrompt(name, description, promptUsed string, isLiveAction bool) string {
 	var tags []string
 
 	if isLiveAction {
-		// Live-action: single full-body portrait on pure white studio background.
-		identityAnchor := "the same single character, consistent facial structure, identical hairstyle, identical wardrobe layers, identical accessories, casting-reference precision"
+		// Live-action: photorealistic character turnaround reference sheet in ONE image,
+		// laid out identically to the anime sheet —— 最左大头照特写 + 正面/侧面/背面全身横向并排，
+		// 同一个人（同脸、同发型、同服装、同配饰、同比例），便于下游保持选角一致性。
+		layoutBriefEN := "Photorealistic character casting / wardrobe turnaround reference sheet of ONE single real person. " +
+			"This single image is composed of FOUR views of the EXACT SAME person, " +
+			"arranged side by side in one horizontal row, evenly spaced, sharing one clean white studio background. " +
+			"Leftmost position: a CLOSEUP HEADSHOT portrait (head and shoulders only) of the character's face facing the camera. " +
+			"Second position: full-body FRONT view facing the camera. " +
+			"Third position: full-body SIDE profile view (90-degree side). " +
+			"Rightmost position: full-body BACK view seen from behind. " +
+			"The three full-body figures stand at the same scale on the same ground line. " +
+			"All four views are the identical same person — identical face, identical hairstyle, identical wardrobe layers, identical colors, identical accessories, identical body proportions. " +
+			"This is NOT a group photo and NOT multiple different people; it is exactly ONE person photographed four times (one face closeup plus three full-body angles)."
+		layoutBriefCN := "这是同一个真人的选角/服装设定参考图。整张图由【同一个人】的四个视角横向并排构成，间距均匀、共用同一干净纯白影棚背景：" +
+			"最左为【大头照特写】（头肩部面部特写，面向镜头），其右为【正面全身】（面向镜头），再右为【侧面全身】（严格90°正侧面），最右为【背面全身】（完全背对镜头）。" +
+			"三个全身视角比例一致、站在同一条地平线上。四个视角必须是同一个人——相同脸型、相同发型、相同服装层次与配色、相同配饰、相同身材比例与身高。" +
+			"这不是多个不同的人物、不是合影，而是同一个人拍四次（一张面部大头照 + 三个全身角度）。"
 		tags = append(tags,
-			identityAnchor,
+			layoutBriefEN, layoutBriefCN,
+			"character turnaround sheet with leftmost closeup headshot",
+			"closeup face headshot on the far left, then front / side / back full-body views arranged left to right",
+			"大头照在最左侧", "头肩部面部特写",
+			"(exactly one unique person identity:1.4)", "same single person repeated as headshot plus three full-body views",
+			"(no second different person:1.4)", "no crowd, no group of different people",
 			"(pure white background:1.6)", "plain white seamless studio backdrop",
-			"full body front view", "head to toe fully visible",
-			"(single character:1.5)", "(one person only:1.5)",
-			"standing in relaxed neutral pose", "neutral A-pose reference stance", "both feet visible",
-			"production costume reference", "wardrobe turnaround photo", "garment layering clearly readable",
+			"the three full-body figures are head to toe fully visible, both feet visible",
+			"standing in relaxed neutral A-pose reference stance", "各视角身高一致",
+			"production costume reference", "garment layering clearly readable",
 			"accessories, closures, trims, fabric weight and footwear clearly visible",
-			"objective character sheet framing", "clean silhouette separation", "centered subject",
-			"exactly one subject, no environmental storytelling", "full outfit silhouette locked for downstream consistency",
+			"consistent wardrobe layers, accessories, hairstyle and footwear across all views, identical face in the closeup headshot and all full-body views",
 		)
 		if name != "" {
 			tags = append(tags, name)
@@ -2099,34 +2375,43 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 		tags = append(tags,
 			"RAW photo", "(photorealistic:1.4)", "natural skin texture",
 			"professional studio lighting", "8K UHD", "ultra-detailed",
-			"face, hairline, costume silhouette, and footwear remain fully consistent",
+			"face, hairline, wardrobe silhouette, and footwear remain fully consistent across every view",
 			"no anime", "no illustration",
-			"no props", "no extra limbs", "no duplicate person",
-			"no cropped head", "no cropped feet", "no side character", "no mannequin",
+			"no extra limbs", "no duplicate limbs", "no mannequin",
 		)
 	} else {
-		// Anime/illustration: multi-view character reference sheet.
-		// Layout: head-and-shoulder portrait on the left third (butterfly lighting) +
-		// full-body front / side / back three-views arranged side-by-side on the right two-thirds.
-		identityAnchor := "the same single character in every view, identical face, identical hairstyle, identical costume layers, identical accessories, strict model-sheet consistency"
+		// Anime/illustration: explicit character turnaround reference sheet in ONE image.
+		// 关键：用自然语言把"版面怎么构成"讲清楚——同一个角色，从左到右依次为
+		// 大头照特写 / 正面全身 / 侧面全身 / 背面全身，所有身形是同一个人（同脸、同发型、
+		// 同服装、同比例），而不是不同的人；指令型模型 (GPT-Image / Gemini) 依赖句子而非 tag。
+		layoutBriefEN := "Character design turnaround reference sheet of ONE single character. " +
+			"This single image is composed of FOUR views of the EXACT SAME person, " +
+			"arranged side by side in one horizontal row, evenly spaced, sharing one clean background. " +
+			"Leftmost position: a CLOSEUP HEADSHOT portrait (head and shoulders only) of the character's face facing the camera. " +
+			"Second position: full-body FRONT view facing the camera. " +
+			"Third position: full-body SIDE profile view (90-degree side). " +
+			"Rightmost position: full-body BACK view seen from behind. " +
+			"The three full-body figures stand at the same scale on the same ground line. " +
+			"All four views are the identical same character — identical face, identical hairstyle, identical costume, identical colors, identical accessories, identical body proportions. " +
+			"This is NOT a group photo and NOT multiple different people; it is exactly ONE character drawn four times (one face closeup plus three full-body angles)."
+		layoutBriefCN := "这是同一个角色的设定参考图。整张图由【同一个人】的四个视角横向并排构成，间距均匀、共用同一干净背景：" +
+			"最左为【大头照特写】（头肩部面部特写，面向镜头），其右为【正面全身】（面向镜头），再右为【侧面全身】（严格90°正侧面），最右为【背面全身】（完全背对镜头）。" +
+			"三个全身视角比例一致、站在同一条地平线上。四个视角必须是同一个人——相同脸型、相同发型、相同服装与配色、相同配饰、相同身材比例与身高。" +
+			"这不是多个不同的人物、不是合影，而是同一个角色画四次（一张面部大头照 + 三个全身角度）。"
+
 		tags = append(tags,
-			identityAnchor,
-			"character reference sheet", "character design sheet", "multi-view character design",
+			layoutBriefEN, layoutBriefCN,
+			"character turnaround sheet with leftmost closeup headshot",
+			"closeup face headshot on the far left, then front / side / back full-body views arranged left to right",
+			"大头照在最左侧", "头肩部面部特写",
+			"(exactly one unique character identity:1.4)", "same single person repeated as headshot plus three full-body views",
+			"(no second different character:1.4)", "no crowd, no group of different people",
 			"(pure white background:1.6)", "plain white seamless backdrop",
-			"(single character:1.5)",
-			// Left 1/3: head-shoulder portrait
-			"head and shoulder portrait on the left third of the image",
-			"head and neck fully visible in portrait section",
-			"butterfly lighting on face", "soft facial lighting", "ultra-detailed face",
-			// Right 2/3: full-body three views
-			"full body front view, full body side view, full body back view arranged side by side",
-			"three views on the right two thirds of the image",
-			// Body proportion
+			"the three full-body figures are head to toe fully visible, both feet visible",
 			"9-head body proportion", "slender elegant figure", "elongated legs",
-			"consistent character design across all views",
-			"costume layers, accessories, hairstyle silhouette, and footwear clearly readable",
-			"production-ready turnaround sheet",
-			"neutral presentation pose, orthographic design-sheet readability",
+			"九头身比例", "修长身材", "各视角身高一致",
+			"standing in relaxed neutral pose", "consistent costume layers, accessories, hairstyle silhouette and footwear across all views, identical face in the closeup headshot and all full-body views",
+			"production-ready character model sheet",
 		)
 		if name != "" {
 			tags = append(tags, name)
@@ -2140,17 +2425,18 @@ func composeCharacterPrompt(name, description, promptUsed string, isLiveAction b
 		tags = append(tags,
 			"(masterpiece:1.5)", "best quality", "ultra-detailed illustration",
 			"8K", "2D anime style", "clean line art", "detailed fabric texture",
-			"same face and same outfit across all views",
-			"no extra character", "no duplicate limbs",
-			"no cropped panels", "no chibi distortion", "no floating props",
+			"identical face and identical outfit across the closeup headshot and all full-body views",
+			"no extra unrelated character", "no duplicate limbs",
+			"no chibi distortion", "no floating props",
 		)
 	}
 
 	tags = append(tags,
 		"(no text:2.0)", "no watermarks", "no background elements",
+		"(no butterfly:2.0)", "no insects", "无蝴蝶", "无昆虫",
 	)
 
-	return strings.Join(tags, ", ")
+	return sanitizeImagePromptMisreadTerms(strings.Join(tags, ", "))
 }
 
 // composeScenePrompt builds the prompt for a scene/environment asset.
@@ -2858,12 +3144,20 @@ Return strictly valid JSON in this schema (no markdown, no prose outside the JSO
 	vCtx, cancel := context.WithTimeout(ctx, visionTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(vCtx, http.MethodPost, s.llmBaseURL+"/chat/completions", bytes.NewReader(body))
+	visionBase := s.llmVisionBaseURL
+	if strings.TrimSpace(visionBase) == "" {
+		visionBase = s.llmBaseURL
+	}
+	visionKey := s.llmVisionAPIKey
+	if strings.TrimSpace(visionKey) == "" {
+		visionKey = s.llmAPIKey
+	}
+	req, err := http.NewRequestWithContext(vCtx, http.MethodPost, visionBase+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.llmAPIKey)
+	req.Header.Set("Authorization", "Bearer "+visionKey)
 
 	resp, err := (&http.Client{Timeout: visionTimeout + 5*time.Second}).Do(req)
 	if err != nil {

@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import useSWR from 'swr'
-import { assetAPI, projectAPI, storyboardAPI } from '@/lib/api'
+import useSWR, { mutate as globalMutate } from 'swr'
+import { assetAPI, modelAPI, projectAPI, storyboardAPI } from '@/lib/api'
 import { useToast } from '@/components/ui/toast'
-import type { Asset, Episode, Project, Storyboard } from '@/types'
+import type { Asset, Episode, Model, Project, Storyboard } from '@/types'
+import { parseAssetExtractionState, parseExtractionStatusResponse, resolveExtractionModelName, type AssetExtractionStatusResponse } from '@/lib/projects/asset-extraction'
+import { pickPreferredModel } from '@/lib/model-selection'
 import { getEpisodeWorkspaceLabels } from '@/lib/projects/episode-workspace-labels'
 import {
   computeEpisodeAssetStats,
@@ -53,6 +55,16 @@ export function useEpisodeWorkspaceData({
   const [autoMatchingVoices, setAutoMatchingVoices] = useState(false)
   const [pausingGeneration, setPausingGeneration] = useState(false)
   const [resumingGeneration, setResumingGeneration] = useState(false)
+  const [extractionModelKey, setExtractionModelKey] = useState('')
+  const extractionFailureNotifiedRef = useRef(false)
+
+  const { data: textModelsData } = useSWR(
+    ['episode-workspace-text-models', projectId],
+    () => modelAPI.list({ type: 'llm', sort_by: 'priority' }) as unknown as Promise<{ data: Model[] }>,
+  )
+  const textModels = (textModelsData as { data?: Model[] })?.data?.filter((model) => model.is_active || model.id === project.text_model_id) ?? []
+  const preferredExtractionModel = pickPreferredModel(textModels)
+  const effectiveExtractionModelKey = extractionModelKey || preferredExtractionModel?.model_key || preferredExtractionModel?.name || ''
 
   const { data: assetsData, mutate: mutateAssets } = useSWR(
     ['episode-workspace-assets', projectId, episodeId],
@@ -60,11 +72,23 @@ export function useEpisodeWorkspaceData({
     {
       refreshInterval: (data) => {
         const items = (data as { data?: Asset[] })?.data ?? []
-        return awaitingAutoStoryboard || items.some((asset) => ['extracting', 'pending', 'generating'].includes(asset.status)) ? 3000 : 0
+        const state = parseAssetExtractionState(items, episodeId)
+        return awaitingAutoStoryboard || state.inProgress || state.failed || items.some((asset) => ['extracting', 'pending', 'generating'].includes(asset.status)) ? 3000 : 0
       },
     },
   )
   const episodeAssets = assetsData?.data ?? []
+
+  const { data: extractionStatusData } = useSWR(
+    ['assets-extraction-status', projectId, episodeId],
+    () => assetAPI.getExtractionStatus(projectId, { episode_id: episodeId }) as unknown as Promise<{ data: AssetExtractionStatusResponse }>,
+    {
+      refreshInterval: (data) => {
+        const state = parseExtractionStatusResponse((data as { data?: AssetExtractionStatusResponse } | undefined)?.data)
+        return state.inProgress || state.failed ? 3000 : 15000
+      },
+    },
+  )
 
   const { data: storyboardsData, mutate: mutateStoryboards } = useSWR(
     ['episode-workspace-storyboards', projectId, episodeId],
@@ -78,7 +102,17 @@ export function useEpisodeWorkspaceData({
   )
   const episodeStoryboards = storyboardsData?.data ?? []
 
-  const assetStats = useMemo(() => computeEpisodeAssetStats(episodeAssets), [episodeAssets])
+  const assetStats = useMemo(() => computeEpisodeAssetStats(episodeAssets, episodeId), [episodeAssets, episodeId])
+  const extractionStateFromList = useMemo(() => parseAssetExtractionState(episodeAssets, episodeId), [episodeAssets, episodeId])
+  const extractionStateFromApi = useMemo(
+    () => parseExtractionStatusResponse((extractionStatusData as { data?: AssetExtractionStatusResponse } | undefined)?.data),
+    [extractionStatusData],
+  )
+  const extractionState = useMemo(() => {
+    if (extractionStateFromApi.failed || extractionStateFromApi.inProgress) return extractionStateFromApi
+    if (extractionStateFromList.failed || extractionStateFromList.inProgress) return extractionStateFromList
+    return extractionStateFromApi
+  }, [extractionStateFromApi, extractionStateFromList])
   const storyboardStats = useMemo(() => computeEpisodeStoryboardStats(episodeStoryboards), [episodeStoryboards])
   const serialStoryboardStats = useMemo(() => computeSerialStoryboardStats(episodeStoryboards), [episodeStoryboards])
   const hasRenderableStoryboard = isSerial ? serialStoryboardStats.firstClipReady > 0 : storyboardStats.completed > 0
@@ -125,7 +159,22 @@ export function useEpisodeWorkspaceData({
     setSbPauseTrigger(0)
     setSbResumeTrigger(0)
     setSbAuditTrigger(0)
+    extractionFailureNotifiedRef.current = false
   }, [episodeId, initialTab, initialAwaitingAutoStoryboard, autoPipelineActive])
+
+  useEffect(() => {
+    if (!extractionState.failed) {
+      extractionFailureNotifiedRef.current = false
+      return
+    }
+    if (extractionFailureNotifiedRef.current) return
+    extractionFailureNotifiedRef.current = true
+    toast({
+      title: '资源提取失败',
+      description: extractionState.errorMessage,
+      variant: 'destructive',
+    })
+  }, [extractionState.failed, extractionState.errorMessage, toast])
 
   useEffect(() => {
     if (!autoPipelineActive) return
@@ -149,13 +198,26 @@ export function useEpisodeWorkspaceData({
     }
   }, [awaitingAutoStoryboard, episode?.status, storyboardStats.total, storyboardStats.active, toast, labels.storyboardWorkspaceLabel])
 
-  const handleExtractAssets = async () => {
+  const handleExtractAssets = async (modelName?: string) => {
     setIsExtracting(true)
     setActiveTab('assets')
+    extractionFailureNotifiedRef.current = false
+    const resolvedModel = resolveExtractionModelName(
+      modelName ?? effectiveExtractionModelKey,
+      project.text_model_id,
+      textModels,
+    )
     try {
-      await assetAPI.extractEpisode(projectId, episodeId)
+      await assetAPI.extractEpisode(projectId, episodeId, resolvedModel ? { modelName: resolvedModel } : undefined)
       await mutateAssets()
-      toast({ title: '任务已提交', description: '正在提取本集资源条目，完成后可在资源页手动生成图片，或通过左侧「自动处理本集」衔接后续流程。' })
+      void globalMutate(['stepper-episodes', projectId])
+      void globalMutate(['project', projectId])
+      toast({
+        title: '任务已提交',
+        description: resolvedModel
+          ? `正在使用 ${resolvedModel} 提取本集资源…`
+          : '正在提取本集资源条目，完成后可在资源页手动生成图片，或通过左侧「自动处理本集」衔接后续流程。',
+      })
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
       toast({
@@ -176,6 +238,8 @@ export function useEpisodeWorkspaceData({
     ;(projectAPI.extractEpisodeStoryboards(projectId, episodeId, assetsReady) as Promise<unknown>)
       .then(() => {
         void mutateStoryboards()
+        void globalMutate(['stepper-episodes', projectId])
+        void globalMutate(['project', projectId])
         setTimeout(() => setIsExtractingStoryboards(false), 5000)
       })
       .catch((error: unknown) => {
@@ -239,7 +303,7 @@ export function useEpisodeWorkspaceData({
   }
 
   const resourceButtonDisabled = isExtracting || assetStats.extracting
-  const storyboardButtonDisabled = isExtractingStoryboards || assetStats.extracting || awaitingAutoStoryboard
+  const storyboardButtonDisabled = isExtractingStoryboards || assetStats.extracting || assetStats.extractionFailed || awaitingAutoStoryboard
     || episode?.status === 'scene_splitting' || storyboardStats.active > 0
 
   const episodeSummary = episode?.summary?.trim() || '暂无单集摘要，可先从资源提取开始推进当前集制作。'
@@ -284,5 +348,10 @@ export function useEpisodeWorkspaceData({
     handleAutoMatchVoices,
     handlePauseGeneration,
     handleResumeGeneration,
+    extractionState,
+    textModels,
+    extractionModelKey,
+    setExtractionModelKey,
+    effectiveExtractionModelKey,
   }
 }

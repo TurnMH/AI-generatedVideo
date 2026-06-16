@@ -77,19 +77,23 @@ func TestPostProcessAndAlignCommentaryScenes_PlotFirst(t *testing.T) {
 	if !hasDesc("遣退回忆") || !hasDesc("跪地求助") {
 		t.Fatalf("plot descriptions not preserved: %#v", got)
 	}
-	hasShop := false
-	minLen := 0
+	// 内容完整：被 LLM 漏掉的中间句必须从原文补回。
+	joined := ""
 	for _, sc := range got {
-		l := len([]rune(strings.TrimSpace(sc.Dialogue)))
-		if l > minLen {
-			minLen = l
+		joined += sc.Dialogue
+	}
+	if !strings.Contains(joined, "三个月了，我在北街开了个包子铺") {
+		t.Fatalf("expected omitted source sentence supplemented back, got: %q", joined)
+	}
+	// 逐字照搬：每条非空 dialogue 都必须是原文（去标点后）的逐字片段。
+	sourceKey := normalizeCommentaryDialogueKey("我是德聚楼三十年的主理厨师。三个月了，我在北街开了个包子铺。王大发跪在我包子铺门口：刘师傅，求你救救我！")
+	for _, sc := range got {
+		key := normalizeCommentaryDialogueKey(sc.Dialogue)
+		if key == "" {
+			continue
 		}
-		if strings.Contains(sc.Dialogue, "北街") && strings.Contains(sc.Dialogue, "包子铺") {
-			hasShop = true
+		if !strings.Contains(sourceKey, key) {
+			t.Fatalf("scene dialogue %q is not a verbatim source fragment", sc.Dialogue)
 		}
 	}
-	if minLen < 18 {
-		t.Fatalf("expected longer dialogue per scene, min=%d scenes=%#v", minLen, got)
-	}
-	_ = hasShop
 }

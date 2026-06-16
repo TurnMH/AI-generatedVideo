@@ -74,15 +74,6 @@ rm -rf ${REMOTE_WEB_STAGING}
   ssh_exec "rm -rf ${REMOTE_WEB_PREVIOUS}"
 }
 
-render_local_docker_override() {
-  local temp_override
-  temp_override="$(mktemp)"
-  python3 "$LOCAL_AUTOVIDEO_ROOT/scripts/render-docker-local-config.py" \
-    --source "$LOCAL_AUTOVIDEO_ROOT/config.local.yaml" \
-    --output "$temp_override" >/dev/null
-  rm -f "$temp_override"
-}
-
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: 未检测到 git，请先安装 git 后重试"
   exit 1
@@ -96,7 +87,6 @@ fi
 echo "=== [1/3] 本地构建前端静态产物 ==="
 (
   cd "$LOCAL_AUTOVIDEO_ROOT"
-  render_local_docker_override
   bash scripts/export-frontend-static.sh --env=prod --build-only
 )
 ensure_local_frontend_out
@@ -119,6 +109,8 @@ $SSHPASS -p "$REMOTE_PASS" rsync -az --delete -e "ssh $SSH_OPTS" \
   --exclude 'autoVideo/frontend/.next' \
   --exclude 'autoVideo/frontend/out' \
   --exclude 'autoVideo/config.docker.local.yaml' \
+  --exclude 'autoVideo/infra/.env' \
+  --exclude 'autoVideo/infra/.env.*' \
   "$LOCAL_ROOT"/ "$REMOTE_USER@$REMOTE_HOST:$REMOTE_ROOT/"
 
 echo ""

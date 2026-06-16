@@ -82,6 +82,8 @@ export function EpisodeWorkspace({
               onPauseStoryboards={() => ws.setSbPauseTrigger((t) => t + 1)}
               onResumeStoryboards={() => ws.setSbResumeTrigger((t) => t + 1)}
               onRegenerateStoryboards={() => ws.setSbRegenerateTrigger((t) => t + 1)}
+              onExtractStoryboards={ws.handleExtractStoryboards}
+              isExtractingStoryboards={ws.isExtractingStoryboards}
             />
           </div>
         </div>

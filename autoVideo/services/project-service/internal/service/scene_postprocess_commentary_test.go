@@ -102,8 +102,8 @@ func TestEnsureCommentaryNarrationCoverage_RebuildsSparseScenes(t *testing.T) {
 		"normal",
 		productionmode.Profile{Mode: productionmode.ModeCommentaryComic},
 	)
-	if len(got) < 8 {
-		t.Fatalf("expected expanded commentary scenes, got %d", len(got))
+	if len(got) <= len(sparse) {
+		t.Fatalf("expected expanded commentary scenes beyond the sparse input, got %d", len(got))
 	}
 	totalDialogueRunes := 0
 	for _, sc := range got {
@@ -127,6 +127,94 @@ func TestEnsureCommentaryNarrationCoverage_RebuildsSparseScenes(t *testing.T) {
 	}
 	if !foundOpening || !foundHelp {
 		t.Fatalf("expected LLM plot scene descriptions preserved, opening=%v help=%v scenes=%d", foundOpening, foundHelp, len(got))
+	}
+}
+
+func TestPostProcessCommentaryScenes_RebuildsWhenLLMRewrites(t *testing.T) {
+	svc := &EpisodeService{}
+	source := `我是德聚楼三十年的主理厨师。
+老板为了省钱，用两千块把我撵走，说机器炒菜比我稳。
+三个月后，两百万的订单面临退款，他跪在我包子铺门口：「刘师傅，求你救救我！」
+我抽着旱烟，指着那只黑塑料桶：「王总，以前我是一天两百的厨子；现在，一口汤一百万，不讲价。」`
+	// LLM "optimized" the narration into a paraphrased summary (loses verbatim logic).
+	rewritten := []llmScene{
+		{Description: "开场", Dialogue: "他曾是德聚楼的名厨，后来被老板辞退了。", Duration: 5},
+		{Description: "反转", Dialogue: "几个月后老板遇到危机，反过来求他帮忙。", Duration: 5},
+		{Description: "收尾", Dialogue: "他态度强硬，开出了天价。", Duration: 5},
+	}
+	got := svc.postProcessAndAlignCommentaryScenes(
+		source,
+		rewritten,
+		6,
+		"normal",
+		productionmode.Profile{Mode: productionmode.ModeCommentaryComic},
+	)
+	joined := ""
+	for _, sc := range got {
+		joined += sc.Dialogue
+	}
+	// Verbatim original fragments must reappear (rebuilt from source).
+	for _, want := range []string{"德聚楼三十年的主理厨师", "两千块把我撵走", "一口汤一百万，不讲价"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected verbatim source fragment %q in rebuilt dialogue, got: %q", want, joined)
+		}
+	}
+	// Paraphrased-only wording must NOT survive as narration.
+	for _, bad := range []string{"反过来求他帮忙", "开出了天价"} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("paraphrased dialogue %q should have been replaced by verbatim source", bad)
+		}
+	}
+}
+
+func TestPostProcessCommentaryScenes_RebuildsWhenLLMFragmentsInWrongOrder(t *testing.T) {
+	svc := &EpisodeService{}
+	source := `【导语】
+我是德聚楼三十年的主理厨师。
+老板为了省钱，用两千块把我撵走，说机器炒菜比我稳。
+三个月后，两百万的订单面临退款，他跪在我包子铺门口：「刘师傅，求你救救我！」
+我抽着旱烟，指着那只黑塑料桶：「王总，以前我是一天两百的厨子；现在，一口汤一百万，不讲价。」
+01
+王大发进门的时候，我正在揉面，没抬头。
+"刘师傅。"
+他清了清嗓子。`
+	// Simulates LLM output that still contains many source substrings (passes old 80% check)
+	// but is fragmented and out of order.
+	garbled := []llmScene{
+		{Description: "开场", Dialogue: "刘师傅，", Duration: 5},
+		{Description: "回忆", Dialogue: "我在德聚楼干了三十年。", Duration: 5},
+		{Description: "乱序", Dialogue: "那这三个月，机器呢。", Duration: 5},
+		{Description: "碎片", Dialogue: "，。", Duration: 5},
+	}
+	got := svc.postProcessAndAlignCommentaryScenes(
+		source,
+		garbled,
+		5,
+		"normal",
+		productionmode.Profile{Mode: productionmode.ModeCommentaryComic},
+	)
+	if len(got) == 0 {
+		t.Fatal("expected rebuilt scenes")
+	}
+	joined := ""
+	for _, sc := range got {
+		joined += sc.Dialogue
+	}
+	for _, want := range []string{"我是德聚楼三十年的主理厨师", "两千块把我撵走", "一口汤一百万，不讲价", "王大发进门的时候，我正在揉面，没抬头"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected verbatim source fragment %q in rebuilt dialogue, got: %q", want, joined)
+		}
+	}
+	firstIdx := strings.Index(joined, "我是德聚楼三十年的主理厨师")
+	secondIdx := strings.Index(joined, "两千块把我撵走")
+	thirdIdx := strings.Index(joined, "王大发进门的时候，我正在揉面，没抬头")
+	if firstIdx < 0 || secondIdx < firstIdx || thirdIdx < secondIdx {
+		t.Fatalf("expected dialogue to follow source order, got: %q", joined)
+	}
+	for _, sc := range got {
+		if strings.TrimSpace(sc.Dialogue) == "，。" {
+			t.Fatalf("unexpected garbage dialogue survived rebuild: %q", sc.Dialogue)
+		}
 	}
 }
 

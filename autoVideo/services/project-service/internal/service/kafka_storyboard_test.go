@@ -68,18 +68,19 @@ func TestBuildImagePromptIncludesCinematicStructure(t *testing.T) {
 	}, "live-action-film", "live-action film look, realistic environments", "")
 
 	for _, want := range []string{
-		"Create a single photorealistic cinematic film keyframe",
-		// PromptUsed is English and not a full generated prompt, so it becomes the primary beat.
-		"Primary dramatic beat: keep the morning atmosphere gentle and intimate",
-		"Featured subjects: young woman.",
-		"Camera language: tracking shot feel",
+		"Single photorealistic cinematic still frame",
+		"keep the morning atmosphere gentle and intimate",
+		"Characters: young woman.",
 		"Framing target: 16:9 widescreen composition",
 		"Project visual direction: live-action film look, realistic environments",
-		"no text, no subtitle, no watermark",
+		"Single still storyboard frame",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt %q does not contain %q", prompt, want)
 		}
+	}
+	if strings.Contains(prompt, "Camera language:") {
+		t.Fatalf("image prompt should not include video camera movement cues: %q", prompt)
 	}
 	// PromptUsed was already used as primary, so no "Additional visual requirements:" expected.
 	if strings.Contains(prompt, "Additional visual requirements:") {
@@ -99,35 +100,30 @@ func TestBuildImagePromptFallsBackToSceneDescWhenPromptUsedIsFullGenerated(t *te
 	}, "", "", "")
 
 	// Should fall back to SceneDescription as primary beat, not the full generated prompt.
-	if !strings.Contains(prompt, "Primary dramatic beat: New translated scene description") {
+	if !strings.Contains(prompt, "New translated scene description") {
 		t.Fatalf("prompt should use SceneDescription when PromptUsed is a full generated prompt, got: %q", prompt)
 	}
-	if strings.Contains(prompt, "Additional visual requirements:") {
+	if strings.Contains(prompt, "old prompt") {
 		t.Fatalf("full generated PromptUsed should not appear as additional requirements, got: %q", prompt)
 	}
 }
 
-func TestBuildImagePromptIncludesConstraintLocks(t *testing.T) {
+func TestBuildImagePromptIncludesCompactCharacterLock(t *testing.T) {
 	t.Parallel()
 
 	prompt := buildImagePromptWithAppearances(StoryboardGenerateRequest{
-		SceneDescription: "The spokesperson stands on screen left beside the demo table, slightly leaning forward, raises her right hand to point at the bottle, then turns her shoulders toward camera while keeping the same blazer and pearl earrings.",
+		SceneDescription: "The spokesperson stands beside the demo table and points at the bottle.",
 		Characters:       []string{"spokesperson"},
 		Location:         "demo studio",
-		CameraMovement:   "push-in",
 		AspectRatio:      "16:9",
-		PromptUsed:       "The spokesperson stands on screen left beside the demo table, slightly leaning forward, raises her right hand to point at the bottle, then turns her shoulders toward camera while keeping the same blazer and pearl earrings.",
 	}, "live-action-short", "", "", map[string]string{"spokesperson": "female presenter, tailored cream blazer, pearl earrings, tidy shoulder-length hair"}, nil, "", "", []string{"spokesperson"}, nil)
 
-	for _, want := range []string{
-		"PRE-GEN CONSTRAINT PRIORITY",
-		"POSE AND GESTURE LOCK",
-		"ACTION STAGING",
-		"SPATIAL NOTE",
-		"WARDROBE AND GROOMING LOCK",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt %q does not contain %q", prompt, want)
+	if !strings.Contains(prompt, "Keep character identity consistent with:") {
+		t.Fatalf("prompt %q should include compact character lock", prompt)
+	}
+	for _, unwanted := range []string{"PRE-GEN CONSTRAINT", "ACTION STAGING", "VISUAL CONTINUITY", "Camera language:"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("prompt %q should not contain %q", prompt, unwanted)
 		}
 	}
 }

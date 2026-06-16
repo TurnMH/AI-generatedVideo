@@ -40,6 +40,31 @@ func CompactClipDialogue(text string, maxRunes int) string {
 	return strings.TrimSpace(text)
 }
 
+// CompactCommentaryDialogue is a commentary-safe version of CompactClipDialogue.
+// It removes duplicate lines/sentences but NEVER extracts quotes or discards narrative text.
+func CompactCommentaryDialogue(text string, maxRunes int) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	if text == "" {
+		return ""
+	}
+	if maxRunes <= 0 {
+		maxRunes = DefaultMaxClipDialogueRunes
+	}
+
+	// For commentary, we do NOT call dedupeSpeechUnits because it splits by punctuation
+	// and joins with "。", destroying the original punctuation (like "……\"", "，", etc.).
+	// We keep the text exactly as is.
+	if runes := []rune(text); len(runes) > maxRunes {
+		// Use splitTextByRunes which splits at natural punctuation boundaries
+		chunks := splitTextByRunes(text, maxRunes)
+		if len(chunks) > 0 {
+			return chunks[0]
+		}
+		return string(runes[:maxRunes])
+	}
+	return text
+}
+
 func firstQuotedSpeech(text string) string {
 	for _, m := range quotedSpeechPattern.FindAllStringSubmatch(text, -1) {
 		if len(m) > 1 {
@@ -159,4 +184,49 @@ func truncateAtSentenceBoundary(text string) string {
 		}
 	}
 	return strings.TrimSpace(text) + "。"
+}
+
+// splitSpeechUnitsPreservingPunctuation splits a paragraph into sentences,
+// preserving the punctuation and any trailing quotes/brackets.
+func splitSpeechUnitsPreservingPunctuation(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var units []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		runes := []rune(line)
+		var current []rune
+		for i := 0; i < len(runes); i++ {
+			r := runes[i]
+			current = append(current, r)
+			
+			// Check if r is a sentence-ending punctuation
+			if r == '。' || r == '！' || r == '？' || r == '!' || r == '?' || r == '；' || r == ';' {
+				// Consume any trailing quotes or brackets
+				for i+1 < len(runes) {
+					next := runes[i+1]
+					if next == '”' || next == '」' || next == '』' || next == '"' || next == '\'' || next == ')' || next == '）' {
+						current = append(current, next)
+						i++
+					} else {
+						break
+					}
+				}
+				units = append(units, strings.TrimSpace(string(current)))
+				current = nil
+			}
+		}
+		if len(current) > 0 {
+			if s := strings.TrimSpace(string(current)); s != "" {
+				units = append(units, s)
+			}
+		}
+	}
+	return units
 }

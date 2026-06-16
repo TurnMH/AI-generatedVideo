@@ -1,6 +1,9 @@
 package speechtext
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAlignCommentaryScenesWithSource(t *testing.T) {
 	source := `[字幕:德聚楼的灶台前，刘师傅正低头揉面。] 后厨灯光昏黄。
@@ -30,6 +33,19 @@ func TestFinalizeCommentaryDialogue_DropsVisual(t *testing.T) {
 	visual := "包子铺内部，刘师傅神情沉着冷静，画面近景突出两人表情，环境光线柔和。"
 	if got := FinalizeCommentaryDialogue(visual); got != "" {
 		t.Fatalf("expected visual dialogue to be dropped, got %q", got)
+	}
+}
+
+func TestExtractCommentarySpeechUnits_KeepsNarrationActionLines(t *testing.T) {
+	source := `我是德聚楼三十年的主理厨师。三个月了，我在北街开了个包子铺。
+王大发进门的时候，我正在揉面，没抬头。
+"刘师傅。"`
+	units := ExtractCommentarySpeechUnits(source)
+	joined := strings.Join(units, "|")
+	for _, want := range []string{"我是德聚楼三十年的主理厨师", "三个月了，我在北街开了个包子铺", "王大发进门的时候，我正在揉面，没抬头", "刘师傅"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in units: %q", want, joined)
+		}
 	}
 }
 

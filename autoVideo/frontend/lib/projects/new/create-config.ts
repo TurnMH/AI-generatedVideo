@@ -46,8 +46,8 @@ export const VIDEO_RUNTIME_KEY_LABELS: Record<string, string> = {
 }
 
 export type CreatePageDisplayConfig = {
-  stepLabels: [string, string, string]
-  stepDescriptions: [string, string, string]
+  stepLabels: string[]
+  stepDescriptions: string[]
   flowHint: string
   afterCreateTitle: string
   afterCreateHint: string
