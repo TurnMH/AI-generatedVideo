@@ -1369,7 +1369,7 @@ func (s *EpisodeService) optimizeProjectScriptForAutoSplit(ctx context.Context, 
 		"response_format": map[string]string{"type": "json_object"},
 	}
 	data, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmCfg.BaseURL+"/chat/completions", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatCompletionsURL(llmCfg.BaseURL), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -2045,7 +2045,7 @@ func (s *EpisodeService) prepareScriptForStoryboard(ctx context.Context, project
 
 	prepCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(prepCtx, http.MethodPost, llmCfg.BaseURL+"/chat/completions", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(prepCtx, http.MethodPost, chatCompletionsURL(llmCfg.BaseURL), bytes.NewReader(data))
 	if err != nil {
 		return content
 	}
