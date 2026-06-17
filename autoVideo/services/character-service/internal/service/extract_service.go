@@ -1042,7 +1042,10 @@ type 只能是 character、scene、prop 三种。`
 	llmCtx, cancel := context.WithTimeout(ctx, s.llmTimeout)
 	defer cancel()
 
-	url := route.baseURL + "/chat/completions"
+	url := chatCompletionsURL(route.baseURL)
+	if url == "" {
+		return nil, fmt.Errorf("empty LLM base URL for route %q", route.label)
+	}
 	req, err := http.NewRequestWithContext(llmCtx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
