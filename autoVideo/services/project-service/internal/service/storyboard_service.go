@@ -30,6 +30,8 @@ const (
 	defaultStoryboardMaxInFlight = 24
 )
 
+var storyboardEligibleDispatchStatuses = []string{"pending", "failed"}
+
 type storyboardGenerationScope struct {
 	EpisodeID  *uint64
 	ModelName  string
@@ -465,6 +467,11 @@ func (s *StoryboardService) publishStoryboardGeneration(sb *model.Storyboard, ve
 	if s.isProjectGenerationPaused(sb.ProjectID) {
 		return s.markStoryboardPaused(sb)
 	}
+	if !sb.PromptLocked && isCorruptedStoryboardPromptUsed(sb.PromptUsed) {
+		sb.PromptUsed = ""
+		sb.UpdatedAt = time.Now()
+		_ = s.repo.Update(sb)
+	}
 	// 串行模式：非首帧分镜默认跳过出图；用户显式点「单个生成」时 forceImage=true 仍会出图。
 	if !forceImage && sb.SceneGroupKey != "" && !sb.IsSceneFirstClip {
 		sb.Status = "completed"
@@ -587,7 +594,7 @@ func (s *StoryboardService) UpdateGenerationResult(storyboardID, versionID uint6
 		sb.ErrorMsg = ""
 		// Save the final English generation prompt so the frontend EN toggle shows real data.
 		if builtPrompt != "" {
-			sb.PromptUsed = builtPrompt
+			sb.PromptUsed = sanitizeLLMThinkingLeak(builtPrompt)
 		}
 	}
 	sb.UpdatedAt = time.Now()
@@ -1145,8 +1152,8 @@ func (s *StoryboardService) Delete(id uint64) error {
 	return s.repo.DeleteByID(id)
 }
 
-// ForceResetEpisode resets all completed storyboards for an episode back to pending,
-// clearing their image URLs so they can be regenerated.
+// ForceResetEpisode resets completed and failed storyboards for an episode back to pending,
+// clearing their image URLs and error state so they can be regenerated together.
 func (s *StoryboardService) ForceResetEpisode(projectID, episodeID uint64) (int64, error) {
 	return s.repo.ResetEpisodeCompletedToPending(projectID, episodeID)
 }
@@ -1213,7 +1220,7 @@ func (s *StoryboardService) refillProjectGeneration(projectID uint64) (int, erro
 	if !ok {
 		return 0, nil
 	}
-	dispatched, err := s.dispatchReadyStoryboards(projectID, scope, []string{"pending"})
+	dispatched, err := s.dispatchReadyStoryboards(projectID, scope, storyboardEligibleDispatchStatuses)
 	if err != nil {
 		return 0, err
 	}
@@ -1292,7 +1299,7 @@ func (s *StoryboardService) GenerateAll(projectID uint64, episodeID *uint64, mod
 	}
 	scope := s.resolveProjectGenerationScope(projectID, episodeID, modelName, modelNames)
 	s.setProjectGenerationScope(projectID, scope)
-	count, err := s.dispatchReadyStoryboards(projectID, scope, []string{"failed", "pending"})
+	count, err := s.dispatchReadyStoryboards(projectID, scope, storyboardEligibleDispatchStatuses)
 	if err != nil {
 		s.clearProjectGenerationScope(projectID)
 		return 0, err
@@ -1504,6 +1511,7 @@ func (s *StoryboardService) buildStoryboardGenerateRequest(sb *model.Storyboard,
 		TransitionNote:   sb.TransitionNote,
 		CameraMovement:   sb.CameraMovement,
 		Mood:             sb.Mood,
+		Dialogue:         sb.Dialogue,
 		AspectRatio:      sb.AspectRatio,
 		PromptUsed:       promptUsed,
 		ModelName:        modelName,

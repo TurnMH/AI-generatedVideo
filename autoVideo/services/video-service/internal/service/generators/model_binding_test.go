@@ -17,12 +17,12 @@ func TestKlingGenerator_CloneDoesNotMutateOriginal(t *testing.T) {
 func TestWanGenerator_CloneWithModelUsesRequestedModel(t *testing.T) {
 	t.Parallel()
 	original := NewWanGenerator("wan-key", "", "https://dashscope.aliyuncs.com")
-	clone := original.CloneWithModel("wan2.6")
-	if original.Model != "wanx2.1-i2v-turbo" {
+	clone := original.CloneWithModel("wan2.6-i2v")
+	if original.Model != "wan2.6-i2v-flash" {
 		t.Fatalf("expected original model to remain default, got %q", original.Model)
 	}
-	if clone.Model != "wan2.6" {
-		t.Fatalf("expected clone model wan2.6, got %q", clone.Model)
+	if clone.Model != "wan2.6-i2v" {
+		t.Fatalf("expected clone model wan2.6-i2v, got %q", clone.Model)
 	}
 }
 

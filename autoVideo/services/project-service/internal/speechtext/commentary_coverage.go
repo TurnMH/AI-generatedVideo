@@ -92,8 +92,17 @@ func SplitSpeechUnitsForPacking(text string) []string {
 
 // MergeAdjacentSpeechUnits combines consecutive short units before clip packing.
 func MergeAdjacentSpeechUnits(units []string, minRunes int) []string {
+	return MergeAdjacentSpeechUnitsWithMax(units, minRunes, minRunes*3)
+}
+
+// MergeAdjacentSpeechUnitsWithMax combines consecutive short units before clip packing,
+// ensuring the merged unit size does not exceed maxRunes.
+func MergeAdjacentSpeechUnitsWithMax(units []string, minRunes, maxRunes int) []string {
 	if minRunes <= 0 {
 		minRunes = 18
+	}
+	if maxRunes <= 0 {
+		maxRunes = minRunes * 2
 	}
 	var out []string
 	var batch []string
@@ -112,7 +121,7 @@ func MergeAdjacentSpeechUnits(units []string, minRunes int) []string {
 			continue
 		}
 		unitRunes := utf8.RuneCountInString(unit)
-		if batchRunes > 0 && batchRunes+unitRunes <= minRunes*3 {
+		if batchRunes > 0 && batchRunes+unitRunes <= maxRunes {
 			batch = append(batch, unit)
 			batchRunes += unitRunes
 			if batchRunes >= minRunes {
@@ -126,12 +135,14 @@ func MergeAdjacentSpeechUnits(units []string, minRunes int) []string {
 				batchRunes = unitRunes
 				continue
 			}
-			batch = append(batch, unit)
-			batchRunes += unitRunes
-			if batchRunes >= minRunes {
-				flush()
+			if batchRunes+unitRunes <= maxRunes {
+				batch = append(batch, unit)
+				batchRunes += unitRunes
+				if batchRunes >= minRunes {
+					flush()
+				}
+				continue
 			}
-			continue
 		}
 		flush()
 		out = append(out, unit)
@@ -149,7 +160,7 @@ func PackSpeechUnitsToMaxRunes(units []string, maxRunes int) []string {
 	if minPack < 18 {
 		minPack = 18
 	}
-	units = MergeAdjacentSpeechUnits(units, minPack)
+	units = MergeAdjacentSpeechUnitsWithMax(units, minPack, maxRunes)
 	var packed []string
 	var batch []string
 	batchRunes := 0

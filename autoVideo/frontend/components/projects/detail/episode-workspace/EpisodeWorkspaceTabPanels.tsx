@@ -24,11 +24,13 @@ export function EpisodeWorkspaceTabPanels({
   sbPauseTrigger,
   sbResumeTrigger,
   sbAuditTrigger,
+  sbRepairMetadataTrigger,
   onSbGenerateTriggerConsumed,
   onSbRegenerateTriggerConsumed,
   onSbPauseTriggerConsumed,
   onSbResumeTriggerConsumed,
   onSbAuditTriggerConsumed,
+  onSbRepairMetadataTriggerConsumed,
   onGenerateTriggerConsumed,
   onRegenerateTriggerConsumed,
   onExtractAssets,
@@ -49,11 +51,13 @@ export function EpisodeWorkspaceTabPanels({
   sbPauseTrigger: number
   sbResumeTrigger: number
   sbAuditTrigger: number
+  sbRepairMetadataTrigger: number
   onSbGenerateTriggerConsumed: () => void
   onSbRegenerateTriggerConsumed: () => void
   onSbPauseTriggerConsumed: () => void
   onSbResumeTriggerConsumed: () => void
   onSbAuditTriggerConsumed: () => void
+  onSbRepairMetadataTriggerConsumed: () => void
   onGenerateTriggerConsumed: () => void
   onRegenerateTriggerConsumed: () => void
   onExtractAssets: () => void
@@ -93,11 +97,13 @@ export function EpisodeWorkspaceTabPanels({
             sbPauseTrigger={sbPauseTrigger}
             sbResumeTrigger={sbResumeTrigger}
             sbAuditTrigger={sbAuditTrigger}
+            sbRepairMetadataTrigger={sbRepairMetadataTrigger}
             onSbGenerateTriggerConsumed={onSbGenerateTriggerConsumed}
             onSbRegenerateTriggerConsumed={onSbRegenerateTriggerConsumed}
             onSbPauseTriggerConsumed={onSbPauseTriggerConsumed}
             onSbResumeTriggerConsumed={onSbResumeTriggerConsumed}
             onSbAuditTriggerConsumed={onSbAuditTriggerConsumed}
+            onSbRepairMetadataTriggerConsumed={onSbRepairMetadataTriggerConsumed}
           />
         </div>
       </TabsContent>

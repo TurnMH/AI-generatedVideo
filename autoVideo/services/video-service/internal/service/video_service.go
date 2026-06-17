@@ -2763,7 +2763,7 @@ func runtimeProviderForGenerator(generatorKey string) string {
 
 func supportsNativeAudioForGenerator(generatorKey string) bool {
 	switch generatorKey {
-	case "doubao-seedance", "suanneng":
+	case "doubao-seedance", "suanneng", "wan":
 		return true
 	default:
 		return false
@@ -2801,19 +2801,29 @@ func explainVideoGeneratorRoute(modelName string) VideoRouteExplain {
 		explain.RoutedGenerator = "sora2"
 		explain.RouteReason = "sora-family-alias"
 		explain.IsConfiguredAlias = true
-	case "wan", "wanx", "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo", "tongyi":
+	case "wan", "wanx", "tongyi":
+		explain.RoutedGenerator = "wan"
+		explain.ProviderModel = "wan2.6-i2v-flash"
+		explain.RouteReason = "wan-image-to-video-alias"
+		explain.IsConfiguredAlias = true
+	case "wan2.1", "wanx2.1", "wanx2.1-i2v-turbo":
 		explain.RoutedGenerator = "wan"
 		explain.ProviderModel = "wanx2.1-i2v-turbo"
-		explain.RouteReason = "wan-image-to-video-alias"
+		explain.RouteReason = "wan-legacy-image-to-video-alias"
 		explain.IsConfiguredAlias = true
 	case "wan-t2v", "wan2.1-t2v", "wanx2.1-t2v", "wanx2.1-t2v-turbo":
 		explain.RoutedGenerator = "wan"
 		explain.ProviderModel = "wanx2.1-t2v-turbo"
 		explain.RouteReason = "wan-text-to-video-alias"
 		explain.IsConfiguredAlias = true
-	case "wan2.6":
+	case "wan2.6", "wan2.6-i2v-flash":
 		explain.RoutedGenerator = "wan"
-		explain.ProviderModel = "wan2.6"
+		explain.ProviderModel = "wan2.6-i2v-flash"
+		explain.RouteReason = "wan-family-alias"
+		explain.IsConfiguredAlias = true
+	case "wan2.6-i2v":
+		explain.RoutedGenerator = "wan"
+		explain.ProviderModel = "wan2.6-i2v"
 		explain.RouteReason = "wan-family-alias"
 		explain.IsConfiguredAlias = true
 	case "veo", "veo3.1", "hubagi-veo3.1", "voe3.1", "hubagi-voe3.1", "xingwei-voe3.1":

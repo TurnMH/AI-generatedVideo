@@ -84,6 +84,54 @@ func TestAlignCommentaryScenesWithSource_RepairsVisualDialogue(t *testing.T) {
 	}
 }
 
+func TestFinalizeCommentarySceneDescription_PreservesPlotLabel(t *testing.T) {
+	t.Parallel()
+
+	sc := llmScene{
+		Description: "开场",
+		Dialogue:    "我是德聚楼三十年的主理厨师。",
+	}
+	finalizeCommentarySceneDescription("我是德聚楼三十年的主理厨师。三个月了。", &sc)
+	if sc.Description != "开场" {
+		t.Fatalf("expected plot label preserved, got %q", sc.Description)
+	}
+}
+
+func TestFindCommentarySceneHint_PreservesPlotLabels(t *testing.T) {
+	t.Parallel()
+
+	hints := []llmScene{
+		{Description: "开场", Dialogue: "我是德聚楼三十年的主理厨师", Duration: 4},
+		{Description: "求助", Dialogue: "刘师傅，求你救救我", Duration: 4},
+	}
+	got := findCommentarySceneHint("我是德聚楼三十年的主理厨师。", hints)
+	if got == nil || got.Description != "开场" {
+		t.Fatalf("expected opening hint, got %#v", got)
+	}
+}
+
+func TestPackCommentaryDialoguesFromUnitsRespectsLocation(t *testing.T) {
+	t.Parallel()
+
+	hints := []llmScene{
+		{Dialogue: "我是德聚楼三十年的主理厨师", Location: "德聚楼", LocationZone: "interior"},
+		{Dialogue: "王大发跪在我包子铺门口", Location: "北街包子铺", LocationZone: "entrance"},
+	}
+	units := []string{
+		"我是德聚楼三十年的主理厨师。",
+		"三个月了，我在北街开了个包子铺。",
+		"王大发跪在我包子铺门口，",
+		"「刘师傅，求你救救我！」",
+	}
+	got := packCommentaryDialoguesFromUnits(units, 28, hints)
+	if len(got) < 2 {
+		t.Fatalf("expected location boundary to split packs, got %#v", got)
+	}
+	if strings.Contains(got[0], "王大发") {
+		t.Fatalf("expected first pack to stay in 德聚楼 block, got %q", got[0])
+	}
+}
+
 func TestEnsureCommentaryNarrationCoverage_RebuildsSparseScenes(t *testing.T) {
 	svc := &EpisodeService{}
 	source := `【导语】

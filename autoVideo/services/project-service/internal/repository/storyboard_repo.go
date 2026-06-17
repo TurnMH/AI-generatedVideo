@@ -246,11 +246,12 @@ func (r *StoryboardRepo) FindByProjectAndStatuses(projectID uint64, episodeID *u
 	return sbs, err
 }
 
-// ResetEpisodeCompletedToPending resets completed (non-voided) storyboards for an episode to
-// pending and clears their image URLs, allowing force-regeneration.
+// ResetEpisodeCompletedToPending resets completed and failed (non-voided) storyboards for an
+// episode to pending and clears image/error state so force-regenerate dispatches the full set.
 func (r *StoryboardRepo) ResetEpisodeCompletedToPending(projectID, episodeID uint64) (int64, error) {
 	result := r.db.Model(&model.Storyboard{}).
-		Where("project_id = ? AND episode_id = ? AND status = ? AND is_voided = ?", projectID, episodeID, "completed", false).
+		Where("project_id = ? AND episode_id = ? AND status IN ? AND is_voided = ?",
+			projectID, episodeID, []string{"completed", "failed"}, false).
 		Updates(map[string]interface{}{"status": "pending", "image_url": "", "error_msg": ""})
 	return result.RowsAffected, result.Error
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -166,13 +167,13 @@ func deriveStoryboardConstraintHints(req StoryboardGenerateRequest, originalChar
 	if wardrobeHint == "" {
 		var names []string
 		for i, name := range req.Characters {
-			lookupKey := strings.ToLower(strings.TrimSpace(name))
+			lookupName := strings.TrimSpace(name)
 			if i < len(originalCharacters) && strings.TrimSpace(originalCharacters[i]) != "" {
-				lookupKey = strings.ToLower(strings.TrimSpace(originalCharacters[i]))
+				lookupName = strings.TrimSpace(originalCharacters[i])
 			}
-			desc := strings.TrimSpace(charAssetPrompts[lookupKey])
+			desc := lookupCharacterAssetText(lookupName, charAssetPrompts)
 			if desc == "" {
-				desc = strings.TrimSpace(charAppearances[lookupKey])
+				desc = lookupCharacterAssetText(lookupName, charAppearances)
 			}
 			if desc != "" {
 				names = append(names, strings.TrimSpace(name))
@@ -203,6 +204,198 @@ func collectSceneHintFromTexts(texts []string, keywords []string) string {
 		}
 	}
 	return joinNonEmptyUnique(picks, " | ")
+}
+
+// buildMultiCharacterBlockingCue extracts per-character action clauses from scene text so
+// multi-ref image models do not swap poses (e.g. who kneels vs who stands inside).
+func buildMultiCharacterBlockingCue(characters []string, sceneDesc, spatialAnchor string) string {
+	if len(characters) < 2 {
+		return ""
+	}
+	text := strings.TrimSpace(sceneDesc)
+	if anchor := strings.TrimSpace(spatialAnchor); anchor != "" {
+		text = joinNonEmptyUnique([]string{text, anchor}, " | ")
+	}
+	text = enrichMultiCharacterBlockingText(text, characters)
+	if text == "" {
+		return ""
+	}
+	segments := regexp.MustCompile(`[，。；！？\n|]`).Split(text, -1)
+	var blocks []string
+	for _, name := range characters {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		if seg == "" || !strings.Contains(seg, name) {
+			continue
+		}
+		blocks = append(blocks, name+": "+seg)
+		break
+	}
+	}
+	if len(blocks) < 2 {
+		narrator := pickCommentaryPOVCharacter(characters)
+		if narrator != "" {
+			for _, seg := range segments {
+				seg = strings.TrimSpace(seg)
+				if seg == "" || !strings.Contains(seg, narrator) {
+					continue
+				}
+				found := false
+				for _, b := range blocks {
+					if strings.HasPrefix(b, narrator+":") {
+						found = true
+						break
+					}
+				}
+				if !found {
+					blocks = append(blocks, narrator+": "+seg)
+				}
+				break
+			}
+		}
+	}
+	if len(blocks) < 2 {
+		return ""
+	}
+	return strings.Join(blocks, "; ")
+}
+
+func enrichStoryboardImagePromptWithConstraints(
+	prompt string,
+	source StoryboardGenerateRequest,
+	originalCharacters []string,
+	charAppearances, charAssetPrompts map[string]string,
+) string {
+	hints := deriveStoryboardConstraintHints(source, originalCharacters, charAppearances, charAssetPrompts)
+	spatial := joinNonEmptyUnique([]string{
+		hints.SpatialConstraint,
+		strings.TrimSpace(source.SpatialAnchor),
+		strings.TrimSpace(source.TransitionNote),
+		parseStructuredPromptField(source.PromptUsed, "spatial_lock"),
+	}, " | ")
+	pose := joinNonEmptyUnique([]string{
+		hints.PoseConstraint,
+		strings.TrimSpace(source.SubjectPositions),
+		parseStructuredPromptField(source.PromptUsed, "pose_lock"),
+	}, " | ")
+
+	var extras []string
+	if cue := storyboardCameraCue(source.CameraMovement); cue != "" {
+		extras = append(extras, cue)
+	}
+	if cue := entranceSplitCompositionCue(source.LocationZone, source.SceneDescription); cue != "" {
+		extras = append(extras, cue)
+	}
+	if pose != "" {
+		extras = append(extras, "Pose and body language (must match exactly): "+truncateForImagePrompt(pose, 280)+".")
+	}
+	if spatial != "" {
+		extras = append(extras, "Spatial blocking (do not swap characters or locations): "+truncateForImagePrompt(spatial, 280)+".")
+	}
+	if blocking := buildMultiCharacterBlockingCue(originalCharacters, source.SceneDescription, source.SpatialAnchor); blocking != "" {
+		extras = append(extras, "Per-character blocking: "+truncateForImagePrompt(blocking, 320)+".")
+	}
+	if len(originalCharacters) >= 2 {
+		extras = append(extras, "Two or more distinct characters: use reference images for face/outfit identity only; follow the scene-specific poses above, not the reference sheet standing pose; never swap who kneels, stands, or speaks.")
+	}
+	if hints.ActionConstraint != "" {
+		extras = append(extras, "Action beat: "+truncateForImagePrompt(hints.ActionConstraint, 200)+".")
+	}
+	if len(extras) == 0 {
+		return prompt
+	}
+	return strings.TrimSpace(prompt + " " + strings.Join(extras, " "))
+}
+
+func parseStructuredPromptField(promptUsed, field string) string {
+	promptUsed = strings.TrimSpace(promptUsed)
+	field = strings.TrimSpace(field)
+	if promptUsed == "" || field == "" {
+		return ""
+	}
+	prefix := field + ":"
+	var parts []string
+	for _, seg := range strings.Split(promptUsed, ",") {
+		seg = strings.TrimSpace(seg)
+		if strings.HasPrefix(seg, prefix) {
+			parts = append(parts, strings.TrimSpace(strings.TrimPrefix(seg, prefix)))
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func entranceSplitCompositionCue(locationZone, sceneDesc string) string {
+	zone := strings.ToLower(strings.TrimSpace(locationZone))
+	text := strings.TrimSpace(sceneDesc)
+	if text == "" {
+		return ""
+	}
+	if zone != "entrance" && zone != LocationViewEntrance {
+		return ""
+	}
+	hasExterior := strings.Contains(text, "门外") || strings.Contains(text, "街边") || strings.Contains(text, "门口") || strings.Contains(text, "external")
+	hasInterior := strings.Contains(text, "铺内") || strings.Contains(text, "店内") || strings.Contains(text, "室内") || strings.Contains(text, "内景")
+	if !hasExterior || !hasInterior {
+		return ""
+	}
+	return "Composition: doorway split-frame — exterior foreground shows the kneeling/approaching figure at the shop entrance; interior background shows the second figure inside under warm shop light through the open doorway. Keep both identities distinct and do not merge them into one pose."
+}
+
+func formatCharacterStatesForBlocking(states []llmCharacterState) string {
+	if len(states) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(states))
+	for _, cs := range states {
+		name := strings.TrimSpace(cs.Name)
+		if name == "" {
+			continue
+		}
+		seg := name
+		if action := strings.TrimSpace(cs.Action); action != "" {
+			seg += "：" + action
+		}
+		if emotion := strings.TrimSpace(cs.Emotion); emotion != "" {
+			if strings.Contains(seg, "：") {
+				seg += "，" + emotion
+			} else {
+				seg += "：" + emotion
+			}
+		}
+		parts = append(parts, seg)
+	}
+	return strings.Join(parts, "；")
+}
+
+func characterNamesFromAssets(assets []assetReference) []string {
+	if len(assets) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		if !strings.EqualFold(strings.TrimSpace(asset.Type), "character") {
+			continue
+		}
+		if name := strings.TrimSpace(asset.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func appendMultiCharacterPoseNegativeTokens(baseNeg string) string {
+	extras := []string{
+		"swapped characters", "role reversal", "wrong person kneeling", "wrong person standing",
+		"merged identities", "duplicate same person", "character pose swap", "fused bodies",
+	}
+	if strings.TrimSpace(baseNeg) == "" {
+		return strings.Join(extras, ", ")
+	}
+	return baseNeg + ", " + strings.Join(extras, ", ")
 }
 
 func joinNonEmptyUnique(parts []string, sep string) string {

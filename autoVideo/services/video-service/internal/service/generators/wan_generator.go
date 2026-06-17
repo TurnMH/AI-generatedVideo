@@ -9,10 +9,13 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
 )
+
+const defaultWanModel = "wan2.6-i2v-flash"
 
 // WanGenerator wraps the DashScope Wanx video generation API (image→video).
 type WanGenerator struct {
@@ -30,7 +33,7 @@ func NewWanGenerator(apiKey, _ /* secretKey unused */, baseURL string) *WanGener
 	return &WanGenerator{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
-		Model:   "wanx2.1-i2v-turbo",
+		Model:   defaultWanModel,
 		client:  &http.Client{Timeout: 60 * time.Second},
 	}
 }
@@ -45,7 +48,7 @@ func (g *WanGenerator) CloneWithModel(model string) *WanGenerator {
 		clone.Model = model
 	}
 	if clone.Model == "" {
-		clone.Model = "wanx2.1-i2v-turbo"
+		clone.Model = defaultWanModel
 	}
 	return &clone
 }
@@ -55,12 +58,12 @@ func (g *WanGenerator) IsAvailable(ctx context.Context) bool {
 	return g.APIKey != ""
 }
 
-// SupportsNativeAudio —— Wan does not embed audio in generated clips.
-func (g *WanGenerator) SupportsNativeAudio() bool { return false }
+// SupportsNativeAudio —— Wan 2.6+ supports optional native audio via parameters.audio.
+func (g *WanGenerator) SupportsNativeAudio() bool { return isWanModernModel(g.Model) }
 
 // ParamOptions —— Wan 支持的模型参数（时长固定，支持宽高比选择）
 func (g *WanGenerator) ParamOptions() []ModelParamOption {
-	return []ModelParamOption{
+	opts := []ModelParamOption{
 		{
 			Key: "duration", Label: "时长", Default: "5",
 			Values: []ParamValue{{Value: "5", Label: "5秒（固定）"}},
@@ -72,6 +75,16 @@ func (g *WanGenerator) ParamOptions() []ModelParamOption {
 			},
 		},
 	}
+	if g.SupportsNativeAudio() {
+		opts = append(opts, ModelParamOption{
+			Key: "generate_audio", Label: "原生音频", Default: "false",
+			Values: []ParamValue{
+				{Value: "false", Label: "无音频"},
+				{Value: "true", Label: "生成音频"},
+			},
+		})
+	}
+	return opts
 }
 type wanSubmitReq struct {
 	Model      string            `json:"model"`
@@ -121,6 +134,35 @@ type ossPolicy struct {
 	} `json:"data"`
 }
 
+func isWanModernModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return true
+	}
+	if strings.Contains(m, "wanx2.1") || strings.Contains(m, "wan2.1") {
+		return false
+	}
+	return strings.HasPrefix(m, "wan2.")
+}
+
+func wanModernParams(req VideoGenerateReq) map[string]any {
+	duration := int(req.DurationSec)
+	if duration <= 0 {
+		duration = 5
+	}
+	resolution := "720P"
+	switch strings.ToUpper(strings.TrimSpace(req.Resolution)) {
+	case "1080P", "1080":
+		resolution = "1080P"
+	}
+	return map[string]any{
+		"resolution":    resolution,
+		"duration":      duration,
+		"prompt_extend": true,
+		"audio":         req.GenerateAudio,
+	}
+}
+
 // wanAspectRatioParams maps a human-readable aspect ratio to the DashScope `size` param.
 // DashScope wanx2.1-i2v accepts: "1280*720" (16:9), "720*1280" (9:16), "720*720" (1:1).
 func wanAspectRatioParams(aspectRatio string) map[string]any {
@@ -155,9 +197,11 @@ func (g *WanGenerator) Generate(ctx context.Context, req VideoGenerateReq) (*Vid
 }
 
 // submit —— 向 DashScope API 提交视频生成请求，返回任务 ID
-// 自动区分 t2v（文生视频，wanx2.1-t2v-*）与 i2v（图生视频，wanx2.1-i2v-*）两种模式。
+// 自动区分 t2v（文生视频，wanx2.1-t2v-*）与 i2v（图生视频）两种模式；
+// Wan 2.6+ 使用 resolution/duration/audio 新参数，2.1 仍走 legacy payload。
 func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string, error) {
 	isT2V := strings.Contains(g.Model, "t2v")
+	modern := isWanModernModel(g.Model)
 
 	var body wanSubmitReq
 	var needOSSResolve bool
@@ -170,9 +214,7 @@ func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string
 			Parameters: wanAspectRatioParams(req.AspectRatio),
 		}
 	} else {
-		// Image-to-video: wanx2.1-i2v-turbo — 需要源图片
 		imgURL := req.SourceImageURL
-		// If the image is on a local/internal URL, upload to DashScope OSS first
 		if isLocalURL(imgURL) {
 			ossURL, err := g.uploadToOSS(ctx, imgURL)
 			if err != nil {
@@ -181,16 +223,28 @@ func (g *WanGenerator) submit(ctx context.Context, req VideoGenerateReq) (string
 			imgURL = ossURL
 			needOSSResolve = true
 		}
-		body = wanSubmitReq{
-			Model: firstNonEmpty(g.Model, "wanx2.1-i2v-turbo"),
-			Input: wanSubmitInput{
-				ImgURL:       imgURL,
-				Prompt:       req.Prompt,
-				Function:     "video-synthesis",
-				ExtendPrompt: true,
-				RefImgs:      req.CharacterImageURLs, // inject character reference images
-			},
-			Parameters: wanAspectRatioParams(req.AspectRatio),
+		if modern {
+			body = wanSubmitReq{
+				Model: firstNonEmpty(g.Model, defaultWanModel),
+				Input: wanSubmitInput{
+					ImgURL:  imgURL,
+					Prompt:  req.Prompt,
+					RefImgs: req.CharacterImageURLs,
+				},
+				Parameters: wanModernParams(req),
+			}
+		} else {
+			body = wanSubmitReq{
+				Model: firstNonEmpty(g.Model, "wanx2.1-i2v-turbo"),
+				Input: wanSubmitInput{
+					ImgURL:       imgURL,
+					Prompt:       req.Prompt,
+					Function:     "video-synthesis",
+					ExtendPrompt: true,
+					RefImgs:      req.CharacterImageURLs,
+				},
+				Parameters: wanAspectRatioParams(req.AspectRatio),
+			}
 		}
 	}
 
@@ -330,7 +384,11 @@ func (g *WanGenerator) uploadToOSS(ctx context.Context, srcURL string) (string, 
 	}
 
 	// 2. Get upload policy from DashScope
-	policyURL := g.BaseURL + "/api/v1/uploads?action=getPolicy&model=wanx2.1-i2v-turbo"
+	policyModel := strings.TrimSpace(g.Model)
+	if policyModel == "" {
+		policyModel = defaultWanModel
+	}
+	policyURL := g.BaseURL + "/api/v1/uploads?action=getPolicy&model=" + url.QueryEscape(policyModel)
 	pReq, err := http.NewRequestWithContext(ctx, http.MethodGet, policyURL, nil)
 	if err != nil {
 		return "", err

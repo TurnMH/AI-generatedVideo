@@ -663,6 +663,80 @@ func (h *StoryboardHandler) AuditContinuity(c *gin.Context) {
 	})
 }
 
+// RepairMetadata POST /api/v1/projects/:id/storyboards/repair-metadata
+func (h *StoryboardHandler) RepairMetadata(c *gin.Context) {
+	projectID, err := parseUint64Param(c, "id")
+	if err != nil {
+		response.BadRequest(c, "invalid project id")
+		return
+	}
+
+	var req struct {
+		EpisodeID *uint64 `json:"episode_id"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.EpisodeID == nil {
+		response.BadRequest(c, "episode_id is required")
+		return
+	}
+
+	catalog := h.fetchProjectCharacterNames(c, projectID)
+	result, err := h.svc.RepairEpisodeMetadata(c.Request.Context(), projectID, req.EpisodeID, catalog)
+	if err != nil {
+		h.logger.Warn("repair storyboard metadata failed",
+			zap.Uint64("project_id", projectID),
+			zap.Error(err),
+		)
+		response.Fail(c, http.StatusInternalServerError, 500, err.Error())
+		return
+	}
+
+	response.OK(c, result)
+}
+
+func (h *StoryboardHandler) fetchProjectCharacterNames(c *gin.Context, projectID uint64) []string {
+	if h.characterBaseURL == "" {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/v1/projects/%d/assets?type=character&status=completed&page=1&page_size=500", h.characterBaseURL, projectID)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil
+	}
+	if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var payload struct {
+		Data struct {
+			Items []struct {
+				Name string `json:"name"`
+				Type string `json:"type"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(payload.Data.Items))
+	for _, item := range payload.Data.Items {
+		if strings.EqualFold(strings.TrimSpace(item.Type), "character") {
+			if name := strings.TrimSpace(item.Name); name != "" && name != "__extracting__" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
 // Stats —— 处理获取项目分镜各状态统计数据的请求
 // Stats GET /api/v1/projects/:id/storyboards/stats
 func (h *StoryboardHandler) Stats(c *gin.Context) {

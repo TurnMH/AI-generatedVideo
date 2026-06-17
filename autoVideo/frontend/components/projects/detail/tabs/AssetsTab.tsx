@@ -1912,7 +1912,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                         </div>
                       </div>
                     )}
-                    {selectedAsset.prompt_used ? (
+                    {selectedAsset?.prompt_used && false? (
                       <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3">
                         <div className="mb-1 flex items-center justify-between gap-2">
                           <p className="text-xs font-medium text-amber-700">当前生效提示词（中文对照）</p>
@@ -1922,7 +1922,7 @@ export function AssetsTab({ projectId, project, episodeId, onExtractEpisodeAsset
                             variant="ghost"
                             className="h-7 px-2 text-[11px] text-amber-700 hover:text-amber-900"
                             onClick={() => {
-                              navigator.clipboard.writeText(assetPromptZhDisplay || selectedAsset.prompt_used || '')
+                              navigator.clipboard.writeText(assetPromptZhDisplay || selectedAsset?.prompt_used || '')
                               toast({ title: '提示词已复制', variant: 'success' })
                             }}
                           >

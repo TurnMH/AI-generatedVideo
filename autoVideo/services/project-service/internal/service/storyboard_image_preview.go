@@ -112,13 +112,21 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 	charAppearances := c.fetchCharacterAppearances(ctx, req.ProjectID, originalCharacters)
 	skillHints := c.fetchProjectSkillHints(ctx, req.ProjectID)
 
-	directAssetRefs := c.fetchAssetReferencesByIDs(ctx, req.ProjectID, req.AssetIDs)
+	charRefImages, charAssetPrompts, charAssetIDs, sceneRefImages, sceneAssetEntries := c.fetchAllAssetRefsOnce(ctx, req.ProjectID)
+	originalCharacters = inferStoryboardCharacters(originalCharacters, displayReq.SceneDescription, displayReq.Dialogue, characterCatalogNames(charAssetIDs))
+
+	assetIDs := req.AssetIDs
+	if len(assetIDs) == 0 && len(originalCharacters) > 0 {
+		assetIDs = resolveCharacterAssetIDs(originalCharacters, charAssetIDs)
+	}
+
+	directAssetRefs := c.fetchAssetReferencesByIDs(ctx, req.ProjectID, assetIDs)
 	directAssetMaps := buildAssetReferenceMaps(directAssetRefs)
 
-	charRefImages, charAssetPrompts, sceneRefImages, sceneAssetEntries := c.fetchAllAssetRefsOnce(ctx, req.ProjectID)
 	charRefImages = mergeAssetReferenceMap(charRefImages, directAssetMaps.CharacterImages)
 	charAssetPrompts = mergeAssetReferenceMap(charAssetPrompts, directAssetMaps.CharacterPrompts)
-	sanitizeCharacterPromptMapForStoryboard(charAssetPrompts)
+	conflictingPose := sceneHasConflictingPoseBeat(displayReq.SceneDescription + " " + displayReq.SpatialAnchor + " " + displayReq.SubjectPositions)
+	sanitizeCharacterPromptMapForStoryboardContext(charAssetPrompts, len(originalCharacters) >= 2, conflictingPose)
 	sceneRefImages = mergeAssetReferenceMap(sceneRefImages, directAssetMaps.SceneImages)
 
 	requestedView := InferLocationViewType(displayReq.SceneDescription, displayReq.Location, "", req.LocationZone)
@@ -136,11 +144,27 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 	)
 
 	var styleReferenceURL string
-	var referenceImageURLs []string
+	var characterRefURLs []string
+	var otherRefURLs []string
 	seenRef := make(map[string]struct{})
 	for _, name := range originalCharacters {
-		imgURL, ok := charRefImages[strings.ToLower(strings.TrimSpace(name))]
-		if !ok || imgURL == "" {
+		preferCloseUp := len(originalCharacters) >= 2 && conflictingPose
+		imgURL := ""
+		for _, ref := range directAssetRefs {
+			if !strings.EqualFold(ref.Type, "character") || !characterNamesFuzzyMatch(name, ref.Name) {
+				continue
+			}
+			if picked := pickStoryboardCharacterReferenceImageForScene(ref.ImageURL, ref.PanelImages, preferCloseUp); picked != "" {
+				imgURL = picked
+			} else if ref.ImageURL != "" {
+				imgURL = ref.ImageURL
+			}
+			break
+		}
+		if imgURL == "" {
+			imgURL = lookupCharacterReferenceImage(name, charRefImages)
+		}
+		if imgURL == "" {
 			continue
 		}
 		if styleReferenceURL == "" {
@@ -148,7 +172,7 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 		}
 		if _, dup := seenRef[imgURL]; !dup {
 			seenRef[imgURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, imgURL)
+			characterRefURLs = append(characterRefURLs, imgURL)
 		}
 	}
 	if styleReferenceURL == "" && sceneRefPick.Matched && sceneRefPick.URL != "" {
@@ -181,7 +205,7 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 	if sceneRefPick.Matched && sceneRefPick.URL != "" {
 		if _, dup := seenRef[sceneRefPick.URL]; !dup {
 			seenRef[sceneRefPick.URL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, sceneRefPick.URL)
+			otherRefURLs = append(otherRefURLs, sceneRefPick.URL)
 		}
 	} else if !sceneRefPick.Skipped {
 		lookupLocation := strings.ToLower(strings.TrimSpace(originalLocation))
@@ -192,7 +216,7 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 			if sceneURL := sceneRefImages[lookupLocation]; sceneURL != "" {
 				if _, dup := seenRef[sceneURL]; !dup {
 					seenRef[sceneURL] = struct{}{}
-					referenceImageURLs = append(referenceImageURLs, sceneURL)
+					otherRefURLs = append(otherRefURLs, sceneURL)
 				}
 			}
 		}
@@ -203,7 +227,7 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 		}
 		if _, dup := seenRef[sceneURL]; !dup {
 			seenRef[sceneURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, sceneURL)
+			otherRefURLs = append(otherRefURLs, sceneURL)
 		}
 	}
 	for _, propURL := range directAssetMaps.PropImages {
@@ -212,12 +236,12 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 		}
 		if _, dup := seenRef[propURL]; !dup {
 			seenRef[propURL] = struct{}{}
-			referenceImageURLs = append(referenceImageURLs, propURL)
+			otherRefURLs = append(otherRefURLs, propURL)
 		}
 	}
 	if prevURL := strings.TrimSpace(req.PrevImageURL); prevURL != "" {
 		if _, dup := seenRef[prevURL]; !dup {
-			referenceImageURLs = append(referenceImageURLs, prevURL)
+			otherRefURLs = append(otherRefURLs, prevURL)
 		}
 	}
 
@@ -227,11 +251,13 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 	}
 	negativePrompt = appendModelNegativeTokens(negativePrompt, modelName)
 	negativePrompt = appendStoryboardAntiSheetNegativeTokens(negativePrompt)
-	if len(req.Characters) == 0 {
+	if len(originalCharacters) == 0 {
 		negativePrompt = appendNoPeopleNegativeTokens(negativePrompt)
+	} else if len(originalCharacters) >= 2 {
+		negativePrompt = appendMultiCharacterPoseNegativeTokens(negativePrompt)
 	}
+	referenceImageURLs := prioritizeStoryboardReferenceImagesWithCharacters(characterRefURLs, otherRefURLs)
 	referenceImageURLs = filterStoryboardReferenceURLs(referenceImageURLs)
-	referenceImageURLs = prioritizeStoryboardReferenceImages(referenceImageURLs)
 	styleReferenceURL = resolveStoryboardStyleReferenceURL(styleReferenceURL, referenceImageURLs)
 
 	var prompt string
@@ -239,6 +265,8 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 		prompt = strings.TrimSpace(req.PromptUsed)
 	} else {
 		prompt = buildImagePromptWithAppearances(req, stylePreset, projectVisualPrompt, imageStylePrefix, charAppearances, locationDescs, skillHints, modelName, originalCharacters, charAssetPrompts)
+		prompt = enrichStoryboardImagePromptWithConstraints(prompt, displayReq, originalCharacters, charAppearances, charAssetPrompts)
+		prompt = appendReferenceImageCharacterLabels(prompt, originalCharacters, charRefImages)
 	}
 	if shared := resolveLocationSharedVisual(displayReq.Location, locProfileIdx); shared != "" && !rawMode {
 		prompt = strings.TrimSpace(prompt + " Location continuity anchor: " + truncateForImagePrompt(shared, 180) + ".")
@@ -272,7 +300,7 @@ func (c *KafkaConsumer) prepareStoryboardImageBundle(ctx context.Context, req St
 	})
 
 	return storyboardImageBundle{
-		Prompt:                  prompt,
+		Prompt:                  sanitizeLLMThinkingLeak(prompt),
 		PromptDisplayZh:         promptDisplayZh,
 		PromptAutoSupplementsZh: promptAutoSupplementsZh,
 		NegativePrompt:          negativePrompt,
@@ -328,10 +356,9 @@ func buildStoryboardPromptDisplayZh(
 	}
 
 	for _, name := range originalCharacters {
-		key := strings.ToLower(strings.TrimSpace(name))
-		desc := strings.TrimSpace(charAssetPrompts[key])
+		desc := lookupCharacterAssetText(name, charAssetPrompts)
 		if desc == "" {
-			desc = strings.TrimSpace(charAppearances[key])
+			desc = lookupCharacterAssetText(name, charAppearances)
 		}
 		if desc == "" {
 			continue
@@ -372,6 +399,15 @@ func buildStoryboardPromptDisplayZh(
 
 	if mood := strings.TrimSpace(req.Mood); mood != "" {
 		lines = append(lines, "【情绪氛围】"+mood)
+	}
+	if anchor := strings.TrimSpace(req.SpatialAnchor); anchor != "" {
+		lines = append(lines, "【空间锚点】"+anchor)
+	}
+	if positions := strings.TrimSpace(req.SubjectPositions); positions != "" {
+		lines = append(lines, "【人物站位/姿态】"+positions)
+	}
+	if blocking := buildMultiCharacterBlockingCue(originalCharacters, req.SceneDescription, req.SpatialAnchor); blocking != "" {
+		lines = append(lines, "【分角色姿态】"+blocking)
 	}
 
 	if len(lines) == 0 {

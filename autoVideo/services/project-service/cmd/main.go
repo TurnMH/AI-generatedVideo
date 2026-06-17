@@ -210,6 +210,7 @@ func main() {
 		storyboards.POST("", storyboardHandler.CreateStoryboard)
 		storyboards.POST("/generate-all", storyboardHandler.GenerateAll)
 		storyboards.POST("/audit-continuity", storyboardHandler.AuditContinuity)
+		storyboards.POST("/repair-metadata", storyboardHandler.RepairMetadata)
 		storyboards.POST("/pause-generation", storyboardHandler.PauseGeneration)
 		storyboards.POST("/resume-generation", storyboardHandler.ResumeGeneration)
 		storyboards.PATCH("/config", storyboardHandler.UpdateConfig)

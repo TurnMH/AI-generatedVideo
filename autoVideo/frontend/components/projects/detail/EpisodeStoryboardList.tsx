@@ -7,7 +7,7 @@ import { RefreshCw, Loader2, Image as ImageIcon, Sparkles, AlertCircle } from 'l
 import type { Storyboard } from '@/types'
 import { storyboardAPI } from '@/lib/api'
 import { canTriggerStoryboardImage, triggerStoryboardImageGeneration } from '@/lib/projects/storyboard-image'
-import { ZoomableImage } from '@/components/ui/image-lightbox'
+import { ZoomableImage, ZoomBadge } from '@/components/ui/image-lightbox'
 import { formatDuration } from '@/lib/projects/utils'
 import { StatusBadge } from './StatusBadge'
 import { Button } from '@/components/ui/button'
@@ -69,9 +69,14 @@ export function EpisodeStoryboardList({ projectId, episodeId }: { projectId: num
               isFailed ? 'border-red-200 bg-red-50/30' : isCompleted ? 'border-surface-200 bg-white' : 'border-blue-100 bg-blue-50/20'
             }`}>
               <div className="flex items-start gap-4">
-                <div className="relative h-20 w-32 flex-shrink-0 overflow-hidden rounded-md border border-surface-100 bg-surface-100 shadow-sm">
+                <div className="relative h-20 w-32 flex-shrink-0 overflow-hidden rounded-md border border-surface-100 bg-surface-100 shadow-sm group">
                   {sb.image_url ? (
-                    <ZoomableImage src={sb.image_url} alt={`#${sb.sequence_number}`} className="h-full w-full object-cover" />
+                    <>
+                      <ZoomableImage src={sb.image_url} alt={`#${sb.sequence_number}`} className="h-full w-full object-cover" />
+                      <div className="absolute right-1 top-1 z-10">
+                        <ZoomBadge src={sb.image_url} alt={`#${sb.sequence_number}`} />
+                      </div>
+                    </>
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center text-surface-400 bg-surface-50">
                       {isGenerating ? <Loader2 className="h-5 w-5 animate-spin text-blue-500 mb-1" /> : <ImageIcon className="h-5 w-5 mb-1 opacity-50" />}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -23,7 +24,7 @@ func supplementCommentaryScenesFromSource(
 	if len(units) == 0 {
 		return scenes
 	}
-	maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
+	_, targetMax, _ := commentarySceneSpeechBounds(clipDuration, speechPace)
 	base := append([]llmScene(nil), scenes...)
 	var inserts []commentarySceneInsert
 
@@ -38,7 +39,7 @@ func supplementCommentaryScenesFromSource(
 	if len(uncovered) == 0 {
 		return scenes
 	}
-	packed := speechtext.PackSpeechUnitsToMaxRunes(uncovered, maxRunes)
+	packed := speechtext.PackSpeechUnitsToMaxRunes(uncovered, targetMax)
 	for _, chunk := range packed {
 		if isSpeechUnitCovered(chunk, base) {
 			continue
@@ -48,14 +49,18 @@ func supplementCommentaryScenesFromSource(
 			Dialogue: chunk,
 			Duration: clipDuration,
 		}
-		if hint := findCommentaryDescriptionHint(chunk, base); hint != "" {
-			sc.Description = hint
-		} else if hint := excerptCommentaryVisualHint(source, chunk); hint != "" {
-			sc.Description = hint
-		} else {
-			sc.Description = defaultCommentarySceneDescription(chunk, 0)
+		if matchedHint := findCommentarySceneHint(chunk, base); matchedHint != nil {
+			sc.Description = matchedHint.Description
+			sc.Location = matchedHint.Location
+			sc.LocationZone = matchedHint.LocationZone
+			sc.Characters = matchedHint.Characters
+			sc.CharacterStates = matchedHint.CharacterStates
+			sc.Items = matchedHint.Items
+			sc.ShotType = matchedHint.ShotType
+			sc.Mood = matchedHint.Mood
 		}
-		syncSceneDurationFromDialogue(&sc, clipDuration, speechPace)
+		finalizeCommentarySceneDescription(source, &sc)
+		syncCommentarySceneDuration(&sc, clipDuration)
 		inserts = append(inserts, commentarySceneInsert{sourcePos: sourcePos, scene: sc})
 		base = append(base, sc)
 	}
@@ -208,79 +213,51 @@ func commentaryInsertOrder(source string, base []llmScene, sourcePos int) float6
 			bestIdx = i
 		}
 	}
-	if bestIdx < 0 {
-		return float64(len(base))*1000 + float64(sourcePos)
+	if bestIdx >= 0 {
+		return float64(bestIdx)*1000 + 500 + float64(sourcePos%500)
 	}
-	return float64(bestIdx)*1000 + 500 + float64(sourcePos%500)
+
+	// If no matched scene before sourcePos, try to find the first matched scene after sourcePos
+	nextIdx := -1
+	nextPos := -1
+	for i, scene := range base {
+		pos := findSceneSourcePosition(source, scene)
+		if pos >= 0 && pos >= sourcePos {
+			if nextPos < 0 || pos < nextPos {
+				nextPos = pos
+				nextIdx = i
+			}
+		}
+	}
+	if nextIdx >= 0 {
+		return float64(nextIdx)*1000 - 500 + float64(sourcePos%500)
+	}
+
+	// Fallback if no scenes matched at all
+	return float64(len(base))*1000 + float64(sourcePos)
 }
 
 func excerptCommentaryVisualHint(source, unit string) string {
-	runes := []rune(source)
-	unitRunes := []rune(unit)
-	if len(unitRunes) == 0 {
+	narrator := inferNarratorFromSource(source)
+	return extractCommentaryVisualDescriptionFromSource(source, unit, nil, narrator)
+}
+
+func inferNarratorFromSource(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
 		return ""
 	}
-
-	// Find the rune index of unit in source
-	idx := -1
-	for i := 0; i <= len(runes)-len(unitRunes); i++ {
-		match := true
-		for j := 0; j < len(unitRunes); j++ {
-			if runes[i+j] != unitRunes[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			idx = i
-			break
-		}
+	head := source
+	if runes := []rune(head); len(runes) > 1200 {
+		head = string(runes[:1200])
 	}
-
-	if idx < 0 {
-		// Fallback: search for a prefix of unit
-		for n := minInt(len(unitRunes), 12); n >= 4; n-- {
-			prefix := unitRunes[:n]
-			for i := 0; i <= len(runes)-len(prefix); i++ {
-				match := true
-				for j := 0; j < len(prefix); j++ {
-					if runes[i+j] != prefix[j] {
-						match = false
-						break
-					}
-				}
-				if match {
-					idx = i
-					break
-				}
-			}
-			if idx >= 0 {
-				break
-			}
-		}
+	if strings.Contains(head, "刘师傅") && strings.Contains(head, "我") {
+		return "刘师傅"
 	}
-
-	if idx < 0 {
-		return ""
+	if m := regexp.MustCompile(`([\p{Han}]{2,4}师傅)`).FindStringSubmatch(head); len(m) > 1 {
+		return m[1]
 	}
-
-	start := idx - 100
-	if start < 0 {
-		start = 0
-	}
-	end := idx + len(unitRunes) + 100
-	if end > len(runes) {
-		end = len(runes)
-	}
-
-	snippet := strings.TrimSpace(string(runes[start:end]))
-	if snippet == "" {
-		return ""
-	}
-	if len([]rune(snippet)) > 96 {
-		snippet = string([]rune(snippet)[:96]) + "…"
-	}
-	return snippet
+	return ""
 }
 
 func consolidateShortCommentaryDialogue(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
@@ -295,13 +272,9 @@ func consolidateCommentaryDialogueByThreshold(scenes []llmScene, clipDuration in
 	if len(scenes) <= 1 {
 		return scenes
 	}
-	maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
-	minRunes := maxRunes * 50 / 100
-	if minRunes < 15 {
-		minRunes = 15
-	}
-	shortFragmentRunes := 15
-	softMaxRunes := maxRunes + 10
+	minRunes, _, hardMax := commentarySceneSpeechBounds(clipDuration, speechPace)
+	shortFragmentRunes := minRunes
+	softMaxRunes := hardMax
 	out := make([]llmScene, 0, len(scenes))
 	for i := 0; i < len(scenes); i++ {
 		scene := scenes[i]
@@ -320,35 +293,45 @@ func consolidateCommentaryDialogueByThreshold(scenes []llmScene, clipDuration in
 			out = append(out, scene)
 			continue
 		}
-		mergeLimit := maxRunes
+		mergeLimit := hardMax
 		if dlgRunes < shortFragmentRunes {
 			mergeLimit = softMaxRunes
 		}
 		if len(out) > 0 {
 			prev := &out[len(out)-1]
-			if !commentaryPlotDescriptionsConflict(*prev, scene) {
-				merged := joinCommentaryDialogue(prev.Dialogue, dlg)
-				if utf8.RuneCountInString(merged) <= mergeLimit {
-					prev.Dialogue = merged
-					syncSceneDurationFromDialogue(prev, clipDuration, speechPace)
-					continue
-				}
+			if !commentaryScenesCanMergeDialogue(*prev, scene) {
+				out = append(out, scene)
+				continue
+			}
+			merged := joinCommentaryDialogue(prev.Dialogue, dlg)
+			if utf8.RuneCountInString(merged) <= mergeLimit {
+				prev.Dialogue = merged
+				syncCommentarySceneDuration(prev, clipDuration)
+				continue
 			}
 		}
 		if i+1 < len(scenes) {
 			next := scenes[i+1]
-			if !commentaryPlotDescriptionsConflict(scene, next) {
-				merged := joinCommentaryDialogue(dlg, next.Dialogue)
-				if utf8.RuneCountInString(merged) <= mergeLimit {
-					next.Dialogue = merged
-					if scene.Description != "" && next.Description == "" {
-						next.Description = scene.Description
-					}
-					out = append(out, next)
-					i++
-					syncSceneDurationFromDialogue(&out[len(out)-1], clipDuration, speechPace)
-					continue
+			if !commentaryScenesCanMergeDialogue(scene, next) {
+				out = append(out, scene)
+				continue
+			}
+			merged := joinCommentaryDialogue(dlg, next.Dialogue)
+			if utf8.RuneCountInString(merged) <= mergeLimit {
+				next.Dialogue = merged
+				if scene.Description != "" && next.Description == "" {
+					next.Description = scene.Description
 				}
+				if scene.Location != "" && next.Location == "" {
+					next.Location = scene.Location
+				}
+				if scene.LocationZone != "" && next.LocationZone == "" {
+					next.LocationZone = scene.LocationZone
+				}
+				out = append(out, next)
+				i++
+				syncCommentarySceneDuration(&out[len(out)-1], clipDuration)
+				continue
 			}
 		}
 		out = append(out, scene)

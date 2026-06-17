@@ -28,6 +28,25 @@ func MaxRunesForClipDuration(durationSec int, speechPace string) int {
 	return maxRunes
 }
 
+// CommentaryClipRunesBounds returns min/target/hard speakable rune limits for one commentary clip.
+// For 5-second models: aim for 12-28 chars per shot, but hardMax allows longer lines to preserve verbatim completeness.
+func CommentaryClipRunesBounds(durationSec int, speechPace string) (min, targetMax, hardMax int) {
+	min = 12
+	duration := durationSec
+	if duration <= 0 {
+		duration = 5
+	}
+	if duration <= 5 {
+		return min, 28, 48
+	}
+	targetMax = MaxRunesForClipDuration(duration, speechPace)
+	hardMax = targetMax + 20
+	if hardMax < targetMax {
+		hardMax = targetMax
+	}
+	return min, targetMax, hardMax
+}
+
 // SpeechPaceCharsPer10Sec mirrors the storyboard split speech pace hints.
 func SpeechPaceCharsPer10Sec(speechPace string) int {
 	switch strings.TrimSpace(strings.ToLower(speechPace)) {

@@ -2,6 +2,17 @@ package speechtext
 
 import "testing"
 
+func TestCommentaryClipRunesBounds(t *testing.T) {
+	min, target, hard := CommentaryClipRunesBounds(5, "normal")
+	if min != 12 || target != 28 || hard != 48 {
+		t.Fatalf("5s bounds got (%d,%d,%d) want (12,28,48)", min, target, hard)
+	}
+	min, target, hard = CommentaryClipRunesBounds(10, "normal")
+	if min != 12 || target != 48 || hard != 68 {
+		t.Fatalf("10s bounds got (%d,%d,%d) want (12,48,68)", min, target, hard)
+	}
+}
+
 func TestMaxRunesForClipDuration(t *testing.T) {
 	if got := MaxRunesForClipDuration(5, "normal"); got != 24 {
 		t.Fatalf("5s normal got %d want 24", got)

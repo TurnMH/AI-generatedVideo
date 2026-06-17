@@ -52,6 +52,7 @@ export function useEpisodeWorkspaceData({
   const [sbPauseTrigger, setSbPauseTrigger] = useState(0)
   const [sbResumeTrigger, setSbResumeTrigger] = useState(0)
   const [sbAuditTrigger, setSbAuditTrigger] = useState(0)
+  const [sbRepairMetadataTrigger, setSbRepairMetadataTrigger] = useState(0)
   const [autoMatchingVoices, setAutoMatchingVoices] = useState(false)
   const [pausingGeneration, setPausingGeneration] = useState(false)
   const [resumingGeneration, setResumingGeneration] = useState(false)
@@ -159,6 +160,7 @@ export function useEpisodeWorkspaceData({
     setSbPauseTrigger(0)
     setSbResumeTrigger(0)
     setSbAuditTrigger(0)
+    setSbRepairMetadataTrigger(0)
     extractionFailureNotifiedRef.current = false
   }, [episodeId, initialTab, initialAwaitingAutoStoryboard, autoPipelineActive])
 
@@ -234,7 +236,7 @@ export function useEpisodeWorkspaceData({
     setIsExtractingStoryboards(true)
     setAwaitingAutoStoryboard(false)
     setActiveTab('storyboard')
-    const assetsReady = assetStats.total > 0 && assetStats.active === 0 && !assetStats.extracting
+    const assetsReady = assetStats.total > 0 && !assetStats.extracting
     ;(projectAPI.extractEpisodeStoryboards(projectId, episodeId, assetsReady) as Promise<unknown>)
       .then(() => {
         void mutateStoryboards()
@@ -340,6 +342,8 @@ export function useEpisodeWorkspaceData({
     setSbResumeTrigger,
     sbAuditTrigger,
     setSbAuditTrigger,
+    sbRepairMetadataTrigger,
+    setSbRepairMetadataTrigger,
     autoMatchingVoices,
     pausingGeneration,
     resumingGeneration,

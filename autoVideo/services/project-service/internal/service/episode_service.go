@@ -1034,30 +1034,48 @@ func matchAssetsToScene(scene llmScene, assets []assetReference) []assetReferenc
 			continue
 		}
 		score := 0
-		if strings.Contains(lookupText, name) {
-			score += 3
-		}
-		if desc != "" && strings.Contains(lookupText, desc) {
-			score++
-		}
+		matchedCharacter := false
 		switch asset.Type {
 		case "character":
 			for _, ch := range scene.Characters {
 				if strings.EqualFold(strings.TrimSpace(ch), strings.TrimSpace(asset.Name)) {
 					score += 5
+					matchedCharacter = true
 					break
 				}
 			}
+			if !matchedCharacter {
+				continue
+			}
 		case "scene", "location":
+			if strings.Contains(lookupText, name) {
+				score += 3
+			}
+			if desc != "" && strings.Contains(lookupText, desc) {
+				score++
+			}
 			if scene.Location != "" && (strings.Contains(strings.ToLower(scene.Location), name) || strings.Contains(name, strings.ToLower(scene.Location))) {
 				score += 4
 			}
 		case "prop", "item":
+			if strings.Contains(lookupText, name) {
+				score += 3
+			}
+			if desc != "" && strings.Contains(lookupText, desc) {
+				score++
+			}
 			for _, item := range scene.Items {
 				if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(asset.Name)) {
 					score += 4
 					break
 				}
+			}
+		default:
+			if strings.Contains(lookupText, name) {
+				score += 3
+			}
+			if desc != "" && strings.Contains(lookupText, desc) {
+				score++
 			}
 		}
 		if score >= 4 {
@@ -1642,7 +1660,8 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 	if len(kwLib.Characters) == 0 && len(kwLib.Locations) == 0 && len(kwLib.Events) == 0 && len(kwLib.Props) == 0 && scriptText != "" {
 		kwLib = s.extractKeywordLibrary(ctx, scriptText)
 	}
-	if (len(kwLib.CharacterProfiles) == 0 && len(kwLib.LocationProfiles) == 0 && len(kwLib.PropProfiles) == 0) && scriptText != "" {
+	productionProfile := productionmode.ResolveProfile(project)
+	if !productionProfile.IsCommentaryComic() && (len(kwLib.CharacterProfiles) == 0 && len(kwLib.LocationProfiles) == 0 && len(kwLib.PropProfiles) == 0) && scriptText != "" {
 		profileCtx, cancelProfile := context.WithTimeout(ctx, profileEnrichmentTimeout)
 		scriptSample := scriptText
 		const profileSampleLimit = 15000
@@ -1693,7 +1712,7 @@ func (s *EpisodeService) ExtractStoryboards(ctx context.Context, projectID uint6
 	}
 	if episodeID != nil && s.characterBaseURL != "" {
 		// Single-episode path either just dispatched extraction above or relies on a prior dispatch.
-		if err := s.waitForEpisodeAssetExtraction(ctx, projectID, *episodeID, true); err != nil {
+		if err := s.waitForEpisodeAssetExtraction(ctx, projectID, *episodeID, !skipEpisodeAssetRefresh); err != nil {
 			if s.logger != nil {
 				s.logger.Warn("episode asset extraction did not settle before storyboard split; continuing",
 					zap.Uint64("project_id", projectID),
@@ -2940,35 +2959,37 @@ func (s *EpisodeService) doGenerateFromScript(ctx context.Context, project *mode
 	// Generates character appearance, location, and prop descriptions used to
 	// keep visuals consistent across all scenes, storyboards, and dubbing.
 	// ══════════════════════════════════════════════════════════════════════════
-	s.updateProgress(projectID, ProgressInfo{
-		Stage:        "episode_splitting",
-		Message:      "正在生成视觉一致性档案（人物/场景/道具描述）…",
-		EpisodeSplit: &StageProgress{Status: "running"},
-	})
-	profileCtx, cancelProfile := context.WithTimeout(ctx, profileEnrichmentTimeout)
-	// Use a representative script sample for the enrichment prompt
-	scriptSample := scriptText
-	const profileSampleLimit = 15000
-	if utf8.RuneCountInString(scriptSample) > profileSampleLimit {
-		scriptSample = string([]rune(scriptSample)[:profileSampleLimit])
-	}
-	s.enrichKeywordLibraryWithProfiles(profileCtx, &kwLib, scriptSample)
-	cancelProfile()
+	productionProfile := productionmode.ResolveProfile(project)
+	if !productionProfile.IsCommentaryComic() {
+		s.updateProgress(projectID, ProgressInfo{
+			Stage:        "episode_splitting",
+			Message:      "正在生成视觉一致性档案（人物/场景/道具描述）…",
+			EpisodeSplit: &StageProgress{Status: "running"},
+		})
+		profileCtx, cancelProfile := context.WithTimeout(ctx, profileEnrichmentTimeout)
+		// Use a representative script sample for the enrichment prompt
+		scriptSample := scriptText
+		const profileSampleLimit = 15000
+		if utf8.RuneCountInString(scriptSample) > profileSampleLimit {
+			scriptSample = string([]rune(scriptSample)[:profileSampleLimit])
+		}
+		s.enrichKeywordLibraryWithProfiles(profileCtx, &kwLib, scriptSample)
+		cancelProfile()
 
-	// Persist enriched library (with profiles) back to DB
-	if kwJSON, err := json.Marshal(kwLib); err == nil {
-		project.KeywordLibrary = kwJSON
-		_ = s.projectRepo.UpdateKeywordLibrary(projectID, kwJSON)
-	}
+		// Persist enriched library (with profiles) back to DB
+		if kwJSON, err := json.Marshal(kwLib); err == nil {
+			project.KeywordLibrary = kwJSON
+			_ = s.projectRepo.UpdateKeywordLibrary(projectID, kwJSON)
+		}
 
-	// T3C: Auto-create Skills in character-service from detected character capability hints
-	if len(kwLib.CharacterProfiles) > 0 && s.characterBaseURL != "" {
-		skillCtx, cancelSkills := context.WithTimeout(ctx, 15*time.Second)
-		s.autoCreateCharacterSkills(skillCtx, projectID, kwLib.CharacterProfiles)
-		cancelSkills()
+		// T3C: Auto-create Skills in character-service from detected character capability hints
+		if len(kwLib.CharacterProfiles) > 0 && s.characterBaseURL != "" {
+			skillCtx, cancelSkills := context.WithTimeout(ctx, 15*time.Second)
+			s.autoCreateCharacterSkills(skillCtx, projectID, kwLib.CharacterProfiles)
+			cancelSkills()
+		}
 	}
 	runtimeCfg := parseStoryboardRuntimeConfig(project)
-	productionProfile := productionmode.ResolveProfile(project)
 	autoSplitAfterOptimization := productionProfile.ShouldOptimizeScriptBeforeSplit(runtimeCfg.AutoSplitAfterOptimization)
 	optimizedScriptText := strings.TrimSpace(scriptText)
 	autoSplitProgress := AutoSplitMeta{
@@ -3590,6 +3611,9 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 			chars := make([]string, len(scene.Characters))
 			copy(chars, scene.Characters)
 			matchedAssets := matchAssetsToScene(scene, episodeAssets)
+			if len(chars) == 0 {
+				chars = inferStoryboardCharacters(nil, scene.Description, scene.Dialogue, characterNamesFromAssets(episodeAssets))
+			}
 			charAnchors, propAnchors, sceneAnchors := extractAssetVisualAnchors(matchedAssets)
 			// Enrich scene description with era, mood atmosphere, character appearance and continuity notes.
 			desc := enrichSceneDescription(scene, prevSceneForContinuity, kwLib, projectVisualEra)
@@ -3665,6 +3689,10 @@ func (s *EpisodeService) generateStoryboardsParallelWithOffset(ctx context.Conte
 
 			spatialAnchor := extractSpatialAnchorHint(scene.Description)
 			subjectPositions := extractSubjectPositionHint(scene.Description)
+			spatialAnchor, subjectPositions = normalizeStoryboardPoseHints(spatialAnchor, subjectPositions, chars)
+			if statesHint := formatCharacterStatesForBlocking(scene.CharacterStates); statesHint != "" {
+				subjectPositions = joinNonEmptyUnique([]string{subjectPositions, statesHint}, " | ")
+			}
 			transitionNote := extractTransitionHint(scene.Description)
 			locationZone := strings.TrimSpace(scene.LocationZone)
 			if locationZone == "" {
@@ -3771,8 +3799,8 @@ func (s *EpisodeService) callLLMSceneSplit(ctx context.Context, episodeContent s
 		episodeContent = string([]rune(episodeContent)[:maxChars])
 	}
 
-	// For long texts (>30k chars), split into chunks at paragraph boundaries
-	const chunkLimit = 30000
+	// For long texts (>6k chars), split into chunks at paragraph boundaries for parallel processing
+	const chunkLimit = 6000
 	if utf8.RuneCountInString(episodeContent) > chunkLimit {
 		return s.sceneSplitChunked(ctx, episodeContent, episodeNum, chunkLimit, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
 	}
@@ -3807,30 +3835,52 @@ func (s *EpisodeService) sceneSplitChunked(ctx context.Context, content string, 
 	}
 
 	if s.logger != nil {
-		s.logger.Info("scene split chunked",
+		s.logger.Info("scene split chunked (parallel)",
 			zap.Int("episode", episodeNum),
 			zap.Int("chunks", len(chunks)),
 			zap.Int("total_chars", utf8.RuneCountInString(content)),
 		)
 	}
 
-	var allScenes []llmScene
+	results := make([][]llmScene, len(chunks))
+	var wg sync.WaitGroup
+	started := time.Now()
+
 	for i, chunk := range chunks {
-		select {
-		case <-ctx.Done():
-			return allScenes
-		default:
-		}
-		scenes := s.sceneSplitSingle(ctx, chunk, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
-		if s.logger != nil {
-			s.logger.Info("chunk scene split done",
-				zap.Int("episode", episodeNum),
-				zap.Int("chunk", i+1),
-				zap.Int("total_chunks", len(chunks)),
-				zap.Int("scenes", len(scenes)),
-			)
-		}
+		wg.Add(1)
+		go func(idx int, ch string) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			scenes := s.sceneSplitSingle(ctx, ch, episodeNum, skillHints, kwLib, clipDuration, videoModel, aspectRatio, resolution, speechPace, profile, customStoryboardSplitPrompt, stylePreset, motionMode)
+			results[idx] = scenes
+			if s.logger != nil {
+				s.logger.Info("chunk scene split done (parallel)",
+					zap.Int("episode", episodeNum),
+					zap.Int("chunk", idx+1),
+					zap.Int("total_chunks", len(chunks)),
+					zap.Int("scenes", len(scenes)),
+				)
+			}
+		}(i, chunk)
+	}
+	wg.Wait()
+
+	var allScenes []llmScene
+	for _, scenes := range results {
 		allScenes = append(allScenes, scenes...)
+	}
+
+	if s.logger != nil {
+		s.logger.Info("scene split chunked (parallel) completed",
+			zap.Int("episode", episodeNum),
+			zap.Int("chunks", len(chunks)),
+			zap.Int("total_scenes", len(allScenes)),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 	}
 	return allScenes
 }
@@ -4321,6 +4371,7 @@ func (s *EpisodeService) refineScenePromptsBatch(ctx context.Context, scenes []l
 		propNotes := extractAnnotationsFromText(sc.Description, "道具")
 		spatialAnchor := extractSpatialAnchorHint(sc.Description)
 		subjectPositions := extractSubjectPositionHint(sc.Description)
+		spatialAnchor, subjectPositions = normalizeStoryboardPoseHints(spatialAnchor, subjectPositions, sc.Characters)
 		transitionNote := extractTransitionHint(sc.Description)
 		// Merge items from llmScene.Items + [道具:] annotations into a single props string.
 		allItems := append([]string{}, sc.Items...)
@@ -4663,6 +4714,9 @@ func speechPaceHint(raw string, refDuration int) string {
 	targetChars := profile.charsPer10Sec * duration / 10
 	if targetChars < 20 {
 		targetChars = 20
+	}
+	if duration <= 5 {
+		return fmt.Sprintf("  当前语速档位：%s。目标单镜时长 %d 秒（固定 5 秒视频模型）：每条 dialogue 建议 12-28 个中文字，为保逐字完整可略超 28 字；优先按句号/分句切镜；单镜必须只对应一个 location/location_zone，禁止把两个场景的画面写进同一镜。%s", profile.label, duration, profile.directive)
 	}
 	return fmt.Sprintf("  当前语速档位：%s。按 %d 秒口播参考，这一档约可自然承载 %d 个中文字符（按 10 秒≈%d 字折算）。%s", profile.label, duration, targetChars, profile.charsPer10Sec, profile.directive)
 }
@@ -5431,7 +5485,11 @@ func extractSpatialAnchorHint(text string) string {
 }
 
 func extractSubjectPositionHint(text string) string {
-	keywords := []string{"左侧", "右侧", "居中", "中央", "左前方", "右前方", "左后方", "右后方", "面朝", "背对", "对视", "侧身", "站在", "靠近"}
+	keywords := []string{
+		"左侧", "右侧", "居中", "中央", "左前方", "右前方", "左后方", "右后方",
+		"面朝", "背对", "对视", "侧身", "站在", "靠近", "跪", "跪地", "跪下", "跪着",
+		"坐", "坐着", "蹲", "躺", "趴", "倚", "靠", "铺内", "门外", "内景", "门口",
+	}
 	return collectSceneHintByKeywords(text, keywords)
 }
 
@@ -5450,7 +5508,7 @@ func collectSceneHintByKeywords(text string, keywords []string) string {
 	var picks []string
 	for _, seg := range segments {
 		seg = strings.TrimSpace(seg)
-		if seg == "" {
+		if seg == "" || isPoorSceneHintSegment(seg) {
 			continue
 		}
 		for _, kw := range keywords {
@@ -5619,6 +5677,15 @@ func enrichSceneDescription(scene llmScene, prevScene *llmScene, kwLib *KeywordL
 	_ = prevScene
 	_ = kwLib
 	_ = eraHint
+	narrator := pickCommentaryPOVCharacter(scene.Characters)
+	if narrator == "" {
+		narrator = inferNarratorFromSource(scene.Dialogue)
+	}
+	if isCommentaryDialoguePollutedDescription(scene.Description) {
+		if repaired := repairCommentarySceneDescription(scene.Description, scene.Dialogue, scene, narrator); repaired != "" {
+			return repaired
+		}
+	}
 	desc := sanitizeUserSceneDescription(scene.Description)
 	if desc != "" {
 		return desc

@@ -461,6 +461,8 @@ export const storyboardAPI = {
     api.post(`/api/v1/projects/${projectId}/storyboards/audit-continuity`, {
       ...(episodeId !== undefined ? { episode_id: episodeId } : {}),
     }),
+  repairMetadata: (projectId: number, episodeId: number) =>
+    api.post(`/api/v1/projects/${projectId}/storyboards/repair-metadata`, { episode_id: episodeId }),
   pauseGeneration: (projectId: number, episodeId?: number) =>
     api.post(`/api/v1/projects/${projectId}/storyboards/pause-generation`, episodeId ? { episode_id: episodeId } : {}),
   resumeGeneration: (projectId: number, episodeId?: number) =>

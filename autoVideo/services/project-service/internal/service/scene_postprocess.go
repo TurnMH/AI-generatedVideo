@@ -33,13 +33,63 @@ func sceneSpeechMaxRunes(scene llmScene, clipDuration int, speechPace string) in
 	return speechtext.MaxRunesForClipDuration(duration, speechPace)
 }
 
+func commentarySceneSpeechBounds(clipDuration int, speechPace string) (min, targetMax, hardMax int) {
+	return speechtext.CommentaryClipRunesBounds(clipDuration, speechPace)
+}
+
+func syncCommentarySceneDuration(scene *llmScene, clipDuration int) {
+	if scene == nil {
+		return
+	}
+	if clipDuration <= 0 {
+		clipDuration = 5
+	}
+	scene.Duration = clipDuration
+}
+
+func commentaryLocationKey(sc *llmScene) string {
+	if sc == nil {
+		return ""
+	}
+	loc := strings.TrimSpace(sc.Location)
+	zone := strings.TrimSpace(sc.LocationZone)
+	if loc == "" && zone == "" {
+		return ""
+	}
+	return loc + "\x00" + zone
+}
+
+func commentaryLocationKeyForUnit(unit string, hints []llmScene) string {
+	if hint := findCommentarySceneHint(unit, hints); hint != nil {
+		return commentaryLocationKey(hint)
+	}
+	return ""
+}
+
+func commentaryScenesShareLocation(a, b llmScene) bool {
+	aKey := commentaryLocationKey(&a)
+	bKey := commentaryLocationKey(&b)
+	if aKey == "" || bKey == "" {
+		return true
+	}
+	return aKey == bKey
+}
+
+func commentaryScenesCanMergeDialogue(a, b llmScene) bool {
+	if !commentaryScenesShareLocation(a, b) {
+		return false
+	}
+	return !commentaryPlotDescriptionsConflict(a, b)
+}
+
 func refitSceneDialogue(scene *llmScene, clipDuration int, speechPace string, commentary bool) {
 	if scene == nil {
 		return
 	}
 	maxRunes := sceneSpeechMaxRunes(*scene, clipDuration, speechPace)
 	if commentary {
-		scene.Dialogue = speechtext.FinalizeCommentaryDialogueWithLimit(scene.Dialogue, maxRunes)
+		_, _, hardMax := commentarySceneSpeechBounds(clipDuration, speechPace)
+		scene.Dialogue = speechtext.FinalizeCommentaryDialogueWithLimit(scene.Dialogue, hardMax)
 		return
 	}
 	scene.Dialogue = speechtext.CompactClipDialogue(strings.TrimSpace(speechtext.SanitizeForSpeech(scene.Dialogue)), maxRunes)
@@ -86,7 +136,7 @@ func postProcessCommentaryScenes(scenes []llmScene, clipDuration int, speechPace
 	out := make([]llmScene, len(scenes))
 	copy(out, scenes)
 
-	const minNarrationRunes = 12
+	minNarrationRunes, _, _ := commentarySceneSpeechBounds(clipDuration, speechPace)
 	for i := range out {
 		out[i].Dialogue = speechtext.FinalizeCommentaryDialogue(out[i].Dialogue)
 		out[i].Description = sanitizeUserSceneDescription(out[i].Description)
@@ -99,6 +149,10 @@ func postProcessCommentaryScenes(scenes []llmScene, clipDuration int, speechPace
 		dlgRunes := utf8.RuneCountInString(dlg)
 		if len(merged) > 0 && (dlgRunes == 0 || (dlgRunes < minNarrationRunes && !speechtext.LooksLikeCompleteUtterance(dlg))) {
 			prev := &merged[len(merged)-1]
+			if !commentaryScenesCanMergeDialogue(*prev, scene) {
+				merged = append(merged, scene)
+				continue
+			}
 			if prev.Description != "" && scene.Description != "" && prev.Description != scene.Description {
 				merged = append(merged, scene)
 				continue
@@ -175,13 +229,14 @@ func (s *EpisodeService) postProcessAndAlignCommentaryScenes(
 		} else if !commentaryDialogueIsVerbatimFromSource(episodeContent, scenes) {
 			scenes = ensureCommentaryNarrationCoverage(episodeContent, scenes, clipDuration, speechPace)
 		}
-		scenes = expandCommentaryScenesForClipLimit(scenes, clipDuration, speechPace)
-		maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
+		scenes = expandCommentaryScenesForClipLimit(episodeContent, scenes, clipDuration, speechPace)
+		scenes = consolidateOrphanCommentaryDialogue(scenes, clipDuration, speechPace)
+		_, _, hardMax := commentarySceneSpeechBounds(clipDuration, speechPace)
 		for i := range scenes {
 			if dlg := strings.TrimSpace(scenes[i].Dialogue); dlg != "" {
-				scenes[i].Dialogue = speechtext.CompactCommentaryDialogue(dlg, maxRunes)
+				scenes[i].Dialogue = speechtext.FinalizeCommentaryDialogueWithLimit(dlg, hardMax)
 			}
-			syncSceneDurationFromDialogue(&scenes[i], clipDuration, speechPace)
+			syncCommentarySceneDuration(&scenes[i], clipDuration)
 		}
 		scenes = dropEmptyCommentaryScenes(scenes)
 	}
@@ -289,38 +344,44 @@ func ensureCommentaryNarrationCoverage(source string, scenes []llmScene, clipDur
 }
 
 func packCommentaryScenesFromSource(source string, units []string, clipDuration int, speechPace string, hints []llmScene) []llmScene {
-	maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
-	dialogues := packCommentaryDialoguesFromUnits(units, maxRunes)
+	_, targetMax, _ := commentarySceneSpeechBounds(clipDuration, speechPace)
+	dialogues := packCommentaryDialoguesFromUnits(units, targetMax, hints)
 	if len(dialogues) == 0 {
 		return hints
 	}
 	scenes := make([]llmScene, 0, len(dialogues))
-	for i, dlg := range dialogues {
+	for _, dlg := range dialogues {
 		sc := llmScene{
 			Dialogue: dlg,
 			Duration: clipDuration,
 		}
-		if hint := findCommentaryDescriptionHint(dlg, hints); hint != "" {
-			sc.Description = hint
-		} else if hint := excerptCommentaryVisualHint(source, dlg); hint != "" {
-			sc.Description = hint
-		} else {
-			sc.Description = defaultCommentarySceneDescription(dlg, i+1)
+		
+		// Find the matched LLM scene hint to inherit its metadata (Location, LocationZone, Characters, ShotType, Mood, etc.)
+		if matchedHint := findCommentarySceneHint(dlg, hints); matchedHint != nil {
+			sc.Description = matchedHint.Description
+			sc.Location = matchedHint.Location
+			sc.LocationZone = matchedHint.LocationZone
+			sc.Characters = matchedHint.Characters
+			sc.CharacterStates = matchedHint.CharacterStates
+			sc.Items = matchedHint.Items
+			sc.ShotType = matchedHint.ShotType
+			sc.Mood = matchedHint.Mood
 		}
-		syncSceneDurationFromDialogue(&sc, clipDuration, speechPace)
+		finalizeCommentarySceneDescription(source, &sc)
+		syncCommentarySceneDuration(&sc, clipDuration)
 		scenes = append(scenes, sc)
 	}
-	_ = source
 	return scenes
 }
 
-func packCommentaryDialoguesFromUnits(units []string, maxRunes int) []string {
+func packCommentaryDialoguesFromUnits(units []string, targetRunes int, hints []llmScene) []string {
 	if len(units) == 0 {
 		return nil
 	}
 	var packed []string
 	var current strings.Builder
 	currentRunes := 0
+	currentLoc := ""
 	flush := func() {
 		if current.Len() == 0 {
 			return
@@ -328,6 +389,7 @@ func packCommentaryDialoguesFromUnits(units []string, maxRunes int) []string {
 		packed = append(packed, strings.TrimSpace(current.String()))
 		current.Reset()
 		currentRunes = 0
+		currentLoc = ""
 	}
 	for _, unit := range units {
 		unit = strings.TrimSpace(unit)
@@ -335,12 +397,25 @@ func packCommentaryDialoguesFromUnits(units []string, maxRunes int) []string {
 			continue
 		}
 		unitRunes := utf8.RuneCountInString(unit)
-		if currentRunes > 0 && currentRunes+unitRunes > maxRunes {
+		unitLoc := commentaryLocationKeyForUnit(unit, hints)
+		if currentRunes == 0 && unitRunes > targetRunes {
+			current.WriteString(unit)
 			flush()
+			continue
+		}
+		if currentRunes > 0 {
+			if currentRunes+unitRunes > targetRunes {
+				flush()
+			} else if currentLoc != "" && unitLoc != "" && currentLoc != unitLoc {
+				flush()
+			}
+		}
+		if currentRunes == 0 && unitLoc != "" {
+			currentLoc = unitLoc
 		}
 		current.WriteString(unit)
 		currentRunes += unitRunes
-		if currentRunes >= maxRunes {
+		if currentRunes >= targetRunes {
 			flush()
 		}
 	}
@@ -348,8 +423,8 @@ func packCommentaryDialoguesFromUnits(units []string, maxRunes int) []string {
 	return packed
 }
 
-func expandCommentaryScenesForClipLimit(scenes []llmScene, clipDuration int, speechPace string) []llmScene {
-	maxRunes := sceneSpeechMaxRunes(llmScene{Duration: clipDuration}, clipDuration, speechPace)
+func expandCommentaryScenesForClipLimit(source string, scenes []llmScene, clipDuration int, speechPace string) []llmScene {
+	_, _, hardMax := commentarySceneSpeechBounds(clipDuration, speechPace)
 	out := make([]llmScene, 0, len(scenes))
 	for _, scene := range scenes {
 		raw := strings.TrimSpace(scene.Dialogue)
@@ -369,14 +444,15 @@ func expandCommentaryScenesForClipLimit(scenes []llmScene, clipDuration int, spe
 			continue
 		}
 		cleanedRunes := utf8.RuneCountInString(cleaned)
-		if cleanedRunes <= maxRunes {
+		if cleanedRunes <= hardMax {
 			scene.Dialogue = cleaned
+			finalizeCommentarySceneDescription(source, &scene)
 			out = append(out, scene)
 			continue
 		}
-		chunks := speechtext.PackSpeechUnitsToMaxRunes(speechtext.SplitSpeechUnitsForPacking(cleaned), maxRunes)
+		chunks := speechtext.PackSpeechUnitsToMaxRunes(speechtext.SplitSpeechUnitsForPacking(cleaned), hardMax)
 		if len(chunks) == 0 {
-			chunks = speechtext.PackSpeechUnitsToMaxRunes([]string{cleaned}, maxRunes)
+			chunks = speechtext.PackSpeechUnitsToMaxRunes([]string{cleaned}, hardMax)
 		}
 		if len(chunks) <= 1 {
 			scene.Dialogue = cleaned
@@ -386,7 +462,8 @@ func expandCommentaryScenesForClipLimit(scenes []llmScene, clipDuration int, spe
 		for _, chunk := range chunks {
 			sc := scene
 			sc.Dialogue = chunk
-			syncSceneDurationFromDialogue(&sc, clipDuration, speechPace)
+			finalizeCommentarySceneDescription(source, &sc)
+			syncCommentarySceneDuration(&sc, clipDuration)
 			out = append(out, sc)
 		}
 	}
@@ -402,34 +479,65 @@ func sumSceneDialogueRunes(scenes []llmScene) int {
 	return total
 }
 
-func findCommentaryDescriptionHint(dialogue string, hints []llmScene) string {
+func findCommentarySceneHint(dialogue string, hints []llmScene) *llmScene {
 	key := normalizeCommentaryDialogueKey(dialogue)
-	for _, hint := range hints {
+	if key == "" {
+		return nil
+	}
+	// 1. Exact match first (highest priority)
+	for i := range hints {
+		hint := &hints[i]
 		if hint.Description == "" {
 			continue
 		}
 		if normalizeCommentaryDialogueKey(hint.Dialogue) == key {
-			return hint.Description
+			return hint
 		}
 	}
-	for _, hint := range hints {
+	// 2. Substring match with length constraint to prevent false positives on short names/words
+	for i := range hints {
+		hint := &hints[i]
 		if hint.Description == "" || hint.Dialogue == "" {
 			continue
 		}
 		hKey := normalizeCommentaryDialogueKey(hint.Dialogue)
-		if hKey != "" && (strings.Contains(key, hKey) || strings.Contains(hKey, key)) {
-			return hint.Description
+		if hKey == "" {
+			continue
 		}
+		// If either key is too short, do not use substring matching (must be exact match)
+		if utf8.RuneCountInString(hKey) < 5 || utf8.RuneCountInString(key) < 5 {
+			continue
+		}
+		if strings.Contains(key, hKey) || strings.Contains(hKey, key) {
+			return hint
+		}
+	}
+	return nil
+}
+
+func findCommentaryDescriptionHint(dialogue string, hints []llmScene) string {
+	if hint := findCommentarySceneHint(dialogue, hints); hint != nil {
+		return hint.Description
 	}
 	return ""
 }
 
-func defaultCommentarySceneDescription(dialogue string, seq int) string {
-	snippet := dialogue
-	if runes := []rune(snippet); len(runes) > 72 {
-		snippet = string(runes[:72]) + "…"
+func defaultCommentarySceneDescription(source, dialogue string, seq int, scene *llmScene) string {
+	narrator := inferNarratorFromSource(source)
+	if narrator == "" && scene != nil {
+		narrator = pickCommentaryPOVCharacter(scene.Characters)
 	}
-	return fmt.Sprintf("解说镜头 %d：%s", seq, snippet)
+	if built := extractCommentaryVisualDescriptionFromSource(source, dialogue, scene, narrator); built != "" {
+		return built
+	}
+	if built := extractCommentaryVisualDescriptionFromDialogue(dialogue, scene, narrator); built != "" {
+		return built
+	}
+	snippet := trimVisualDescriptionLength(dialogue, 72)
+	if seq > 0 {
+		return fmt.Sprintf("解说镜头 %d：%s", seq, snippet)
+	}
+	return snippet
 }
 
 func dropEmptyCommentaryScenes(scenes []llmScene) []llmScene {

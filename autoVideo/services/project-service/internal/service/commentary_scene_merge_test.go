@@ -85,7 +85,7 @@ func TestPostProcessAndAlignCommentaryScenes_PlotFirst(t *testing.T) {
 	if !strings.Contains(joined, "三个月了，我在北街开了个包子铺") {
 		t.Fatalf("expected omitted source sentence supplemented back, got: %q", joined)
 	}
-	// 逐字照搬：每条非空 dialogue 都必须是原文（去标点后）的逐字片段。
+	// 逐字照搬：每条非空 dialogue 都必须 be 原文（去标点后）的逐字片段。
 	sourceKey := normalizeCommentaryDialogueKey("我是德聚楼三十年的主理厨师。三个月了，我在北街开了个包子铺。王大发跪在我包子铺门口：刘师傅，求你救救我！")
 	for _, sc := range got {
 		key := normalizeCommentaryDialogueKey(sc.Dialogue)
@@ -95,5 +95,32 @@ func TestPostProcessAndAlignCommentaryScenes_PlotFirst(t *testing.T) {
 		if !strings.Contains(sourceKey, key) {
 			t.Fatalf("scene dialogue %q is not a verbatim source fragment", sc.Dialogue)
 		}
+	}
+}
+
+func TestSupplementCommentaryScenes_OmittedBeginning(t *testing.T) {
+	source := `我是德聚楼三十年的主理厨师。三个月了，我在北街开了个包子铺。
+王大发跪在我包子铺门口：「刘师傅，求你救救我！」`
+	plotScenes := []llmScene{
+		{
+			Description: "北街包子铺门口，王大发跪地求助。",
+			Dialogue:    "刘师傅，求你救救我",
+			Duration:    4,
+			Location:    "包子铺",
+		},
+	}
+	got := supplementCommentaryScenesFromSource(
+		source,
+		plotScenes,
+		speechtext.ExtractCommentarySpeechUnits(source),
+		4,
+		"normal",
+	)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 scenes, got %d: %#v", len(got), got)
+	}
+	// The first scene should be the omitted beginning
+	if !strings.Contains(got[0].Dialogue, "我是德聚楼三十年的主理厨师") {
+		t.Fatalf("expected first scene to be the omitted beginning, got: %q", got[0].Dialogue)
 	}
 }

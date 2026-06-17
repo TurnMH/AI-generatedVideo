@@ -32,11 +32,13 @@ export function StoryboardTab({
   sbPauseTrigger,
   sbResumeTrigger,
   sbAuditTrigger,
+  sbRepairMetadataTrigger,
   onSbGenerateTriggerConsumed,
   onSbRegenerateTriggerConsumed,
   onSbPauseTriggerConsumed,
   onSbResumeTriggerConsumed,
   onSbAuditTriggerConsumed,
+  onSbRepairMetadataTriggerConsumed,
 }: {
   projectId: number
   project: Project
@@ -51,11 +53,13 @@ export function StoryboardTab({
   sbPauseTrigger?: number
   sbResumeTrigger?: number
   sbAuditTrigger?: number
+  sbRepairMetadataTrigger?: number
   onSbGenerateTriggerConsumed?: () => void
   onSbRegenerateTriggerConsumed?: () => void
   onSbPauseTriggerConsumed?: () => void
   onSbResumeTriggerConsumed?: () => void
   onSbAuditTriggerConsumed?: () => void
+  onSbRepairMetadataTriggerConsumed?: () => void
 }) {
   const { toast } = useToast()
   const isSerial = project.project_type === 'video_serial'
@@ -114,11 +118,13 @@ export function StoryboardTab({
     sbPauseTrigger,
     sbResumeTrigger,
     sbAuditTrigger,
+    sbRepairMetadataTrigger,
     onSbGenerateTriggerConsumed,
     onSbRegenerateTriggerConsumed,
     onSbPauseTriggerConsumed,
     onSbResumeTriggerConsumed,
     onSbAuditTriggerConsumed,
+    onSbRepairMetadataTriggerConsumed,
     toast,
   })
 

@@ -108,14 +108,14 @@ export function StoryboardGrid({
         onClick={() => onSelectStoryboard(sb)}
       >
         {sb.image_url ? (
-          <img src={sb.image_url} alt={`#${sb.sequence_number}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
+          <img src={sb.image_url} alt={`#${sb.sequence_number}`} className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full items-center justify-center text-surface-300">
             <LayoutGrid className="h-8 w-8" />
           </div>
         )}
         {sb.image_url && (
-          <div className="absolute right-2 bottom-2 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="absolute right-2 bottom-2 z-10">
             <ZoomBadge src={sb.image_url} alt={`#${sb.sequence_number}`} />
           </div>
         )}

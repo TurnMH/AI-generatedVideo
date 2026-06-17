@@ -59,11 +59,13 @@ export function useStoryboardActions({
   sbPauseTrigger,
   sbResumeTrigger,
   sbAuditTrigger,
+  sbRepairMetadataTrigger,
   onSbGenerateTriggerConsumed,
   onSbRegenerateTriggerConsumed,
   onSbPauseTriggerConsumed,
   onSbResumeTriggerConsumed,
   onSbAuditTriggerConsumed,
+  onSbRepairMetadataTriggerConsumed,
   toast,
 }: {
   projectId: number
@@ -94,11 +96,13 @@ export function useStoryboardActions({
   sbPauseTrigger?: number
   sbResumeTrigger?: number
   sbAuditTrigger?: number
+  sbRepairMetadataTrigger?: number
   onSbGenerateTriggerConsumed?: () => void
   onSbRegenerateTriggerConsumed?: () => void
   onSbPauseTriggerConsumed?: () => void
   onSbResumeTriggerConsumed?: () => void
   onSbAuditTriggerConsumed?: () => void
+  onSbRepairMetadataTriggerConsumed?: () => void
   toast: ToastFn
 }) {
   const {
@@ -118,6 +122,7 @@ export function useStoryboardActions({
   const [pausingGeneration, setPausingGeneration] = useState(false)
   const [resumingGeneration, setResumingGeneration] = useState(false)
   const [isAuditingContinuity, setIsAuditingContinuity] = useState(false)
+  const [isRepairingMetadata, setIsRepairingMetadata] = useState(false)
   const [showBatchStoryboardDialog, setShowBatchStoryboardDialog] = useState(false)
   const [batchStoryboardAction, setBatchStoryboardAction] = useState<{ kind: 'generate' | 'force' | 'retryFailed'; episodeId?: number }>({ kind: 'generate' })
   const [batchStoryboardModels, setBatchStoryboardModels] = useState<string[]>([])
@@ -766,6 +771,34 @@ export function useStoryboardActions({
     }
   }
 
+  const handleRepairMetadata = async () => {
+    const selectedEpisodeId = episodeFilter !== 'all' ? Number(episodeFilter) : undefined
+    if (!selectedEpisodeId) {
+      toast({ title: '请先选择具体集数', variant: 'destructive' })
+      return
+    }
+    setIsRepairingMetadata(true)
+    try {
+      const res = await storyboardAPI.repairMetadata(projectId, selectedEpisodeId) as unknown as {
+        data?: { repaired?: number; characters_filled?: number; prompts_cleared?: number }
+      }
+      const repaired = res?.data?.repaired ?? 0
+      toast({
+        title: repaired > 0 ? `已修复 ${repaired} 条${storyboardItemLabel}元数据` : `本集${storyboardItemLabel}元数据无需修复`,
+        description: repaired > 0
+          ? `人物 ${res?.data?.characters_filled ?? 0} · 清理 prompt ${res?.data?.prompts_cleared ?? 0}`
+          : undefined,
+        variant: repaired > 0 ? 'success' : 'default',
+      })
+      mutateSb()
+      mutateStats()
+    } catch {
+      toast({ title: '元数据修复失败', variant: 'destructive' })
+    } finally {
+      setIsRepairingMetadata(false)
+    }
+  }
+
   const handleAuditContinuity = async () => {
     setIsAuditingContinuity(true)
     try {
@@ -794,6 +827,8 @@ export function useStoryboardActions({
   useOneShotTriggerEffect(sbResumeTrigger, () => handleResumeGeneration(), onSbResumeTriggerConsumed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useOneShotTriggerEffect(sbAuditTrigger, () => handleAuditContinuity(), onSbAuditTriggerConsumed)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useOneShotTriggerEffect(sbRepairMetadataTrigger, () => { void handleRepairMetadata() }, onSbRepairMetadataTriggerConsumed)
 
   const handleVoid = async (id: number, selectedSb: Storyboard | null, setSelectedSb: (sb: Storyboard | null) => void) => {
     try {
@@ -973,6 +1008,7 @@ export function useStoryboardActions({
     pausingGeneration,
     resumingGeneration,
     isAuditingContinuity,
+    isRepairingMetadata,
     showBatchStoryboardDialog,
     setShowBatchStoryboardDialog,
     batchStoryboardAction,
@@ -1013,6 +1049,7 @@ export function useStoryboardActions({
     handlePauseGeneration,
     handleResumeGeneration,
     handleAuditContinuity,
+    handleRepairMetadata,
     handleVoid,
     handleDelete,
     handleMergeWithPrevious,

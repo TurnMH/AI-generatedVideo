@@ -79,6 +79,7 @@ export function EpisodeWorkspace({
               onRegenerateAssets={() => ws.setRegenerateTrigger((t) => t + 1)}
               onGenerateStoryboards={() => ws.setSbGenerateTrigger((t) => t + 1)}
               onAuditStoryboards={() => ws.setSbAuditTrigger((t) => t + 1)}
+              onRepairStoryboardMetadata={() => ws.setSbRepairMetadataTrigger((t) => t + 1)}
               onPauseStoryboards={() => ws.setSbPauseTrigger((t) => t + 1)}
               onResumeStoryboards={() => ws.setSbResumeTrigger((t) => t + 1)}
               onRegenerateStoryboards={() => ws.setSbRegenerateTrigger((t) => t + 1)}
@@ -104,11 +105,13 @@ export function EpisodeWorkspace({
           sbPauseTrigger={ws.sbPauseTrigger}
           sbResumeTrigger={ws.sbResumeTrigger}
           sbAuditTrigger={ws.sbAuditTrigger}
+          sbRepairMetadataTrigger={ws.sbRepairMetadataTrigger}
           onSbGenerateTriggerConsumed={() => ws.setSbGenerateTrigger(0)}
           onSbRegenerateTriggerConsumed={() => ws.setSbRegenerateTrigger(0)}
           onSbPauseTriggerConsumed={() => ws.setSbPauseTrigger(0)}
           onSbResumeTriggerConsumed={() => ws.setSbResumeTrigger(0)}
           onSbAuditTriggerConsumed={() => ws.setSbAuditTrigger(0)}
+          onSbRepairMetadataTriggerConsumed={() => ws.setSbRepairMetadataTrigger(0)}
           onGenerateTriggerConsumed={() => ws.setGenerateTrigger(0)}
           onRegenerateTriggerConsumed={() => ws.setRegenerateTrigger(0)}
           onExtractAssets={ws.handleExtractAssets}

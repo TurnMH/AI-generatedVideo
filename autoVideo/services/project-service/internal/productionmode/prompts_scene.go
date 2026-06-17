@@ -140,9 +140,14 @@ func commentarySceneSplitPrompt(p SceneSplitParams) string {
 - 宁可多拆几个分镜，也不要为了精简而删句或合并改写；内容完整性优先级高于镜头数量与节奏美观
 - 不允许“无中生有”：不要新增原文没有的解说词，也不要把第三人称画面动作改写成旁白
 
+**外景与门口场景特别规则：**
+- 对于外景（exterior）或门口过渡（entrance）场景，画面描述（description）应适当扩大视野，展示出更宽广、大气的环境背景（如包子铺门外的整条街道、相邻建筑或开阔的户外空间），景别（shot_type）优先使用 wide（全景）或 establishing（远景/全景），以便更好地展现空间感并承接其他场景
+
 **拆分规则：**
 - 以原文句序为主轴；旁白转折、场景切换、人物登场/退场、剧情节点、设定块切换 → 新分镜
 - 同一旁白段若信息量超过当前单镜时长，按句号/分句二次切分，但每个切出的子句仍须是原文逐字片段，不得改写
+- 若目标单镜时长为 5 秒：每条 dialogue 建议 12-28 个中文字；为保逐字完整可略超 28 字，仅在极长时才继续拆镜；低于 12 字优先与相邻同场景句合并
+- 每个分镜只能对应一个场景（location + location_zone 固定）；场景切换时必须新开分镜，禁止把两个地点的旁白/画面混在同一镜
 - description 用中文写这一镜的可见画面（40-120字）：角色动作、表情、场景、道具、情绪；不要写左/右/机位/分层
 - shot_type：close-up / medium / full / wide / establishing / insert / reaction
 - characters / character_states / items / mood / location / location_zone 按需填写
@@ -225,7 +230,9 @@ func commentarySceneSplitSystemPrompt() string {
 - 原文里每一句可念内容都必须完整覆盖到某个分镜的 dialogue，按原文顺序铺满，一句都不能漏
 - 拆分只是切分原文位置，不是重写；所有分镜 dialogue 顺序拼接后应≈原文可念内容，文字总量基本守恒
 - 内容完整性优先于镜头数量与节奏：宁可多拆、宁可调大 duration，也不要删句或合并改写
+- 若目标单镜时长为 5 秒：dialogue 建议 12-28 字，完整性优先可略超；单镜单场景（location/location_zone 不得混用）
 - description 只写画面，禁止写机位/方位套话，禁止把 description 复制进 dialogue
+- 对于外景（exterior）或门口过渡（entrance）场景，画面描述（description）应适当扩大视野，展示出更宽广、大气的环境背景（如包子铺门外的整条街道、相邻建筑或开阔的户外空间），景别（shot_type）优先使用 wide（全景）或 establishing（远景/全景），以便更好地展现空间感并承接其他场景
 - 不要为了凑镜数创造原文没有的第三人称画面解说
 - 返回前自检：原文每句可念内容都已逐字出现在分镜 dialogue 中`
 }

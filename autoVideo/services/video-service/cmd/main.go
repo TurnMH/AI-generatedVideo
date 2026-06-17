@@ -158,7 +158,7 @@ func main() {
 	if cfg.Models.WanKey != "" {
 		gen := generators.NewWanGenerator(cfg.Models.WanKey, cfg.Models.WanSecret, cfg.Models.WanBase)
 		gens = append(gens, gen)
-		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "wanx2.1-i2v-turbo", BaseHint: cfg.Models.WanBase})
+		genSummaries = append(genSummaries, generatorRegistrationSummary{Name: gen.Name(), RuntimeProvider: runtimeProviderForGeneratorName(gen.Name()), NativeAudio: gen.SupportsNativeAudio(), Available: true, ModelHint: "wan2.6-i2v-flash", BaseHint: cfg.Models.WanBase})
 	}
 	if cfg.Models.ComfyUIURL != "" {
 		gen := generators.NewComfyUIVideoGenerator(cfg.Models.ComfyUIURL, cfg.Models.ComfyUIWorkflow)

@@ -36,6 +36,7 @@ type StoryboardGenerateRequest struct {
 	TransitionNote   string   `json:"transition_note,omitempty"`
 	CameraMovement   string   `json:"camera_movement"`
 	Mood             string   `json:"mood,omitempty"`
+	Dialogue         string   `json:"dialogue,omitempty"`
 	AspectRatio      string   `json:"aspect_ratio"`
 	PromptUsed       string   `json:"prompt_used"`
 	ModelName        string   `json:"model_name,omitempty"`
@@ -432,13 +433,13 @@ func buildImagePromptWithAppearances(req StoryboardGenerateRequest, stylePreset,
 	if len(charAppearances) > 0 || len(charAssetPrompts) > 0 {
 		var descParts []string
 		for i, name := range req.Characters {
-			lookupKey := strings.ToLower(strings.TrimSpace(name))
+			lookupName := strings.TrimSpace(name)
 			if i < len(originalCharacters) && strings.TrimSpace(originalCharacters[i]) != "" {
-				lookupKey = strings.ToLower(strings.TrimSpace(originalCharacters[i]))
+				lookupName = strings.TrimSpace(originalCharacters[i])
 			}
-			desc := charAssetPrompts[lookupKey]
+			desc := lookupCharacterAssetText(lookupName, charAssetPrompts)
 			if strings.TrimSpace(desc) == "" {
-				desc = charAppearances[lookupKey]
+				desc = lookupCharacterAssetText(lookupName, charAppearances)
 			}
 			if desc = truncateForImagePrompt(desc, 160); desc != "" {
 				descParts = append(descParts, strings.TrimSpace(name)+": "+desc)
@@ -738,29 +739,30 @@ func (c *KafkaConsumer) fetchCharacterAppearances(ctx context.Context, projectID
 // (no type filter) and returns three maps split by asset type in memory.
 // This replaces the prior two-call pattern (separate calls for "character" and "scene")
 // and reduces per-frame HTTP overhead from 2+ round-trips to 1.
-func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uint64) (charImages, charPrompts, sceneImages map[string]string, sceneEntries []sceneAssetEntry) {
+func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uint64) (charImages, charPrompts map[string]string, charAssetIDs map[string]int64, sceneImages map[string]string, sceneEntries []sceneAssetEntry) {
 	if c.characterBaseURL == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	batchURL := fmt.Sprintf("%s/api/v1/projects/%d/assets?status=completed&page_size=500", c.characterBaseURL, projectID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, batchURL, nil)
 	if err != nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	c.applyServiceAuthHeader(httpReq, projectID)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		c.logger.Warn("fetchAllAssetRefsOnce failed", zap.Uint64("project_id", projectID), zap.Error(err))
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	type assetItem struct {
+		ID          int64                  `json:"id"`
 		Name        string                 `json:"name"`
 		Type        string                 `json:"type"`
 		ImageURL    string                 `json:"image_url"`
@@ -771,6 +773,7 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	parseItems := func(items []assetItem) {
 		charImages = make(map[string]string)
 		charPrompts = make(map[string]string)
+		charAssetIDs = make(map[string]int64)
 		sceneImages = make(map[string]string)
 		sceneEntries = nil
 		for _, item := range items {
@@ -780,6 +783,9 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 			}
 			switch strings.ToLower(strings.TrimSpace(item.Type)) {
 			case "character":
+				if item.ID > 0 {
+					charAssetIDs[key] = item.ID
+				}
 				if picked := pickStoryboardCharacterReferenceImage(item.ImageURL, item.PanelImages); picked != "" {
 					charImages[key] = picked
 				}
@@ -805,7 +811,7 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	}
 	if err := json.Unmarshal(body, &paginated); err == nil && len(paginated.Data.Items) > 0 {
 		parseItems(paginated.Data.Items)
-		return charImages, charPrompts, sceneImages, sceneEntries
+		return charImages, charPrompts, charAssetIDs, sceneImages, sceneEntries
 	}
 	var legacy struct {
 		Data []assetItem `json:"data"`
@@ -813,7 +819,7 @@ func (c *KafkaConsumer) fetchAllAssetRefsOnce(ctx context.Context, projectID uin
 	if err2 := json.Unmarshal(body, &legacy); err2 == nil && len(legacy.Data) > 0 {
 		parseItems(legacy.Data)
 	}
-	return charImages, charPrompts, sceneImages, sceneEntries
+	return charImages, charPrompts, charAssetIDs, sceneImages, sceneEntries
 }
 
 // fetchAssetReferenceImages —— 获取项目已生成完成的资产图片，用于分镜生成时的视觉一致性参考 (char-c10)
@@ -1158,7 +1164,7 @@ func (c *KafkaConsumer) translateIfNeeded(ctx context.Context, text string) stri
 		c.logger.Warn("translate LLM response parse failed", zap.Error(err))
 		return text
 	}
-	translated := strings.TrimSpace(llmResp.Choices[0].Message.Content)
+	translated := sanitizeLLMThinkingLeak(strings.TrimSpace(llmResp.Choices[0].Message.Content))
 	if translated == "" {
 		return text
 	}

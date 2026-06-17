@@ -24,6 +24,7 @@ import { storyboardAPI } from '@/lib/api'
 import type { Asset, Project, Storyboard, StoryboardImageGenerationParams, StoryboardVersion } from '@/types'
 import { buildStoryboardPromptSummaryZh, pickEditableChinesePrompt } from '@/lib/projects/prompt-display-zh'
 import { inferLocationViewHint, LOCATION_VIEW_OPTIONS, locationViewLabel } from '@/lib/projects/location-zone'
+import { ZoomableImage, ZoomBadge } from '@/components/ui/image-lightbox'
 
 function formatPreviewError(err: unknown): string {
   if (axios.isAxiosError(err)) {
@@ -256,11 +257,14 @@ export function StoryboardDetailPanel({
               {selectedStoryboardPreviewUrl ? (
                 <div className="rounded-2xl border border-surface-200 bg-white p-3 shadow-sm">
                   <div className="relative aspect-video overflow-hidden rounded-xl border border-surface-100 bg-surface-100">
-                    <img
+                    <ZoomableImage
                       src={selectedStoryboardPreviewUrl}
                       alt={selectedStoryboardVersion ? `V${selectedStoryboardVersion.version_number}` : `${storyboardItemLabel} #${selectedSb.sequence_number}`}
                       className="h-full w-full object-cover"
                     />
+                    <div className="absolute right-2 top-2 z-10">
+                      <ZoomBadge src={selectedStoryboardPreviewUrl} alt={selectedStoryboardVersion ? `V${selectedStoryboardVersion.version_number}` : `${storyboardItemLabel} #${selectedSb.sequence_number}`} />
+                    </div>
                     {selectedSb.status === 'generating' && (
                       <div className="absolute inset-x-3 bottom-3 rounded-xl bg-black/65 px-3 py-2 text-xs text-white shadow-lg backdrop-blur-sm">
                         <div className="flex items-center gap-2">

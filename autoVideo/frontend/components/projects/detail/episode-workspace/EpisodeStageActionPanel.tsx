@@ -26,6 +26,7 @@ export function EpisodeStageActionPanel({
   onRegenerateAssets,
   onGenerateStoryboards,
   onAuditStoryboards,
+  onRepairStoryboardMetadata,
   onPauseStoryboards,
   onResumeStoryboards,
   onRegenerateStoryboards,
@@ -51,6 +52,7 @@ export function EpisodeStageActionPanel({
   onRegenerateAssets: () => void
   onGenerateStoryboards: () => void
   onAuditStoryboards: () => void
+  onRepairStoryboardMetadata: () => void
   onPauseStoryboards: () => void
   onResumeStoryboards: () => void
   onRegenerateStoryboards: () => void
@@ -114,6 +116,10 @@ export function EpisodeStageActionPanel({
           <Button size="sm" variant="outline" onClick={onAuditStoryboards} className={`w-full ${sidebarTheme.secondaryButton}`}>
             <Bot className="mr-1.5 h-3.5 w-3.5" />
             AI 补全缺失信息
+          </Button>
+          <Button size="sm" variant="outline" onClick={onRepairStoryboardMetadata} className={`w-full ${sidebarTheme.secondaryButton}`}>
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            修复本集元数据
           </Button>
           {storyboardStats.paused > 0 ? (
             <Button size="sm" variant="outline" onClick={onResumeStoryboards} className={`w-full ${sidebarTheme.secondaryButton}`}>
